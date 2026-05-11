@@ -1,0 +1,148 @@
+import type { Plugin } from '@opencode-ai/plugin'
+import { tool } from '@opencode-ai/plugin'
+
+import { ChatmlRenderer } from './src/chatml-renderer'
+import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND } from './src/commands'
+import { decodeCursor } from './src/cursor'
+import { HistoryDatabase, type ReadMode } from './src/db'
+import { normalizeWindow } from './src/normalizer'
+import { formatSearchResults } from './src/search'
+
+const DEFAULT_SEARCH_LIMIT = 8
+const MAX_SEARCH_LIMIT = 25
+const DEFAULT_READ_LIMIT = 12
+const DEFAULT_FULL_LIMIT = 200
+const MAX_READ_LIMIT = 50
+const MAX_FULL_LIMIT = 500
+
+export const RecallPlugin: Plugin = async () => {
+  return {
+    config: async (config) => {
+      config.command ??= {}
+      config.command[HISTORY_SEARCH_COMMAND] = {
+        description: 'Search OpenCode history and return ranked cursor anchors',
+        template: '',
+      }
+
+      config.command[HISTORY_READ_COMMAND] = {
+        description: 'Read a cursor-paginated ChatML window from OpenCode history',
+        template: '',
+      }
+    },
+
+    tool: {
+      [HISTORY_SEARCH_COMMAND]: tool({
+        description:
+          'Search OpenCode history. Prefer q/n. Returns compact hits: cursor, dir, title, time, role, text.',
+        args: {
+          q: tool.schema.string('Search query').optional(),
+          n: tool.schema.number('Max hits').optional(),
+          after: tool.schema
+            .string('Only include messages at or after this ISO date/time')
+            .optional(),
+          before: tool.schema
+            .string('Only include messages at or before this ISO date/time')
+            .optional(),
+        },
+        async execute(args) {
+          const db = new HistoryDatabase()
+          const query = args.q
+
+          if (query === undefined || query.length === 0) {
+            throw new Error('history_search requires q')
+          }
+
+          try {
+            return formatSearchResults(
+              db.search(query, {
+                limit: clampNumber(args.n, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
+                ...optionalDateFilter('after', args.after),
+                ...optionalDateFilter('before', args.before),
+              }),
+            )
+          } finally {
+            db.close()
+          }
+        },
+      }),
+
+      [HISTORY_READ_COMMAND]: tool({
+        description:
+          'Read OpenCode history. Prefer cursor/n. Use nav.next with mode next for continue, nav.prev with mode prev for earlier context, nav.tail with mode tail, nav.head with mode head. Use full only if explicitly requested.',
+        args: {
+          cursor: tool.schema.string('Cursor from search hit cursor or read nav').optional(),
+          mode: tool.schema
+            .string('around, next, prev, tail, head, full. Defaults to around.')
+            .optional(),
+          n: tool.schema.number('Message count').optional(),
+        },
+        async execute(args) {
+          const cursorValue = args.cursor
+
+          if (cursorValue === undefined || cursorValue.length === 0) {
+            throw new Error('history_read requires cursor')
+          }
+
+          const cursor = decodeCursor(cursorValue)
+          const mode = parseReadMode(args.mode)
+          const limit = clampNumber(args.n, DEFAULT_READ_LIMIT, 1, MAX_READ_LIMIT)
+          const fullLimit = clampNumber(args.n, DEFAULT_FULL_LIMIT, 1, MAX_FULL_LIMIT)
+          const db = new HistoryDatabase()
+
+          try {
+            const window = normalizeWindow(
+              db.readWindow(cursor.messageId, { mode, limit, fullLimit }),
+            )
+            return new ChatmlRenderer().render(window)
+          } finally {
+            db.close()
+          }
+        },
+      }),
+    },
+  }
+}
+
+export default RecallPlugin
+
+function parseReadMode(value: string | undefined): ReadMode {
+  if (
+    value === 'around' ||
+    value === 'head' ||
+    value === 'next' ||
+    value === 'prev' ||
+    value === 'tail' ||
+    value === 'full'
+  ) {
+    return value
+  }
+
+  return 'around'
+}
+
+function optionalDateFilter(name: 'after' | 'before', value: string | undefined) {
+  if (value === undefined || value.length === 0) {
+    return {}
+  }
+
+  const timestamp = Date.parse(value)
+
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid ${name} date filter: ${value}`)
+  }
+
+  return { [name]: timestamp }
+}
+
+function clampNumber(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return fallback
+  }
+
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}

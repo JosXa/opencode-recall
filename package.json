@@ -1,0 +1,60 @@
+{
+  "name": "opencode-recall",
+  "version": "0.0.0",
+  "description": "Cursor-based OpenCode history recall plugin with ChatML transcript windows",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "history",
+    "recall",
+    "search",
+    "chatml"
+  ],
+  "author": "JosXa",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JosXa/opencode-recall.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JosXa/opencode-recall/issues"
+  },
+  "homepage": "https://github.com/JosXa/opencode-recall#readme",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsgo --noEmit",
+    "lint": "biome check --error-on-warnings .",
+    "format": "biome check --write .",
+    "ai:check": "biome check --write --error-on-warnings . && tsgo --noEmit",
+    "prepare": "husky",
+    "prepublishOnly": "bun run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "latest",
+    "@opencode-ai/plugin": "latest",
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "@typescript/native-preview": "latest",
+    "husky": "latest",
+    "typescript": "latest"
+  }
+}
