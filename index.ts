@@ -5,8 +5,10 @@ import { ChatmlRenderer } from './src/chatml-renderer'
 import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND } from './src/commands'
 import { decodeCursor } from './src/cursor'
 import { HistoryDatabase, type ReadMode } from './src/db'
+import { OllamaEmbeddingProvider } from './src/embedding'
 import { normalizeWindow } from './src/normalizer'
 import { formatSearchResults } from './src/search'
+import { RecallSidecarIndex } from './src/sidecar'
 
 const DEFAULT_SEARCH_LIMIT = 8
 const MAX_SEARCH_LIMIT = 25
@@ -33,10 +35,11 @@ export const RecallPlugin: Plugin = async () => {
     tool: {
       [HISTORY_SEARCH_COMMAND]: tool({
         description:
-          'Search OpenCode history. Prefer q/n. Returns compact hits: cursor, dir, title, time, role, text.',
+          'Search OpenCode history. Prefer q/n. Returns compact hits: cursor, sid, dir, title, time, role, score, text.',
         args: {
           q: tool.schema.string('Search query').optional(),
           n: tool.schema.number('Max hits').optional(),
+          dir: tool.schema.string('Exact OpenCode session directory filter').optional(),
           after: tool.schema
             .string('Only include messages at or after this ISO date/time')
             .optional(),
@@ -45,22 +48,32 @@ export const RecallPlugin: Plugin = async () => {
             .optional(),
         },
         async execute(args) {
-          const db = new HistoryDatabase()
           const query = args.q
 
           if (query === undefined || query.length === 0) {
             throw new Error('history_search requires q')
           }
 
+          const options = {
+            limit: clampNumber(args.n, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
+            ...optionalStringFilter('dir', args.dir),
+            ...optionalDateFilter('after', args.after),
+            ...optionalDateFilter('before', args.before),
+          }
+          const db = new HistoryDatabase()
+          const sidecar = new RecallSidecarIndex()
+
           try {
-            return formatSearchResults(
-              db.search(query, {
-                limit: clampNumber(args.n, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
-                ...optionalDateFilter('after', args.after),
-                ...optionalDateFilter('before', args.before),
-              }),
+            const provider = new OllamaEmbeddingProvider()
+            const syncResult = await sidecar.sync(
+              (since) => db.readTextPartsForIndex(since),
+              provider,
+              () => db.readTextPartIds(),
             )
+            const semanticRows = await sidecar.search(query, options, provider)
+            return formatSearchResults(semanticRows, syncResult)
           } finally {
+            sidecar.close()
             db.close()
           }
         },
@@ -132,6 +145,14 @@ function optionalDateFilter(name: 'after' | 'before', value: string | undefined)
   }
 
   return { [name]: timestamp }
+}
+
+function optionalStringFilter<TName extends string>(name: TName, value: string | undefined) {
+  if (value === undefined || value.length === 0) {
+    return {}
+  }
+
+  return { [name]: value }
 }
 
 function clampNumber(

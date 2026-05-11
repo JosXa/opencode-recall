@@ -6,6 +6,7 @@ export interface SearchOptions {
   readonly limit: number
   readonly after?: number
   readonly before?: number
+  readonly dir?: string
 }
 
 export type ReadMode = 'around' | 'full' | 'head' | 'next' | 'prev' | 'tail'
@@ -23,8 +24,13 @@ export interface SearchRow {
   readonly messageId: string
   readonly partId: string
   readonly role: string
+  readonly score?: number
   readonly timeCreated: number
   readonly text: string
+}
+
+export interface IndexSourceRow extends SearchRow {
+  readonly sourceUpdated: number
 }
 
 export interface MessageRow {
@@ -77,11 +83,13 @@ export class HistoryDatabase {
       ...terms.map(() => "lower(json_extract(p.data, '$.text')) like ?"),
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
+      ...(options.dir === undefined ? [] : ['s.directory = ?']),
     ].join(' and ')
     const params = [
       ...terms.map((term) => `%${escapeLikeTerm(term)}%`),
       ...(options.after === undefined ? [] : [options.after]),
       ...(options.before === undefined ? [] : [options.before]),
+      ...(options.dir === undefined ? [] : [options.dir]),
       options.limit,
     ]
     const rows = this.#db
@@ -106,6 +114,49 @@ export class HistoryDatabase {
       .all(...params)
 
     return rows
+  }
+
+  public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
+    const changedCondition =
+      since === undefined
+        ? ''
+        : 'and max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) >= ?'
+    const params = since === undefined ? [] : [since]
+
+    return this.#db
+      .query<IndexSourceRow, number[]>(`
+        select
+          s.id as sessionId,
+          s.title as sessionTitle,
+          s.directory as directory,
+          m.id as messageId,
+          p.id as partId,
+          json_extract(m.data, '$.role') as role,
+          m.time_created as timeCreated,
+          json_extract(p.data, '$.text') as text,
+          max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
+        from part p
+        join message m on m.id = p.message_id
+        join session s on s.id = p.session_id
+        where json_extract(p.data, '$.type') = 'text'
+          and json_extract(p.data, '$.text') is not null
+          ${changedCondition}
+        order by sourceUpdated, p.id
+      `)
+      .all(...params)
+  }
+
+  public readTextPartIds(): string[] {
+    const rows = this.#db
+      .query<{ readonly partId: string }, []>(`
+        select p.id as partId
+        from part p
+        where json_extract(p.data, '$.type') = 'text'
+          and json_extract(p.data, '$.text') is not null
+      `)
+      .all()
+
+    return rows.map((row) => row.partId)
   }
 
   public readWindow(anchorMessageId: string, options: ReadOptions): WindowRows {
