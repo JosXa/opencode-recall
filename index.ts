@@ -12,6 +12,7 @@ import { RecallSidecarIndex } from './src/sidecar'
 
 const DEFAULT_SEARCH_LIMIT = 8
 const MAX_SEARCH_LIMIT = 25
+const DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS = 30_000
 const DEFAULT_READ_LIMIT = 12
 const DEFAULT_FULL_LIMIT = 200
 const MAX_READ_LIMIT = 50
@@ -54,11 +55,12 @@ export const RecallPlugin: Plugin = async () => {
             throw new Error('history_search requires q')
           }
 
+          const before = optionalDateFilterValue('before', args.before)
           const options = {
             limit: clampNumber(args.n, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
             ...optionalStringFilter('dir', args.dir),
             ...optionalDateFilter('after', args.after),
-            ...optionalDateFilter('before', args.before),
+            before: before ?? Date.now() - DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS,
           }
           const db = new HistoryDatabase()
           const sidecar = new RecallSidecarIndex()
@@ -133,18 +135,37 @@ function parseReadMode(value: string | undefined): ReadMode {
   return 'around'
 }
 
-function optionalDateFilter(name: 'after' | 'before', value: string | undefined) {
-  if (value === undefined || value.length === 0) {
+function optionalDateFilter(name: 'after', value: string | undefined) {
+  const timestamp = optionalDateFilterValue(name, value)
+
+  if (timestamp === undefined) {
     return {}
   }
 
-  const timestamp = Date.parse(value)
+  return { [name]: timestamp }
+}
 
-  if (!Number.isFinite(timestamp)) {
+function optionalDateFilterValue(name: 'after' | 'before', value: string | undefined) {
+  if (value === undefined || value.length === 0) {
+    return undefined
+  }
+
+  const timestamp = optionalTimestamp(value)
+
+  if (timestamp === undefined) {
     throw new Error(`Invalid ${name} date filter: ${value}`)
   }
 
-  return { [name]: timestamp }
+  return timestamp
+}
+
+function optionalTimestamp(value: string | undefined): number | undefined {
+  if (value === undefined || value.length === 0) {
+    return undefined
+  }
+
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : undefined
 }
 
 function optionalStringFilter<TName extends string>(name: TName, value: string | undefined) {

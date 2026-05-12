@@ -8,16 +8,29 @@ interface OllamaEmbedResponse {
 }
 
 const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434'
-const DEFAULT_EMBED_MODEL = 'mxbai-embed-large'
+const DEFAULT_EMBED_MODEL = 'all-minilm'
+
+export interface OllamaEmbeddingProviderOptions {
+  readonly baseUrl?: string
+  readonly model?: string
+}
 
 export class OllamaEmbeddingProvider implements EmbeddingProvider {
   public readonly model: string
   readonly #baseUrl: string
 
-  public constructor() {
+  public constructor(options: OllamaEmbeddingProviderOptions = {}) {
     const { OPENCODE_RECALL_EMBED_MODEL: model, OPENCODE_RECALL_OLLAMA_URL: baseUrl } = process.env
-    this.model = model === undefined || model.length === 0 ? DEFAULT_EMBED_MODEL : model
-    this.#baseUrl = baseUrl === undefined || baseUrl.length === 0 ? DEFAULT_OLLAMA_URL : baseUrl
+    const configuredModel = options.model ?? model
+    const configuredBaseUrl = options.baseUrl ?? baseUrl
+    this.model =
+      configuredModel === undefined || configuredModel.length === 0
+        ? DEFAULT_EMBED_MODEL
+        : configuredModel
+    this.#baseUrl =
+      configuredBaseUrl === undefined || configuredBaseUrl.length === 0
+        ? DEFAULT_OLLAMA_URL
+        : configuredBaseUrl
   }
 
   public async embed(texts: readonly string[]): Promise<readonly Float32Array[]> {

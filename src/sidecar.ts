@@ -9,7 +9,7 @@ import type { EmbeddingProvider } from './embedding'
 const INDEX_SCHEMA_VERSION = '1'
 const SYNC_OVERLAP_MS = 30 * 60 * 1000
 const SYNC_BATCH_SIZE = 8
-const MAX_INDEX_TEXT_CHARS = 1_000
+const MAX_INDEX_TEXT_CHARS = 500
 const LOCK_TTL_MS = 60_000
 const SIDE_CAR_FILENAME = 'opencode-recall-index.db'
 const MAX_KEYWORD_BOOST = 0.2

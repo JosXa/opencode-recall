@@ -35,6 +35,7 @@
   "homepage": "https://github.com/JosXa/opencode-recall#readme",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "eval:embeddings": "bun scripts/evaluate-embedding-models.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
