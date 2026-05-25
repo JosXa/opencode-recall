@@ -7,7 +7,7 @@ import { decodeCursor } from './src/cursor'
 import { HistoryDatabase, type ReadMode } from './src/db'
 import { OllamaEmbeddingProvider } from './src/embedding'
 import { normalizeWindow } from './src/normalizer'
-import { formatSearchResults } from './src/search'
+import { formatSearchResults, rankSearchRows } from './src/search'
 import { RecallSidecarIndex } from './src/sidecar'
 
 const DEFAULT_SEARCH_LIMIT = 8
@@ -73,7 +73,9 @@ export const RecallPlugin: Plugin = async () => {
               () => db.readTextPartIds(),
             )
             const semanticRows = await sidecar.search(query, options, provider)
-            return formatSearchResults(semanticRows, syncResult)
+            const lexicalRows = db.lexicalSearch(query, options)
+            const rows = rankSearchRows(query, [...lexicalRows, ...semanticRows], options.limit)
+            return formatSearchResults(rows, syncResult)
           } finally {
             sidecar.close()
             db.close()
@@ -105,8 +107,11 @@ export const RecallPlugin: Plugin = async () => {
           const db = new HistoryDatabase()
 
           try {
+            const readOptions = { mode, limit, fullLimit }
             const window = normalizeWindow(
-              db.readWindow(cursor.messageId, { mode, limit, fullLimit }),
+              cursor.messageId === undefined
+                ? db.readWindowForSession(requiredSessionId(cursor.sessionId), readOptions)
+                : db.readWindow(cursor.messageId, readOptions),
             )
             return new ChatmlRenderer().render(window)
           } finally {
@@ -116,6 +121,14 @@ export const RecallPlugin: Plugin = async () => {
       }),
     },
   }
+}
+
+function requiredSessionId(value: string | undefined): string {
+  if (value !== undefined) {
+    return value
+  }
+
+  throw new Error('History cursor does not contain a message or session id')
 }
 
 export default RecallPlugin

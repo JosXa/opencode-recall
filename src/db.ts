@@ -27,7 +27,10 @@ export interface SearchRow {
   readonly score?: number
   readonly timeCreated: number
   readonly text: string
+  readonly source?: SearchSource
 }
+
+export type SearchSource = 'semantic-rescue' | 'session-title' | 'text'
 
 export interface IndexSourceRow extends SearchRow {
   readonly sourceUpdated: number
@@ -116,6 +119,61 @@ export class HistoryDatabase {
     return rows
   }
 
+  public lexicalSearch(query: string, options: SearchOptions): SearchRow[] {
+    const terms = tokenizeQuery(query)
+
+    if (terms.length === 0) {
+      return []
+    }
+
+    const candidateLimit = Math.max(options.limit * 6_250, 50_000)
+    const termConditions = terms.map(
+      () =>
+        `(lower(coalesce(s.title, '')) like ? escape '\\' or lower(coalesce(s.directory, '')) like ? escape '\\' or lower(json_extract(p.data, '$.text')) like ? escape '\\')`,
+    )
+    const conditions = [
+      `(${termConditions.join(' or ')})`,
+      ...(options.after === undefined ? [] : ['m.time_created >= ?']),
+      ...(options.before === undefined ? [] : ['m.time_created <= ?']),
+      ...(options.dir === undefined ? [] : ['s.directory = ?']),
+    ].join(' and ')
+    const termParams = terms.flatMap((term) => {
+      const pattern = `%${escapeLikeTerm(term)}%`
+      return [pattern, pattern, pattern]
+    })
+    const params = [
+      ...termParams,
+      ...(options.after === undefined ? [] : [options.after]),
+      ...(options.before === undefined ? [] : [options.before]),
+      ...(options.dir === undefined ? [] : [options.dir]),
+      candidateLimit,
+    ]
+    const rows = this.#db
+      .query<SearchRow, (string | number)[]>(`
+        select
+          s.id as sessionId,
+          s.title as sessionTitle,
+          s.directory as directory,
+          m.id as messageId,
+          p.id as partId,
+          json_extract(m.data, '$.role') as role,
+          m.time_created as timeCreated,
+          json_extract(p.data, '$.text') as text,
+          'text' as source
+        from part p
+        join message m on m.id = p.message_id
+        join session s on s.id = p.session_id
+        where json_extract(p.data, '$.type') = 'text'
+          and json_extract(p.data, '$.text') is not null
+          and ${conditions}
+        order by m.time_created desc, p.id desc
+        limit ?
+      `)
+      .all(...params)
+
+    return rows
+  }
+
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
     const changedCondition =
       since === undefined
@@ -123,7 +181,7 @@ export class HistoryDatabase {
         : 'and max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) >= ?'
     const params = since === undefined ? [] : [since]
 
-    return this.#db
+    const textRows = this.#db
       .query<IndexSourceRow, number[]>(`
         select
           s.id as sessionId,
@@ -134,6 +192,7 @@ export class HistoryDatabase {
           json_extract(m.data, '$.role') as role,
           m.time_created as timeCreated,
           json_extract(p.data, '$.text') as text,
+          'text' as source,
           max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
         from part p
         join message m on m.id = p.message_id
@@ -142,6 +201,42 @@ export class HistoryDatabase {
           and json_extract(p.data, '$.text') is not null
           ${changedCondition}
         order by sourceUpdated, p.id
+      `)
+      .all(...params)
+
+    return [...textRows, ...this.readSessionTitleRowsForIndex(since)]
+  }
+
+  public readSessionTitleRowsForIndex(since: number | undefined): IndexSourceRow[] {
+    const changedCondition = since === undefined ? '' : 'where coalesce(s.time_updated, 0) >= ?'
+    const params = since === undefined ? [] : [since]
+
+    return this.#db
+      .query<IndexSourceRow, number[]>(`
+        with first_message as (
+          select
+            m.session_id as sessionId,
+            m.id as messageId,
+            json_extract(m.data, '$.role') as role,
+            m.time_created as timeCreated,
+            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
+          from message m
+        )
+        select
+          s.id as sessionId,
+          s.title as sessionTitle,
+          s.directory as directory,
+          fm.messageId as messageId,
+          'session-title:' || s.id as partId,
+          coalesce(fm.role, 'user') as role,
+          coalesce(fm.timeCreated, s.time_updated) as timeCreated,
+          trim('Title: ' || coalesce(s.title, '') || char(10) || 'Directory: ' || coalesce(s.directory, '')) as text,
+          'session-title' as source,
+          coalesce(s.time_updated, 0) as sourceUpdated
+        from session s
+        join first_message fm on fm.sessionId = s.id and fm.messageIndex = 1
+        ${changedCondition}
+        order by sourceUpdated, s.id
       `)
       .all(...params)
   }
@@ -156,7 +251,37 @@ export class HistoryDatabase {
       `)
       .all()
 
+    return [...rows.map((row) => row.partId), ...this.readSessionTitlePartIds()]
+  }
+
+  public readSessionTitlePartIds(): string[] {
+    const rows = this.#db
+      .query<{ readonly partId: string }, []>(`
+        select 'session-title:' || s.id as partId
+        from session s
+        where exists (select 1 from message m where m.session_id = s.id)
+      `)
+      .all()
+
     return rows.map((row) => row.partId)
+  }
+
+  public readWindowForSession(sessionId: string, options: ReadOptions): WindowRows {
+    const anchor = this.#db
+      .query<{ readonly messageId: string }, [string]>(`
+        select id as messageId
+        from message
+        where session_id = ?
+        order by time_created, id
+        limit 1
+      `)
+      .get(sessionId)
+
+    if (anchor === null) {
+      throw new Error(`History session cursor points to missing or empty session: ${sessionId}`)
+    }
+
+    return this.readWindow(anchor.messageId, options)
   }
 
   public readWindow(anchorMessageId: string, options: ReadOptions): WindowRows {

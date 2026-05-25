@@ -66,7 +66,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       return await fetch(`${this.#baseUrl}/api/embed`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: this.model, input: texts, keep_alive: '5m' }),
+        body: JSON.stringify({ model: this.model, input: texts, keep_alive: '3m' }),
       })
     } catch (error) {
       throw new Error(`${this.#setupInstructions()}\n\n${String(error)}`)

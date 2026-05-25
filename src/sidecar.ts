@@ -6,10 +6,11 @@ import { dirname } from 'node:path'
 import type { IndexSourceRow, SearchOptions, SearchRow } from './db'
 import type { EmbeddingProvider } from './embedding'
 
-const INDEX_SCHEMA_VERSION = '1'
+const INDEX_SCHEMA_VERSION = '2'
 const SYNC_OVERLAP_MS = 30 * 60 * 1000
-const SYNC_BATCH_SIZE = 8
+const SYNC_BATCH_SIZE = 64
 const MAX_INDEX_TEXT_CHARS = 500
+const SEMANTIC_CANDIDATE_LIMIT = 80
 const LOCK_TTL_MS = 60_000
 const SIDE_CAR_FILENAME = 'opencode-recall-index.db'
 const MAX_KEYWORD_BOOST = 0.2
@@ -29,6 +30,14 @@ export interface SyncResult {
   readonly indexedRows: number
   readonly deletedRows: number
   readonly lockAcquired: boolean
+}
+
+export interface SyncOptions {
+  readonly onProgress?: (progress: {
+    readonly processedRows: number
+    readonly totalRows: number
+    readonly indexedRows: number
+  }) => void
 }
 
 export class RecallSidecarIndex {
@@ -58,10 +67,11 @@ export class RecallSidecarIndex {
         message_id text not null,
         part_id text not null unique,
         role text not null,
-        time_created integer not null,
-        source_updated integer not null,
-        text text not null,
-        content_hash text not null,
+          time_created integer not null,
+          source_updated integer not null,
+          text text not null,
+          source text not null default 'text',
+          content_hash text not null,
         model text not null,
         dims integer not null,
         embedding blob not null
@@ -70,6 +80,7 @@ export class RecallSidecarIndex {
       create index if not exists chunk_source_updated_idx on chunk(source_updated);
       create index if not exists chunk_message_id_idx on chunk(message_id);
     `)
+    this.#ensureSourceColumn()
     this.#setMetadata('schema_version', INDEX_SCHEMA_VERSION)
   }
 
@@ -81,6 +92,7 @@ export class RecallSidecarIndex {
     sourceRows: (since: number | undefined) => readonly IndexSourceRow[],
     provider: EmbeddingProvider,
     sourcePartIds?: () => readonly string[],
+    options: SyncOptions = {},
   ): Promise<SyncResult> {
     const start = performance.now()
 
@@ -106,6 +118,11 @@ export class RecallSidecarIndex {
         const batch = rows.slice(index, index + SYNC_BATCH_SIZE)
         indexedRows += await this.#syncBatch(batch, provider)
         maxUpdated = maxSourceUpdated(batch, maxUpdated)
+        options.onProgress?.({
+          processedRows: Math.min(index + batch.length, rows.length),
+          totalRows: rows.length,
+          indexedRows,
+        })
       }
 
       if (sourcePartIds !== undefined) {
@@ -155,6 +172,7 @@ export class RecallSidecarIndex {
           time_created as timeCreated,
           source_updated as sourceUpdated,
           text,
+          source,
           content_hash as contentHash,
           model,
           dims,
@@ -184,7 +202,7 @@ export class RecallSidecarIndex {
       .sort(
         (left, right) => right.score - left.score || right.row.timeCreated - left.row.timeCreated,
       )
-      .slice(0, options.limit)
+      .slice(0, Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT))
       .map(({ row, score }) => ({
         sessionId: row.sessionId,
         sessionTitle: row.sessionTitle,
@@ -195,6 +213,7 @@ export class RecallSidecarIndex {
         score,
         timeCreated: row.timeCreated,
         text: row.text,
+        source: row.source ?? 'text',
       }))
   }
 
@@ -288,14 +307,15 @@ export class RecallSidecarIndex {
           string,
           string,
           string,
+          string,
           number,
           Uint8Array,
         ]
       >(`
         insert into chunk (
           chunk_id, session_id, session_title, directory, message_id, part_id, role,
-          time_created, source_updated, text, content_hash, model, dims, embedding
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          time_created, source_updated, text, source, content_hash, model, dims, embedding
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(part_id) do update set
           chunk_id = excluded.chunk_id,
           session_id = excluded.session_id,
@@ -306,6 +326,7 @@ export class RecallSidecarIndex {
           time_created = excluded.time_created,
           source_updated = excluded.source_updated,
           text = excluded.text,
+          source = excluded.source,
           content_hash = excluded.content_hash,
           model = excluded.model,
           dims = excluded.dims,
@@ -322,6 +343,7 @@ export class RecallSidecarIndex {
         row.timeCreated,
         row.sourceUpdated,
         text,
+        row.source ?? 'text',
         hash,
         model,
         embedding.length,
@@ -350,6 +372,16 @@ export class RecallSidecarIndex {
     this.#db
       .query<unknown, [string]>("delete from sync_lock where name = 'sync' and owner = ?")
       .run(this.#owner)
+  }
+
+  #ensureSourceColumn(): void {
+    const rows = this.#db.query<{ readonly name: string }, []>('pragma table_info(chunk)').all()
+
+    if (rows.some((row) => row.name === 'source')) {
+      return
+    }
+
+    this.#db.exec("alter table chunk add column source text not null default 'text'")
   }
 
   #getNumberMetadata(key: string): number | undefined {
