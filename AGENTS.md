@@ -14,8 +14,8 @@ Use `node:*` imports only when no Bun equivalent exists.
 # Release Workflow
 
 - Version bump should be determined from conventional commits.
-- Publish to npm can be automated by pushing a `vX.Y.Z` tag once the package name and npm access are final.
-- The current package is `private: true` because the unscoped npm name is already taken by another publisher.
+- Publish to npm is automated by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
+- Package is published as `@josxa/opencode-recall` (scoped, public, with provenance). The unscoped `opencode-recall` name on npm belongs to another publisher.
 
 NEVER ask user for release notes content. Generate release notes from commits when releasing.
 

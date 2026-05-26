@@ -1,9 +1,9 @@
 {
-  "name": "opencode-recall",
-  "version": "0.0.0",
-  "description": "Cursor-based OpenCode history recall plugin with ChatML transcript windows",
+  "name": "@josxa/opencode-recall",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that adds semantic + lexical recall over your local session history, with cursor-paginated ChatML transcript reads.",
   "type": "module",
-  "private": true,
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "engines": {
     "bun": ">=1.0.0"
@@ -21,6 +25,9 @@
     "history",
     "recall",
     "search",
+    "semantic-search",
+    "embeddings",
+    "ollama",
     "chatml"
   ],
   "author": "JosXa",
