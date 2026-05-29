@@ -159,6 +159,8 @@ export class RecallSidecarIndex {
           number | null,
           string | null,
           string | null,
+          string | null,
+          string | null,
         ]
       >(`
         select
@@ -182,6 +184,7 @@ export class RecallSidecarIndex {
           and (? is null or time_created >= ?)
           and (? is null or time_created <= ?)
           and (? is null or directory = ?)
+          and (? is null or session_id != ?)
       `)
       .all(
         provider.model,
@@ -191,6 +194,8 @@ export class RecallSidecarIndex {
         options.before ?? null,
         options.dir ?? null,
         options.dir ?? null,
+        options.excludeSessionId ?? null,
+        options.excludeSessionId ?? null,
       )
     const terms = tokenizeQuery(query)
 

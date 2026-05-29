@@ -36,11 +36,16 @@ export const RecallPlugin: Plugin = async () => {
     tool: {
       [HISTORY_SEARCH_COMMAND]: tool({
         description:
-          'Search OpenCode history. Prefer q/n. Returns compact hits: cursor, sid, dir, title, time, role, score, text.',
+          'Search OpenCode history. Prefer q/n. Excludes the current session unless includeCurrentSession is true. Returns compact hits: cursor, sid, dir, title, time, role, score, text.',
         args: {
           q: tool.schema.string('Search query').optional(),
           n: tool.schema.number('Max hits').optional(),
           dir: tool.schema.string('Exact OpenCode session directory filter').optional(),
+          includeCurrentSession: tool.schema
+            .boolean(
+              'Include results from the currently running OpenCode session. Defaults to false.',
+            )
+            .optional(),
           after: tool.schema
             .string('Only include messages at or after this ISO date/time')
             .optional(),
@@ -48,19 +53,21 @@ export const RecallPlugin: Plugin = async () => {
             .string('Only include messages at or before this ISO date/time')
             .optional(),
         },
-        async execute(args) {
+        async execute(args, context) {
           const query = args.q
 
           if (query === undefined || query.length === 0) {
             throw new Error('history_search requires q')
           }
 
+          const includeCurrentSession = args.includeCurrentSession === true
           const before = optionalDateFilterValue('before', args.before)
           const options = {
             limit: clampNumber(args.n, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
             ...optionalStringFilter('dir', args.dir),
+            ...currentSessionExclusion(includeCurrentSession, context.sessionID),
             ...optionalDateFilter('after', args.after),
-            before: before ?? Date.now() - DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS,
+            ...searchBeforeFilter(before, includeCurrentSession),
           }
           const db = new HistoryDatabase()
           const sidecar = new RecallSidecarIndex()
@@ -187,6 +194,26 @@ function optionalStringFilter<TName extends string>(name: TName, value: string |
   }
 
   return { [name]: value }
+}
+
+function currentSessionExclusion(includeCurrentSession: boolean | undefined, sessionID: string) {
+  if (includeCurrentSession === true) {
+    return {}
+  }
+
+  return { excludeSessionId: sessionID }
+}
+
+function searchBeforeFilter(before: number | undefined, includeCurrentSession: boolean) {
+  if (before !== undefined) {
+    return { before }
+  }
+
+  if (includeCurrentSession) {
+    return {}
+  }
+
+  return { before: Date.now() - DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS }
 }
 
 function clampNumber(

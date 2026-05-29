@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import { Database } from 'bun:sqlite'
+import { rmSync } from 'node:fs'
 
 import { decodeCursor } from '../src/cursor'
-import type { SearchRow } from '../src/db'
+import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db'
+import type { EmbeddingProvider } from '../src/embedding'
 import { OllamaEmbeddingProvider } from '../src/embedding'
 import { rankSearchRows } from '../src/search'
+import { RecallSidecarIndex } from '../src/sidecar'
 
 const BASE_ROW = {
   sessionId: 'ses_other',
@@ -217,3 +221,125 @@ describe('strict ranking', () => {
     expect(ranked.some((row) => row.sessionId === 'ses_old')).toBe(true)
   })
 })
+
+describe('current session exclusion', () => {
+  test('lexical search excludes the current session by default option', () => {
+    const path = `/tmp/opencode-recall-history-${crypto.randomUUID()}.db`
+    const db = new Database(path)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(db, 'ses_current', 'Current chat', 'msg_current', 'part_current', 2)
+      insertTextPart(db, 'ses_old', 'Older chat', 'msg_old', 'part_old', 1)
+
+      const history = new HistoryDatabase(path)
+      try {
+        const results = history.lexicalSearch('invoices cli', {
+          limit: 10,
+          excludeSessionId: 'ses_current',
+        })
+
+        expect(results.map((row) => row.sessionId)).toEqual(['ses_old'])
+      } finally {
+        history.close()
+      }
+    } finally {
+      db.close()
+      removeSqliteFiles(path)
+    }
+  })
+
+  test('semantic sidecar search excludes the current session by default option', async () => {
+    const path = `/tmp/opencode-recall-sidecar-${crypto.randomUUID()}.db`
+    const index = new RecallSidecarIndex(path)
+    const provider = new ConstantEmbeddingProvider()
+    const rows = [
+      indexRow('ses_current', 'msg_current', 'part_current', 2),
+      indexRow('ses_old', 'msg_old', 'part_old', 1),
+    ]
+
+    try {
+      await index.sync(() => rows, provider, () => rows.map((row) => row.partId))
+      const excluded = await index.search(
+        'invoices cli',
+        { limit: 10, excludeSessionId: 'ses_current' },
+        provider,
+      )
+      const included = await index.search('invoices cli', { limit: 10 }, provider)
+
+      expect(excluded.map((row) => row.sessionId)).toEqual(['ses_old'])
+      expect(included.map((row) => row.sessionId)).toContain('ses_current')
+    } finally {
+      index.close()
+      removeSqliteFiles(path)
+    }
+  })
+})
+
+class ConstantEmbeddingProvider implements EmbeddingProvider {
+  public readonly model = 'test-model'
+
+  public embed(texts: readonly string[]): Promise<readonly Float32Array[]> {
+    return Promise.resolve(texts.map(() => new Float32Array([1, 0, 0])))
+  }
+}
+
+function insertTextPart(
+  db: Database,
+  sessionId: string,
+  title: string,
+  messageId: string,
+  partId: string,
+  timestamp: number,
+): void {
+  db.query('insert into session values (?, ?, ?, ?)').run(
+    sessionId,
+    title,
+    '/projects/invoices-cli',
+    timestamp,
+  )
+  db.query('insert into message values (?, ?, ?, ?, ?)').run(
+    messageId,
+    sessionId,
+    JSON.stringify({ role: 'user' }),
+    timestamp,
+    timestamp,
+  )
+  db.query('insert into part values (?, ?, ?, ?, ?)').run(
+    partId,
+    messageId,
+    sessionId,
+    JSON.stringify({ type: 'text', text: 'invoices cli location notes' }),
+    timestamp,
+  )
+}
+
+function indexRow(
+  sessionId: string,
+  messageId: string,
+  partId: string,
+  timestamp: number,
+): IndexSourceRow {
+  return {
+    sessionId,
+    sessionTitle: `${sessionId} title`,
+    directory: '/projects/invoices-cli',
+    messageId,
+    partId,
+    role: 'user',
+    timeCreated: timestamp,
+    sourceUpdated: timestamp,
+    text: 'invoices cli location notes',
+    source: 'text',
+  }
+}
+
+function removeSqliteFiles(path: string): void {
+  rmSync(path, { force: true })
+  rmSync(`${path}-shm`, { force: true })
+  rmSync(`${path}-wal`, { force: true })
+}
