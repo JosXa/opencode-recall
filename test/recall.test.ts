@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import { decodeCursor } from '../src/cursor'
 import type { SearchRow } from '../src/db'
+import { OllamaEmbeddingProvider } from '../src/embedding'
 import { rankSearchRows } from '../src/search'
 
 const BASE_ROW = {
@@ -27,6 +28,119 @@ describe('cursor decoding', () => {
     expect(() => decodeCursor('definitely-not-a-cursor')).toThrow(
       'Invalid history cursor. Expected msg_..., ses_..., or an encoded cursor from history_search.',
     )
+  })
+})
+
+describe('ollama embeddings', () => {
+  test('normalizes long inputs before calling Ollama', async () => {
+    const originalFetch = globalThis.fetch
+    const requests: string[] = []
+
+    globalThis.fetch = ((input, init) => {
+      if (String(input).endsWith('/api/version')) {
+        return Promise.resolve(Response.json({ version: 'test' }))
+      }
+      if (String(input).endsWith('/api/tags')) {
+        return Promise.resolve(Response.json({ models: [{ name: 'all-minilm:latest' }] }))
+      }
+
+      requests.push(String(init?.body))
+      return Promise.resolve(Response.json({ embeddings: [[1, 2, 3]] }))
+    }) as typeof fetch
+
+    try {
+      await new OllamaEmbeddingProvider({ baseUrl: 'http://ollama.test' }).embed([
+        `${'tool '.repeat(200)}final term`,
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    const payload = JSON.parse(requests[0] ?? '{}') as { readonly input?: readonly string[] }
+
+    expect(payload.input?.[0]?.length).toBeLessThanOrEqual(256)
+    expect(payload.input?.[0]).not.toContain('\n')
+  })
+
+  test('splits oversized Ollama batches on context length errors', async () => {
+    const originalFetch = globalThis.fetch
+    const requestSizes: number[] = []
+
+    globalThis.fetch = ((input, init) => {
+      if (String(input).endsWith('/api/version')) {
+        return Promise.resolve(Response.json({ version: 'test' }))
+      }
+      if (String(input).endsWith('/api/tags')) {
+        return Promise.resolve(Response.json({ models: [{ name: 'all-minilm:latest' }] }))
+      }
+
+      const payload = JSON.parse(String(init?.body)) as { readonly input?: readonly string[] }
+      requestSizes.push(payload.input?.length ?? 0)
+
+      if ((payload.input?.length ?? 0) > 1) {
+        return Promise.resolve(
+          new Response('{"error":"the input length exceeds the context length"}', {
+            status: 400,
+            statusText: 'Bad Request',
+          }),
+        )
+      }
+
+      return Promise.resolve(Response.json({ embeddings: [[1, 2, 3]] }))
+    }) as typeof fetch
+
+    try {
+      const embeddings = await new OllamaEmbeddingProvider({ baseUrl: 'http://ollama.test' }).embed([
+        'first invoice cli note',
+        'second invoice cli note',
+        'third invoice cli note',
+      ])
+      expect(embeddings).toHaveLength(3)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(requestSizes).toEqual([3, 2, 1, 1, 1])
+  })
+
+  test('shrinks single inputs rejected for context length', async () => {
+    const originalFetch = globalThis.fetch
+    const inputLengths: number[] = []
+
+    globalThis.fetch = ((request, init) => {
+      if (String(request).endsWith('/api/version')) {
+        return Promise.resolve(Response.json({ version: 'test' }))
+      }
+      if (String(request).endsWith('/api/tags')) {
+        return Promise.resolve(Response.json({ models: [{ name: 'all-minilm:latest' }] }))
+      }
+
+      const payload = JSON.parse(String(init?.body)) as { readonly input?: readonly string[] }
+      const embedInput = payload.input?.[0] ?? ''
+      inputLengths.push(embedInput.length)
+
+      if (embedInput.length > 32) {
+        return Promise.resolve(
+          new Response('{"error":"the input length exceeds the context length"}', {
+            status: 400,
+            statusText: 'Bad Request',
+          }),
+        )
+      }
+
+      return Promise.resolve(Response.json({ embeddings: [[1, 2, 3]] }))
+    }) as typeof fetch
+
+    try {
+      const embeddings = await new OllamaEmbeddingProvider({ baseUrl: 'http://ollama.test' }).embed([
+        'invoice '.repeat(40),
+      ])
+      expect(embeddings).toHaveLength(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    expect(inputLengths).toEqual([256, 127, 63, 31])
   })
 })
 

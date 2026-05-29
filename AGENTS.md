@@ -29,6 +29,8 @@ NEVER ask user for release notes content. Generate release notes from commits wh
 
 MUST run `bun run ai:check` after concluding any changes.
 
+Any change we make must be tested thoroughly in OpenCode.
+
 MUST use one repo-wide `ai:check` command as the default verification step. Run it frequently while working and always before considering the task complete.
 
 If you touch a subsystem with its own fast deterministic tests, run those too.
