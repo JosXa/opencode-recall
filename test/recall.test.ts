@@ -33,6 +33,12 @@ describe('cursor decoding', () => {
       'Invalid history cursor. Expected msg_..., ses_..., or an encoded cursor from history_search.',
     )
   })
+
+  test('rejects invented session offset suffixes', () => {
+    expect(() => decodeCursor('ses_1ea07e649ffe8rG0kUBk4oJQC8:10')).toThrow(
+      'Invalid history cursor. Expected msg_..., ses_..., or an encoded cursor from history_search.',
+    )
+  })
 })
 
 describe('ollama embeddings', () => {

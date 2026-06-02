@@ -92,7 +92,7 @@ export const RecallPlugin: Plugin = async () => {
 
       [HISTORY_READ_COMMAND]: tool({
         description:
-          'Read OpenCode history. Prefer cursor/n. Use nav.next with mode next for continue, nav.prev with mode prev for earlier context, nav.tail with mode tail, nav.head with mode head. Use full only if explicitly requested.',
+          'Read OpenCode history. Prefer cursor/n. Cursor must be a search-hit cursor, msg_..., ses_..., or exact value copied from <nav next="..." prev="..." head="..." tail="..." full="...">. Do not append offsets like :10. Use mode next/prev/head/tail/full with the copied cursor value. Use full only if explicitly requested.',
         args: {
           cursor: tool.schema.string('Cursor from search hit cursor or read nav').optional(),
           mode: tool.schema

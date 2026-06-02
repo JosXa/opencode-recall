@@ -1,5 +1,8 @@
 import { Buffer } from 'node:buffer'
 
+const MESSAGE_ID_PATTERN = /^msg_[A-Za-z0-9]+$/
+const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/
+
 export interface HistoryCursor {
   readonly version: 1
   readonly messageId?: string
@@ -17,11 +20,11 @@ export function encodeCursor(cursor: HistoryCursor): string {
 }
 
 export function decodeCursor(value: string): HistoryCursor {
-  if (value.startsWith('msg_')) {
+  if (MESSAGE_ID_PATTERN.test(value)) {
     return { version: 1, messageId: value }
   }
 
-  if (value.startsWith('ses_')) {
+  if (SESSION_ID_PATTERN.test(value)) {
     return { version: 1, sessionId: value }
   }
 
