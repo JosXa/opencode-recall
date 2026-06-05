@@ -32,19 +32,59 @@ jobs:
       - name: Build package
         run: bun run build
 
-      - name: Generate release notes
+      - name: Generate Release Notes
+        id: release_notes
         run: |
-          previous_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          echo "Generating release notes..."
 
-          if [ -z "$previous_tag" ]; then
-            git log --pretty=format:"- %s (%h)" "${{ github.ref_name }}" > release_notes.md
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" ${{ github.ref_name }})
           else
-            git log --pretty=format:"- %s (%h)" "$previous_tag..${{ github.ref_name }}" > release_notes.md
-            printf '\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
-              "${{ github.repository }}" "$previous_tag" "${{ github.ref_name }}" >> release_notes.md
+            COMMITS=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..${{ github.ref_name }})
           fi
 
-      - name: Create GitHub release
+          # Categorize commits
+          FEATURES=$(echo "$COMMITS" | grep -E "^- feat" || true)
+          FIXES=$(echo "$COMMITS" | grep -E "^- fix" || true)
+          DOCS=$(echo "$COMMITS" | grep -E "^- docs" || true)
+          CHORES=$(echo "$COMMITS" | grep -E "^- chore" || true)
+          OTHERS=$(echo "$COMMITS" | grep -Ev "^- (feat|fix|docs|chore)" || true)
+
+          # Build changelog
+          CHANGELOG="## What's Changed"$'\n'
+
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG+=$'\n'"### ✨ Features"$'\n'"$FEATURES"$'\n'
+          fi
+
+          if [ -n "$FIXES" ]; then
+            CHANGELOG+=$'\n'"### 🐛 Bug Fixes"$'\n'"$FIXES"$'\n'
+          fi
+
+          if [ -n "$DOCS" ]; then
+            CHANGELOG+=$'\n'"### 📚 Documentation"$'\n'"$DOCS"$'\n'
+          fi
+
+          if [ -n "$CHORES" ]; then
+            CHANGELOG+=$'\n'"### 🔧 Chores"$'\n'"$CHORES"$'\n'
+          fi
+
+          if [ -n "$OTHERS" ]; then
+            CHANGELOG+=$'\n'"### Other Changes"$'\n'"$OTHERS"$'\n'
+          fi
+
+          # Add full changelog link if there's a previous tag
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG+=$'\n'"**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.ref_name }}"
+          fi
+
+          # Save to file for the release
+          echo "$CHANGELOG" > release_notes.md
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           body_path: release_notes.md

@@ -30,7 +30,7 @@
     "ollama",
     "chatml"
   ],
-  "author": "JosXa",
+  "author": "JosXa <info@josxa.dev>",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -41,7 +41,8 @@
   },
   "homepage": "https://github.com/JosXa/opencode-recall#readme",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "build": "bun run clean && tsc -p tsconfig.build.json",
     "test": "bun test",
     "eval:real-history": "bun scripts/evaluate-real-history.ts",
     "eval:embeddings": "bun scripts/evaluate-embedding-models.ts",
