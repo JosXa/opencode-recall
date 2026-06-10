@@ -7,6 +7,7 @@ import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db'
 import type { EmbeddingProvider } from '../src/embedding'
 import { OllamaEmbeddingProvider } from '../src/embedding'
 import { rankSearchRows } from '../src/search'
+import { OpenCodeRecall, searchHistory } from '../src/sdk'
 import { RecallSidecarIndex } from '../src/sidecar'
 
 const BASE_ROW = {
@@ -282,6 +283,86 @@ describe('current session exclusion', () => {
     } finally {
       index.close()
       removeSqliteFiles(path)
+    }
+  })
+})
+
+describe('library sdk', () => {
+  test('root module stays plugin-only for file URL loading', async () => {
+    const root = await import('../index')
+
+    expect(Object.keys(root).sort()).toEqual(['RecallPlugin', 'default'])
+  })
+
+  test('searchHistory returns ranked public hits from custom databases', async () => {
+    const historyPath = `/tmp/opencode-recall-sdk-history-${crypto.randomUUID()}.db`
+    const sidecarPath = `/tmp/opencode-recall-sdk-sidecar-${crypto.randomUUID()}.db`
+    const db = new Database(historyPath)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(db, 'ses_sdk', 'SDK integration', 'msg_sdk', 'part_sdk', 1)
+
+      const result = await searchHistory('invoices cli', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        embeddingProvider: new ConstantEmbeddingProvider(),
+        limit: 5,
+      })
+
+      expect(result.hits[0]).toMatchObject({
+        cursor: 'msg_sdk',
+        sessionId: 'ses_sdk',
+        sessionTitle: 'SDK integration',
+        directory: '/projects/invoices-cli',
+      })
+      expect(result.sync?.lockAcquired).toBe(true)
+    } finally {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
+    }
+  })
+
+  test('OpenCodeRecall reads normalized transcript windows', () => {
+    const historyPath = `/tmp/opencode-recall-sdk-read-${crypto.randomUUID()}.db`
+    const sidecarPath = `/tmp/opencode-recall-sdk-read-sidecar-${crypto.randomUUID()}.db`
+    const db = new Database(historyPath)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(db, 'ses_read', 'Read SDK', 'msg_read', 'part_read', 1)
+
+      const recall = new OpenCodeRecall({
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        embeddingProvider: new ConstantEmbeddingProvider(),
+      })
+
+      try {
+        const window = recall.read('ses_read')
+
+        expect(window.sessionId).toBe('ses_read')
+        expect(window.messages[0]?.parts[0]).toEqual({
+          type: 'text',
+          text: 'invoices cli location notes',
+        })
+        expect(recall.render('msg_read')).toContain('<hist sid="ses_read"')
+      } finally {
+        recall.close()
+      }
+    } finally {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
     }
   })
 })
