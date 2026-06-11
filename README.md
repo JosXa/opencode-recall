@@ -78,7 +78,7 @@ Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["@josxa/opencode-recall"]
+  "plugin": ["@josxa/opencode-recall"]
 }
 ```
 
