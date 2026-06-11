@@ -28,9 +28,9 @@ Every OpenCode session is already saved locally. Recall makes them searchable, s
                                         │        transcript + cursors
                                         │                    │
                                         │                    ▼
-                                        │       ┌──────────────────────────┐
-                                        └────── │   pull surrounding       │
-                                      next page │   messages (ChatML)      │
+                                        └──────►┌──────────────────────────┐
+                                      next page │   pull surrounding       │
+                                                │   messages (ChatML)      │
                                                 └──────────────────────────┘
 ```
 
