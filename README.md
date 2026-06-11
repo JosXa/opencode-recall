@@ -9,29 +9,30 @@
 Every OpenCode session is already saved locally. Recall makes them searchable, so the agent can pull the right slice of a past conversation back into context on demand, instead of you re-explaining yourself or dumping whole sessions into the prompt.
 
 ```text
-        you ask                                you (or the agent) follow up
-   "what did we figure out                  "show me more around that one"
-    about rate limiting?"                   "what came right before?"
-            │                                            │
-            ▼                                            ▼
-   ┌────────────────────┐    hits + cursors    ┌──────────────────────────┐
+          you ask                             you (or the agent) follow up
+  "what did we figure out                    "show me more around that one"
+   about rate limiting?"                        "what came right before?"
+             │                                              │
+             ▼                                              ▼
+   ┌────────────────────┐                      ┌──────────────────────────┐
+                            hits + cursors
    │   search history   │ ───────────────────► │   ranked snippets        │
    └────────────────────┘                      └────────────┬─────────────┘
                                                             │
-                                                    pick a cursor
+                                                      pick a cursor
                                                             │
                                                             ▼
-                                                ┌──────────────────────────┐
-                                        ┌─────► │   read transcript        │
-                                        │       └────────────┬─────────────┘
-                                        │                    │
-                                        │        transcript + cursors
-                                        │                    │
-                                        │                    ▼
-                                        └──────►┌──────────────────────────┐
-                                      next page │   pull surrounding       │
-                                                │   messages (ChatML)      │
-                                                └──────────────────────────┘
+                                               ┌──────────────────────────┐
+                                       ┌──────►│   read transcript        │
+                                       │       └────────────┬─────────────┘
+                                       │                    │
+                                       │          transcript + cursors
+                                       │                    │
+                                       │                    ▼
+                                       └──────►┌──────────────────────────┐
+                                     next page │   pull surrounding       │
+                                               │   messages (ChatML)      │
+                                               └──────────────────────────┘
 ```
 
 ## Why Recall?
