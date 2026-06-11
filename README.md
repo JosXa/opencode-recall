@@ -4,38 +4,56 @@
 [![CI](https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml/badge.svg)](https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-> Hybrid semantic + lexical recall over your local [OpenCode](https://opencode.ai) session history, with cursor‑paginated ChatML transcript reads.
+> 🧠 **Searchable memory for [OpenCode](https://opencode.ai).** Ask *"what did we figure out about X last month?"* and the agent actually finds it.
 
-OpenCode keeps every session in a local SQLite database. This plugin makes that history *first‑class context* for the agent: find a relevant historical anchor with one ranked search, then page a bounded window of messages around it as a ChatML transcript — without loading an entire session into the model.
+Every OpenCode session is already saved locally. Recall makes them searchable, so the agent can pull the right slice of a past conversation back into context on demand, instead of you re-explaining yourself or dumping whole sessions into the prompt.
 
 ```text
-┌───────────────────┐    history_search    ┌──────────────────────┐
-│  OpenCode agent   │ ───────────────────► │  Ranked anchors      │
-│ (your assistant)  │                      │  (opaque cursors)    │
-└───────────────────┘ ◄─────────────┐      └──────────┬───────────┘
-         │      history_read        │                 │
-         ▼                          │ ChatML window   │
-┌───────────────────┐   pagination  │                 │
-│  ChatML window    │ ◄─────────────┘                 │
-│  with <nav/>      │                                 │
-└───────────────────┘                                 │
-                                                      ▼
-                                     ┌──────────────────────────────┐
-                                     │  opencode.db   (read‑only)   │
-                                     │  + sidecar embedding index   │
-                                     └──────────────────────────────┘
+        you ask                                you (or the agent) follow up
+   "what did we figure out                  "show me more around that one"
+    about rate limiting?"                   "what came right before?"
+            │                                            │
+            ▼                                            ▼
+   ┌────────────────────┐    hits + cursors    ┌──────────────────────────┐
+   │   search history   │ ───────────────────► │   ranked snippets        │
+   └────────────────────┘                      └────────────┬─────────────┘
+                                                            │
+                                                    pick a cursor
+                                                            │
+                                                            ▼
+                                          ┌────────────────────────────────┐
+                                  ┌─────► │   read transcript              │
+                                  │       └────────────────┬───────────────┘
+                                  │                        │
+                                  │            transcript + cursors
+                                  │                        │
+                                  │                        ▼
+                                  │       ┌────────────────────────────────┐
+                                  └────────┤   pull surrounding messages   │
+                                next page  │   (ChatML)                    │
+                                           └───────────────────────────────┘
 ```
 
----
+## Why Recall?
 
-## Why
+You've already solved this problem. You debugged this exact error six weeks ago in another project. You worked out the deploy steps in a session you can't find anymore. The knowledge is *there*, sitting in `opencode.db`, but the agent can't see it.
 
-The default way to "remember" prior work is to dump entire sessions into context. That's expensive, noisy, and most of it is irrelevant. Recall flips this around:
+Recall fixes that:
 
-- **Search returns anchors, not content.** Each hit is a small JSON row with a cursor.
-- **Reads are bounded windows.** You pick `around`, `next`, `prev`, `head`, `tail`, or `full` relative to a cursor, with a hard message limit.
-- **The transcript renderer is source‑faithful.** Tool calls, patches, file attachments, and text are normalized into ChatML with clear truncation markers, so the model sees structure instead of a wall of JSON.
-- **Ranking is hybrid.** Lexical SQL search runs against the OpenCode DB; semantic search runs against a sidecar embedding index built from the same rows. Results are deduped, term‑filtered, session‑diversified, and a bounded semantic‑rescue lane catches high‑confidence paraphrases.
+- 🔎 **Find the right session in seconds.** Hybrid lexical + semantic search across every project you've used OpenCode in.
+- 📜 **Read the actual conversation, not a summary.** The agent pages a bounded window of messages around the match. Tool calls, patches, and file attachments render as structured ChatML, not a wall of JSON.
+- 🎯 **Explicit by design.** Recall doesn't auto-inject memories. You (or the agent, when you ask) decide when to search. Your context window stays lean and you always know why something showed up in the prompt.
+- 🔒 **Local and read-only.** Your `opencode.db` is never written to. The embedding index lives in a sidecar SQLite file you can delete any time.
+
+## What it looks like
+
+**Simple recall: "remind me how we did this."**
+
+![Recall asking how trusted publishing was set up, agent runs history_search then history_read and returns the workflow config, publish command, and release flow](./assets/screenshot-01.png)
+
+**Iterative recall: agent reformulates the search when the first pass is thin.**
+
+![Recall asking about match marker file names, agent runs an initial broad search, then a narrower one with stronger terms and a directory filter, then returns a precise file list](./assets/screenshot-02.png)
 
 ## Install
 
@@ -43,18 +61,16 @@ The default way to "remember" prior work is to dump entire sessions into context
 opencode plugin @josxa/opencode-recall -gf
 ```
 
-This installs the package and wires it into your global OpenCode configuration automatically.
+This installs the package and wires it into your global OpenCode config.
 
 <details>
 <summary>Manual installation</summary>
 
 ```sh
 bun add -d @josxa/opencode-recall
-# or
-npm install --save-dev @josxa/opencode-recall
 ```
 
-Then register the package in your OpenCode config (`opencode.json` or `~/.config/opencode/opencode.json`):
+Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json`:
 
 ```jsonc
 {
@@ -65,16 +81,9 @@ Then register the package in your OpenCode config (`opencode.json` or `~/.config
 
 </details>
 
-That exposes two tools to the agent:
+## Set up embeddings (Ollama)
 
-| Tool             | Purpose                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `history_search` | Return ranked anchors (cursor + metadata + snippet) for a query.   |
-| `history_read`   | Read a bounded ChatML window around a cursor.                      |
-
-## Embeddings (Ollama)
-
-Semantic search uses [Ollama](https://ollama.com) running locally. The default model is `all-minilm` — small, fast, and good enough for recall.
+Semantic search uses [Ollama](https://ollama.com) running locally. The default model is `all-minilm`: small, fast, good enough for recall.
 
 ```sh
 # install: https://ollama.com/download
@@ -82,34 +91,49 @@ ollama serve
 ollama pull all-minilm
 ```
 
-The first `history_search` call builds the sidecar index incrementally; subsequent calls reuse and sync it. If the elapsed sync time crosses a threshold, search output is prefixed with a `<sync indexed_rows="…" seconds="…" />` notice so the agent (and you) know an index update happened.
+The first `history_search` call builds the sidecar index incrementally. Subsequent calls reuse and sync it.
 
-Lexical search keeps working without Ollama — but you lose paraphrase recall, which is half the value.
+Lexical search still works without Ollama, but you lose paraphrase recall, which is half the value.
+
+## How to actually use it
+
+Recall is explicit. The agent searches when you ask it to. Some prompts that work well:
+
+- *"Recall how we set up the GitHub Actions release workflow."*
+- *"Did we ever debug the Postgres connection pool exhaustion? Find that conversation."*
+- *"Pull up the session where we discussed the rate limiter design."*
+- *"Search my history for anything about Figma MCP and Azure."*
+- *"What were the file names involved when we worked on the timeline component?"*
+
+The agent runs `history_search`, picks a promising hit, calls `history_read` to load the surrounding messages, and can page forward or back if more context is needed.
 
 ## Configuration
 
-All configuration is environment‑driven so the plugin works inside MCP, the CLI, and CI without extra wiring.
+All config is environment-driven so the plugin works inside MCP, the CLI, and CI without extra wiring.
 
-| Variable                       | Default                                       | Description                                                              |
-| ------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------ |
-| `OPENCODE_DB_PATH`             | `$HOME/.local/share/opencode/opencode.db`     | OpenCode SQLite database (read‑only).                                    |
-| `OPENCODE_RECALL_DB_PATH`      | `$HOME/.local/share/opencode/opencode-recall-index.db` | Sidecar embedding index path.                                  |
-| `OPENCODE_RECALL_OLLAMA_URL`   | `http://127.0.0.1:11434`                      | Ollama base URL.                                                         |
-| `OPENCODE_RECALL_EMBED_MODEL`  | `all-minilm`                                  | Embedding model name. Try `mxbai-embed-large` for higher quality.        |
+| Variable                       | Default                                                  | Description                                                       |
+| ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------- |
+| `OPENCODE_DB_PATH`             | `$HOME/.local/share/opencode/opencode.db`                | OpenCode SQLite database (read-only).                             |
+| `OPENCODE_RECALL_DB_PATH`      | `$HOME/.local/share/opencode/opencode-recall-index.db`   | Sidecar embedding index path.                                     |
+| `OPENCODE_RECALL_OLLAMA_URL`   | `http://127.0.0.1:11434`                                 | Ollama base URL.                                                  |
+| `OPENCODE_RECALL_EMBED_MODEL`  | `all-minilm`                                             | Embedding model. Try `mxbai-embed-large` for higher quality.      |
 
-Use `bun run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
+Run `bun run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
 
 ## Tool reference
 
-### `history_search`
+Recall exposes two tools to the agent.
 
-| Arg      | Type     | Notes                                                                  |
-| -------- | -------- | ---------------------------------------------------------------------- |
-| `q`      | string   | **Required.** Free‑text query.                                         |
-| `n`      | number   | Max hits (default `8`, max `25`).                                      |
-| `directory` | string   | Session directory filter.                                           |
-| `after`  | ISO date | Only messages at or after this timestamp.                              |
-| `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* to exclude the live conversation. |
+<details>
+<summary><code>history_search</code> — return ranked hits for a query</summary>
+
+| Arg      | Type     | Notes                                                                                                  |
+| -------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `q`      | string   | **Required.** Free-text query.                                                                         |
+| `n`      | number   | Max hits (default `8`, max `25`).                                                                      |
+| `dir`    | string   | Exact OpenCode session directory filter.                                                               |
+| `after`  | ISO date | Only messages at or after this timestamp.                                                              |
+| `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* to exclude the live conversation.  |
 
 Returns a JSON array of compact hits:
 
@@ -128,15 +152,18 @@ Returns a JSON array of compact hits:
 ]
 ```
 
-### `history_read`
+</details>
 
-| Arg      | Type   | Notes                                                                                                      |
-| -------- | ------ | ---------------------------------------------------------------------------------------------------------- |
-| `cursor` | string | **Required.** A `msg_…`, a `ses_…`, or an encoded cursor from `history_search`.                            |
-| `mode`   | string | `around` (default), `next`, `prev`, `head`, `tail`, or `full`.                                             |
-| `n`      | number | Message count. Default `12`, max `50`. For `full`, default `200`, max `500`.                               |
+<details>
+<summary><code>history_read</code> — read a bounded transcript window around a cursor</summary>
 
-Returns a ChatML‑like transcript window:
+| Arg      | Type   | Notes                                                                                          |
+| -------- | ------ | ---------------------------------------------------------------------------------------------- |
+| `cursor` | string | **Required.** A `msg_…`, a `ses_…`, or an encoded cursor from `history_search`.                |
+| `mode`   | string | `around` (default), `next`, `prev`, `head`, `tail`, or `full`.                                 |
+| `n`      | number | Message count. Default `12`, max `50`. For `full`, default `200`, max `500`.                   |
+
+Returns a ChatML-like transcript window:
 
 ```xml
 <hist sid="ses_…" dir="/…" mode="around" range="42-53" anchor="48" total="120" title="…">
@@ -148,24 +175,44 @@ Returns a ChatML‑like transcript window:
 </hist>
 ```
 
-Tool calls, patches, and file attachments render as structured tags with explicit `truncated` / `original_chars` markers when content is capped. The `<nav/>` element gives the agent cursors to continue paging without re‑searching.
+Tool calls, patches, and file attachments render as structured tags with explicit `truncated` / `original_chars` markers when content is capped. The `<nav/>` element gives the agent cursors to keep paging without re-searching.
+
+</details>
 
 ## How it works
 
-- **Source of truth.** `opencode.db` is opened read‑only. The plugin never writes to it.
-- **Sidecar index.** A separate SQLite database (`opencode-recall-index.db`) stores text chunks, content hashes, and `Float32` embedding blobs. Synthetic `session-title:<id>` rows are indexed so proper‑noun title queries beat noisy snippet matches.
-- **Sync.** Each `history_search` call performs an incremental sync with a 30‑minute overlap window and a lock so concurrent agents don't fight. Stale rows are pruned by comparing part ids.
-- **Ranking.** Lexical + semantic candidates are merged, scored with title/text/directory term ratios + phrase boosts, filtered to require enough query‑term overlap, and diversified to at most two hits per session. A small semantic‑rescue lane admits paraphrase matches that miss lexical filters but have high embedding similarity.
+```text
+┌───────────────────┐    history_search    ┌──────────────────────┐
+│     OpenCode      │ ───────────────────► │  Ranked anchors      │
+│                   │                      │  (opaque cursors)    │
+└───────────────────┘ ◄─────────────┐      └──────────┬───────────┘
+         │      history_read        │                 │
+         ▼                          │ ChatML window   │
+┌───────────────────┐   pagination  │                 │
+│  ChatML window    │ ◄─────────────┘                 │
+│  with <nav/>      │                                 │
+└───────────────────┘                                 │
+                                                      ▼
+                                     ┌──────────────────────────────┐
+                                     │  opencode.db   (read-only)   │
+                                     │  + sidecar embedding index   │
+                                     └──────────────────────────────┘
+```
+
+- **Source of truth.** `opencode.db` is opened read-only. The plugin never writes to it.
+- **Sidecar index.** A separate SQLite database (`opencode-recall-index.db`) stores text chunks, content hashes, and `Float32` embedding blobs. Synthetic `session-title:<id>` rows are indexed so proper-noun title queries beat noisy snippet matches.
+- **Sync.** Each `history_search` call performs an incremental sync with a 30-minute overlap window and a lock so concurrent agents don't fight. Stale rows are pruned by comparing part ids.
+- **Ranking.** Lexical and semantic candidates are merged, scored with title/text/directory term ratios plus phrase boosts, filtered to require enough query-term overlap, and diversified to at most two hits per session. A small semantic-rescue lane admits paraphrase matches that miss lexical filters but have high embedding similarity.
 - **Reads.** Windows are computed by `row_number()` over `(session_id, time_created, id)`, then parts are normalized into `text | tool | patch | file` and capped (tool input 2 000 chars, output 6 000 chars).
 
 ## Development
 
 ```sh
 bun install
-bun run ai:check       # biome + tsgo type-check
-bun test               # deterministic ranking + cursor tests
+bun run ai:check           # biome + tsgo type-check
+bun test                   # deterministic ranking + cursor tests
 bun run eval:real-history  # regression suite against your local opencode.db
-bun run build          # emits dist/
+bun run build              # emits dist/
 ```
 
 Code quality is enforced by `biome` and `tsgo --noEmit`. See [`AGENTS.md`](./AGENTS.md) for the style guide.
