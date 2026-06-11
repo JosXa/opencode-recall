@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40josxa%2Fopencode-recall.svg)](https://www.npmjs.com/package/@josxa/opencode-recall)
 [![CI](https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml/badge.svg)](https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml)
-[![license](https://img.shields.io/npm/l/%40josxa%2Fopencode-recall.svg)](./LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 > Hybrid semantic + lexical recall over your local [OpenCode](https://opencode.ai) session history, with cursor‑paginated ChatML transcript reads.
 

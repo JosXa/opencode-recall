@@ -1,6 +1,6 @@
 {
   "name": "@josxa/opencode-recall",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenCode plugin that adds semantic + lexical recall over your local session history, with cursor-paginated ChatML transcript reads.",
   "type": "module",
   "sideEffects": false,
@@ -54,7 +54,6 @@
     "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
     "ai:check": "biome check --write --error-on-warnings . && tsgo --noEmit",
-    "publish": "bun run build && npm publish --access public --provenance=false",
     "prepare": "husky",
     "prepublishOnly": "bun run build"
   },
