@@ -221,18 +221,24 @@ const CASES: readonly RealHistoryCase[] = [
 
 const db = new HistoryDatabase()
 const indexPath = '/tmp/opencode-recall-real-history-eval.db'
-removeSqliteFiles(indexPath)
-const sidecar = new RecallSidecarIndex(indexPath)
 const lexicalOnly = process.argv.includes('--lexical-only')
+const useDefaultIndex = process.argv.includes('--default-index')
+const skipSync = process.argv.includes('--no-sync')
 const progress = process.argv.includes('--progress')
+if (!useDefaultIndex) {
+  removeSqliteFiles(indexPath)
+}
+const sidecar = new RecallSidecarIndex(useDefaultIndex ? undefined : indexPath)
 
 try {
   const provider = lexicalOnly ? undefined : new OllamaEmbeddingProvider()
   if (progress) {
-    console.error(`mode=${lexicalOnly ? 'lexical-only' : 'semantic'} cases=${CASES.length}`)
+    console.error(
+      `mode=${lexicalOnly ? 'lexical-only' : 'semantic'} cases=${CASES.length} index=${useDefaultIndex ? 'default' : indexPath} sync=${skipSync ? 'skip' : 'run'}`,
+    )
   }
   const sync =
-    provider === undefined
+    provider === undefined || skipSync
       ? { elapsedMs: 0, indexedRows: 0, deletedRows: 0, lockAcquired: false }
       : await sidecar.sync(
           (since) => db.readTextPartsForIndex(since),

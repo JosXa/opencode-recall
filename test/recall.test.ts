@@ -182,6 +182,58 @@ describe('strict ranking', () => {
     expect(rows).toEqual([])
   })
 
+  test('requires all terms for short precise queries', () => {
+    const rows = rankSearchRows(
+      'power platform connector',
+      [
+        {
+          ...BASE_ROW,
+          sessionTitle: 'Platform connector docs',
+          messageId: 'msg_platform_connector',
+          partId: 'part_platform_connector',
+          text: 'platform connector setup notes without the missing domain term',
+        },
+      ],
+      5,
+    )
+
+    expect(rows).toEqual([])
+  })
+
+  test('does not rescue weak semantic matches for nonsense queries', () => {
+    const rows = rankSearchRows(
+      'qxnovarplume yztranglemoss',
+      [
+        {
+          ...BASE_ROW,
+          score: 0.48,
+          text: 'now add the new qa event kind values and helpers',
+        },
+      ],
+      5,
+    )
+
+    expect(rows).toEqual([])
+  })
+
+  test('filters noisy file dump chunks from lexical tails', () => {
+    const rows = rankSearchRows(
+      'power platform connector',
+      [
+        {
+          ...BASE_ROW,
+          sessionTitle: 'Unrelated implementation review',
+          messageId: 'msg_file_dump',
+          partId: 'part_file_dump',
+          text: '<path>/repo/frontend/platform-connector.md</path> power platform connector docs dump',
+        },
+      ],
+      5,
+    )
+
+    expect(rows).toEqual([])
+  })
+
   test('rescues high-confidence semantic matches with weak lexical overlap', () => {
     const rows = rankSearchRows(
       'phone microphone spying ads psychology effect',

@@ -35,23 +35,17 @@ export const RecallPlugin: Plugin = async () => {
 
     tool: {
       [HISTORY_SEARCH_COMMAND]: tool({
-        description:
-          'Search OpenCode history. Prefer q/n. Excludes the current session unless includeCurrentSession is true. Returns compact hits: cursor, sid, dir, title, time, role, score, text.',
+        description: 'Recall OpenCode history.',
         args: {
-          q: tool.schema.string('Search query').optional(),
-          n: tool.schema.number('Max hits').optional(),
-          dir: tool.schema.string('Exact OpenCode session directory filter').optional(),
+          q: tool.schema.string().describe('Search query.').optional(),
+          n: tool.schema.number().describe(`Max hits. Default ${DEFAULT_SEARCH_LIMIT}.`).optional(),
+          dir: tool.schema.string().describe('Exact session directory.').optional(),
           includeCurrentSession: tool.schema
-            .boolean(
-              'Include results from the currently running OpenCode session. Defaults to false.',
-            )
+            .boolean()
+            .describe('Include current session. Default false.')
             .optional(),
-          after: tool.schema
-            .string('Only include messages at or after this ISO date/time')
-            .optional(),
-          before: tool.schema
-            .string('Only include messages at or before this ISO date/time')
-            .optional(),
+          after: tool.schema.string().describe('Created after ISO date/time.').optional(),
+          before: tool.schema.string().describe('Created before ISO date/time.').optional(),
         },
         async execute(args, context) {
           const query = args.q
@@ -91,14 +85,20 @@ export const RecallPlugin: Plugin = async () => {
       }),
 
       [HISTORY_READ_COMMAND]: tool({
-        description:
-          'Read OpenCode history. Prefer cursor/n. Cursor must be a search-hit cursor, msg_..., ses_..., or exact value copied from <nav next="..." prev="..." head="..." tail="..." full="...">. Do not append offsets like :10. Use mode next/prev/head/tail/full with the copied cursor value. Use full only if explicitly requested.',
+        description: 'Read OpenCode history.',
         args: {
-          cursor: tool.schema.string('Cursor from search hit cursor or read nav').optional(),
-          mode: tool.schema
-            .string('around, next, prev, tail, head, full. Defaults to around.')
+          cursor: tool.schema
+            .string()
+            .describe('Cursor from search/read nav, msg_*, or ses_*. No :offset suffixes.')
             .optional(),
-          n: tool.schema.number('Message count').optional(),
+          mode: tool.schema
+            .string()
+            .describe('around (default), next, prev, tail, head, full only if asked.')
+            .optional(),
+          n: tool.schema
+            .number()
+            .describe(`Message limit (default ${DEFAULT_READ_LIMIT}).`)
+            .optional(),
         },
         async execute(args) {
           const cursorValue = args.cursor

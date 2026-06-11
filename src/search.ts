@@ -5,8 +5,8 @@ import type { SyncResult } from './sidecar'
 const SYNC_NOTICE_THRESHOLD_MS = 5_000
 const MAX_RESULTS_PER_SESSION = 2
 const SEMANTIC_RESCUE_LIMIT = 3
-const SEMANTIC_RESCUE_THRESHOLD = 0.48
-const SEMANTIC_RESCUE_MARGIN = 0.05
+const SEMANTIC_RESCUE_THRESHOLD = 0.62
+const SEMANTIC_RESCUE_MARGIN = 0.03
 const RECALL_META_PENALTY = 100
 const WHITESPACE_REGEX = /\s+/gu
 const META_TITLE_PATTERNS = [
@@ -22,6 +22,7 @@ const META_TEXT_PATTERNS = [
   'expanded eval results',
   'real-history',
   'use only history_search',
+  '<path>',
 ] as const
 
 export interface HistorySearchResult {
@@ -170,7 +171,7 @@ function strictScore(row: SearchRow, terms: readonly string[], phrase: string): 
   const directoryMatches = matchedTermCount(directory, terms)
   const totalMatches = matchedTermCount(searchable, terms)
 
-  if (terms.length > 1 && totalMatches < Math.ceil(terms.length * 0.65)) {
+  if (terms.length > 1 && totalMatches < requiredTermMatches(terms)) {
     return 0
   }
 
@@ -269,6 +270,14 @@ function hasAny(text: string, patterns: readonly string[]): boolean {
 
 function minimumScore(terms: readonly string[]): number {
   return terms.length <= 1 ? 1 : 2.5
+}
+
+function requiredTermMatches(terms: readonly string[]): number {
+  if (terms.length <= 3) {
+    return terms.length
+  }
+
+  return Math.ceil(terms.length * 0.65)
 }
 
 function makeSnippet(text: string): string {
