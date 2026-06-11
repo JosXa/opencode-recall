@@ -192,8 +192,8 @@ export class RecallSidecarIndex {
         options.after ?? null,
         options.before ?? null,
         options.before ?? null,
-        options.dir ?? null,
-        options.dir ?? null,
+        options.directory ?? null,
+        options.directory ?? null,
         options.excludeSessionId ?? null,
         options.excludeSessionId ?? null,
       )

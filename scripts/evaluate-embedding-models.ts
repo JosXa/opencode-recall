@@ -11,13 +11,13 @@ interface RecallEvalCase {
   readonly name: string
   readonly query: string
   readonly expected: readonly string[]
-  readonly dir?: string
+  readonly directory?: string
 }
 
 interface EvalHit {
   readonly rank: number
   readonly title: string
-  readonly dir: string
+  readonly directory: string
   readonly score: number | undefined
   readonly matched: readonly string[]
   readonly text: string
@@ -46,7 +46,7 @@ const CASES: readonly RecallEvalCase[] = [
     name: 'semantic sidecar implementation',
     query: 'semantic embeddings sidecar opencode db',
     expected: ['semantic', 'sidecar', 'opencode'],
-    dir: '/projects/opencode-recall',
+    directory: '/projects/opencode-recall',
   },
   {
     name: 'local vector DB planning',
@@ -72,7 +72,7 @@ const CASES: readonly RecallEvalCase[] = [
     name: 'history read navigation API',
     query: 'continue conversation nav next prev head tail full',
     expected: ['nav', 'next', 'mode'],
-    dir: '/projects/opencode-recall',
+    directory: '/projects/opencode-recall',
   },
 ]
 
@@ -112,7 +112,10 @@ async function evaluateModel(model: string, db: HistoryDatabase): Promise<EvalRe
     for (const testCase of CASES) {
       const rows = await sidecar.search(
         testCase.query,
-        { limit: 5, ...(testCase.dir === undefined ? {} : { dir: testCase.dir }) },
+        {
+          limit: 5,
+          ...(testCase.directory === undefined ? {} : { directory: testCase.directory }),
+        },
         provider,
       )
       const matches = rows.map((row, index) => formatHit(row, index, testCase.expected))
@@ -146,7 +149,7 @@ function formatHit(row: SearchRow, index: number, expected: readonly string[]): 
   return {
     rank: index + 1,
     title: row.sessionTitle,
-    dir: row.directory,
+    directory: row.directory,
     score: row.score === undefined ? undefined : Number(row.score.toFixed(4)),
     matched: expected.filter((term) => haystack.includes(term)),
     text: row.text.replaceAll(/\s+/gu, ' ').slice(0, 180),

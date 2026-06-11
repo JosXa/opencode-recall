@@ -27,7 +27,7 @@ export interface RecallSearchOptions {
   readonly limit?: number
   readonly after?: Date | number | string
   readonly before?: Date | number | string
-  readonly dir?: string
+  readonly directory?: string
   readonly includeCurrentSession?: boolean
   readonly currentSessionId?: string
   readonly excludeSessionId?: string
@@ -184,7 +184,7 @@ function normalizeSearchOptions(options: RecallSearchOptions): SearchOptions {
     limit: options.limit ?? DEFAULT_SEARCH_LIMIT,
     ...optionalTimestampFilter('after', options.after),
     ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
-    ...(options.dir === undefined ? {} : { dir: options.dir }),
+    ...(options.directory === undefined ? {} : { directory: options.directory }),
     ...(excluded === undefined ? {} : { excludeSessionId: excluded }),
   }
 }

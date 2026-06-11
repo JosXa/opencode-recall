@@ -107,7 +107,7 @@ Use `bun run eval:embeddings` to compare installed embedding models against the 
 | -------- | -------- | ---------------------------------------------------------------------- |
 | `q`      | string   | **Required.** Free‑text query.                                         |
 | `n`      | number   | Max hits (default `8`, max `25`).                                      |
-| `dir`    | string   | Exact OpenCode session directory filter.                               |
+| `directory` | string   | Session directory filter.                                           |
 | `after`  | ISO date | Only messages at or after this timestamp.                              |
 | `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* to exclude the live conversation. |
 

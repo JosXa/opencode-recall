@@ -28,7 +28,7 @@ const META_TEXT_PATTERNS = [
 export interface HistorySearchResult {
   readonly cursor: string
   readonly sid: string
-  readonly dir: string
+  readonly directory: string
   readonly title: string
   readonly time: string
   readonly role: string
@@ -93,7 +93,7 @@ function formatSearchResult(row: SearchRow): HistorySearchResult {
       timeCreated: row.timeCreated,
     }),
     sid: row.sessionId,
-    dir: row.directory,
+    directory: row.directory,
     title: row.sessionTitle,
     role: row.role,
     ...(row.score === undefined ? {} : { score: Number(row.score.toFixed(4)) }),

@@ -39,7 +39,7 @@ export const RecallPlugin: Plugin = async () => {
         args: {
           q: tool.schema.string().describe('Search query.').optional(),
           n: tool.schema.number().describe(`Max hits. Default ${DEFAULT_SEARCH_LIMIT}.`).optional(),
-          dir: tool.schema.string().describe('Exact session directory.').optional(),
+          directory: tool.schema.string().describe('Session directory.').optional(),
           includeCurrentSession: tool.schema
             .boolean()
             .describe('Include current session. Default false.')
@@ -58,7 +58,7 @@ export const RecallPlugin: Plugin = async () => {
           const before = optionalDateFilterValue('before', args.before)
           const options = {
             limit: clampNumber(args.n, DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
-            ...optionalStringFilter('dir', args.dir),
+            ...optionalStringFilter('directory', args.directory),
             ...currentSessionExclusion(includeCurrentSession, context.sessionID),
             ...optionalDateFilter('after', args.after),
             ...searchBeforeFilter(before, includeCurrentSession),

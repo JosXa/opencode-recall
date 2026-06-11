@@ -6,7 +6,7 @@ export interface SearchOptions {
   readonly limit: number
   readonly after?: number
   readonly before?: number
-  readonly dir?: string
+  readonly directory?: string
   readonly excludeSessionId?: string
 }
 
@@ -87,14 +87,14 @@ export class HistoryDatabase {
       ...terms.map(() => "lower(json_extract(p.data, '$.text')) like ?"),
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
-      ...(options.dir === undefined ? [] : ['s.directory = ?']),
+      ...(options.directory === undefined ? [] : ['s.directory = ?']),
       ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
     ].join(' and ')
     const params = [
       ...terms.map((term) => `%${escapeLikeTerm(term)}%`),
       ...(options.after === undefined ? [] : [options.after]),
       ...(options.before === undefined ? [] : [options.before]),
-      ...(options.dir === undefined ? [] : [options.dir]),
+      ...(options.directory === undefined ? [] : [options.directory]),
       ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
       options.limit,
     ]
@@ -138,7 +138,7 @@ export class HistoryDatabase {
       `(${termConditions.join(' or ')})`,
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
-      ...(options.dir === undefined ? [] : ['s.directory = ?']),
+      ...(options.directory === undefined ? [] : ['s.directory = ?']),
       ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
     ].join(' and ')
     const termParams = terms.flatMap((term) => {
@@ -149,7 +149,7 @@ export class HistoryDatabase {
       ...termParams,
       ...(options.after === undefined ? [] : [options.after]),
       ...(options.before === undefined ? [] : [options.before]),
-      ...(options.dir === undefined ? [] : [options.dir]),
+      ...(options.directory === undefined ? [] : [options.directory]),
       ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
       candidateLimit,
     ]
