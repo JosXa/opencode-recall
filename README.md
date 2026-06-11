@@ -122,6 +122,8 @@ Most users never need to edit it. Open it when your OpenCode database lives some
 
 ```jsonc
 {
+  "$schema": "https://raw.githubusercontent.com/JosXa/opencode-recall/main/schema/config.schema.json",
+
   "database": {
     // OpenCode session database. Opened read-only; recall never writes here.
     // Default: ~/.local/share/opencode/opencode.db
