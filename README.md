@@ -86,15 +86,13 @@ Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json
 
 ## Set up embeddings (Ollama)
 
-Semantic search uses [Ollama](https://ollama.com) running locally. The default model is `all-minilm`: small, fast, good enough for recall.
+Semantic search uses [Ollama](https://ollama.com) running locally. Install it, that's it:
 
 ```sh
-# install: https://ollama.com/download
-ollama serve
-ollama pull all-minilm
+ollama --version  # should print a version. install from https://ollama.com/download if not.
 ```
 
-The first `history_search` call builds the sidecar index incrementally. Subsequent calls reuse and sync it.
+Everything else is handled for you. The first `history_search` call will start `ollama serve` if it isn't running, pull the default embedding model (`all-minilm`, small and fast) if it isn't installed, and build the sidecar index incrementally. Subsequent calls reuse and sync it.
 
 Lexical search still works without Ollama, but you lose paraphrase recall, which is half the value.
 
