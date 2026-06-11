@@ -21,17 +21,17 @@ Every OpenCode session is already saved locally. Recall makes them searchable, s
                                                     pick a cursor
                                                             │
                                                             ▼
-                                          ┌────────────────────────────────┐
-                                  ┌─────► │   read transcript              │
-                                  │       └────────────────┬───────────────┘
-                                  │                        │
-                                  │            transcript + cursors
-                                  │                        │
-                                  │                        ▼
-                                  │       ┌────────────────────────────────┐
-                                  └────────┤   pull surrounding messages   │
-                                next page  │   (ChatML)                    │
-                                           └───────────────────────────────┘
+                                                ┌──────────────────────────┐
+                                        ┌─────► │   read transcript        │
+                                        │       └────────────┬─────────────┘
+                                        │                    │
+                                        │        transcript + cursors
+                                        │                    │
+                                        │                    ▼
+                                        │       ┌──────────────────────────┐
+                                        └────── │   pull surrounding       │
+                                      next page │   messages (ChatML)      │
+                                                └──────────────────────────┘
 ```
 
 ## Why Recall?
