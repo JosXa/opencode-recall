@@ -40,10 +40,13 @@ You've already solved this problem. You debugged this exact error six weeks ago 
 
 Recall fixes that:
 
-- 🔎 **Find the right session in seconds.** Hybrid lexical + semantic search across every project you've used OpenCode in.
-- 📜 **Read the actual conversation, not a summary.** The agent pages a bounded window of messages around the match. Tool calls, patches, and file attachments render as structured ChatML, not a wall of JSON.
-- 🎯 **Explicit by design.** Recall doesn't auto-inject memories. You (or the agent, when you ask) decide when to search. Your context window stays lean and you always know why something showed up in the prompt.
-- 🔒 **Local and read-only.** Your `opencode.db` is never written to. The embedding index lives in a sidecar SQLite file you can delete any time.
+🔎 **Find the right session in seconds.** Hybrid lexical + semantic search across every project you've used OpenCode in.
+
+📜 **Read the actual conversation, not a summary.** The agent pages a bounded window of messages around the match. Tool calls, patches, and file attachments render as structured ChatML, not a wall of JSON.
+
+🎯 **Explicit by design.** Recall doesn't auto-inject memories. You (or the agent, when you ask) decide when to search. Your context window stays lean and you always know why something showed up in the prompt.
+
+🔒 **Local and read-only.** Your `opencode.db` is never written to. The embedding index lives in a sidecar SQLite file you can delete any time.
 
 ## What it looks like
 
