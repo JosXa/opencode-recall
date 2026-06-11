@@ -170,18 +170,6 @@ bun run build          # emits dist/
 
 Code quality is enforced by `biome` and `tsgo --noEmit`. See [`AGENTS.md`](./AGENTS.md) for the style guide.
 
-## Releases
-
-Tag‑driven via GitHub Actions (`.github/workflows/release.yml`):
-
-```sh
-# bump version in package.json (conventional commits drive the bump)
-git tag v0.1.0
-git push --tags
-```
-
-The workflow runs `ai:check`, builds, generates release notes from commits, creates the GitHub release, and publishes to npm with `--provenance`.
-
 ## License
 
 [MIT](./LICENSE) © JosXa

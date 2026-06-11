@@ -18,7 +18,7 @@ Use `node:*` imports only when no Bun equivalent exists.
 # Release Workflow
 
 - Version bump should be determined from conventional commits.
-- Publish to npm is automated by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
+- No Changesets setup: bump `package.json`, commit, then publish by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
 - Package is published as `@josxa/opencode-recall` (scoped, public, with provenance). The unscoped `opencode-recall` name on npm belongs to another publisher.
 - Trusted publishing must stay tokenless: `.github/workflows/release.yml` uses `permissions.id-token: write` and `npm publish --provenance --access public`. Do not add an `NPM_TOKEN` secret for normal releases.
 - npm trusted publishing must point at owner `JosXa`, repository `opencode-recall`, workflow filename `release.yml` (file `.github/workflows/release.yml`), and package `@josxa/opencode-recall`.

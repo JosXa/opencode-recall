@@ -54,6 +54,7 @@
     "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
     "ai:check": "biome check --write --error-on-warnings . && tsgo --noEmit",
+    "publish": "bun run build && npm publish --access public --provenance=false",
     "prepare": "husky",
     "prepublishOnly": "bun run build"
   },
