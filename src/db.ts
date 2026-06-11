@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite'
 
+import { loadConfig } from './config'
+
 const WHITESPACE_REGEX = /\s+/u
 
 export interface SearchOptions {
@@ -442,18 +444,5 @@ function escapeLikeTerm(term: string): string {
 }
 
 function defaultOpenCodeDbPath(): string {
-  const { OPENCODE_DB_PATH: configured } = process.env
-
-  if (configured !== undefined && configured.length > 0) {
-    return configured
-  }
-
-  const { HOME: homePath, USERPROFILE: userProfile } = process.env
-  const home = homePath ?? userProfile
-
-  if (home === undefined || home.length === 0) {
-    throw new Error('Cannot resolve OpenCode database path without HOME or OPENCODE_DB_PATH')
-  }
-
-  return `${home}/.local/share/opencode/opencode.db`
+  return loadConfig().database.path
 }

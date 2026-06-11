@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { loadConfig } from './config'
 import type { IndexSourceRow, SearchOptions, SearchRow } from './db'
 import type { EmbeddingProvider } from './embedding'
 
@@ -12,7 +13,6 @@ const SYNC_BATCH_SIZE = 64
 const MAX_INDEX_TEXT_CHARS = 256
 const SEMANTIC_CANDIDATE_LIMIT = 80
 const LOCK_TTL_MS = 60_000
-const SIDE_CAR_FILENAME = 'opencode-recall-index.db'
 const MAX_KEYWORD_BOOST = 0.2
 const WHITESPACE_REGEX = /\s+/u
 
@@ -495,20 +495,7 @@ function matchedTermCount(text: string, terms: readonly string[]): number {
 }
 
 function defaultSidecarPath(): string {
-  const { OPENCODE_RECALL_DB_PATH: configured } = process.env
-
-  if (configured !== undefined && configured.length > 0) {
-    return configured
-  }
-
-  const { HOME: homePath, USERPROFILE: userProfile } = process.env
-  const home = homePath ?? userProfile
-
-  if (home === undefined || home.length === 0) {
-    throw new Error('Cannot resolve recall sidecar path without HOME or OPENCODE_RECALL_DB_PATH')
-  }
-
-  return `${home}/.local/share/opencode/${SIDE_CAR_FILENAME}`
+  return loadConfig().database.indexPath
 }
 
 function ensureParentDirectory(path: string): void {

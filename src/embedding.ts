@@ -1,3 +1,5 @@
+import { loadConfig } from './config'
+
 export interface EmbeddingProvider {
   readonly model: string
   embed(texts: readonly string[]): Promise<readonly Float32Array[]>
@@ -34,9 +36,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   #serverProcess: Bun.Subprocess | undefined
 
   public constructor(options: OllamaEmbeddingProviderOptions = {}) {
-    const { OPENCODE_RECALL_EMBED_MODEL: model, OPENCODE_RECALL_OLLAMA_URL: baseUrl } = process.env
-    const configuredModel = options.model ?? model
-    const configuredBaseUrl = options.baseUrl ?? baseUrl
+    const config =
+      options.baseUrl === undefined && options.model === undefined
+        ? loadConfig().embeddings
+        : undefined
+    const configuredModel = options.model ?? config?.model
+    const configuredBaseUrl = options.baseUrl ?? config?.ollamaUrl
     this.model =
       configuredModel === undefined || configuredModel.length === 0
         ? DEFAULT_EMBED_MODEL
@@ -206,7 +211,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       'Install Ollama: https://ollama.com/download or your OS package manager.',
       'Start Ollama: `ollama serve` or `sudo systemctl enable --now ollama`.',
       `Install the embedding model: \`ollama pull ${this.model}\`.`,
-      'Override with OPENCODE_RECALL_OLLAMA_URL and OPENCODE_RECALL_EMBED_MODEL if needed.',
+      'Configure with <opencode-config>/recall.jsonc, or override with OPENCODE_RECALL_OLLAMA_URL and OPENCODE_RECALL_EMBED_MODEL.',
     ].join('\n')
   }
 }

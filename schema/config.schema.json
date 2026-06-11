@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "opencode-recall Configuration",
+  "description": "Configuration file for the opencode-recall plugin",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema URL for editor autocompletion"
+    },
+    "database": {
+      "type": "object",
+      "description": "OpenCode history and recall sidecar database paths",
+      "properties": {
+        "path": {
+          "type": "string",
+          "default": "~/.local/share/opencode/opencode.db",
+          "description": "OpenCode SQLite session database. Opened read-only by recall."
+        },
+        "indexPath": {
+          "type": "string",
+          "default": "~/.local/share/opencode/opencode-recall-index.db",
+          "description": "Recall sidecar embedding index. Safe to delete and rebuild."
+        }
+      },
+      "additionalProperties": false
+    },
+    "embeddings": {
+      "type": "object",
+      "description": "Ollama embedding backend settings",
+      "properties": {
+        "ollamaUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Ollama base URL."
+        },
+        "model": {
+          "type": "string",
+          "default": "all-minilm",
+          "description": "Ollama embedding model. Try mxbai-embed-large for higher quality."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

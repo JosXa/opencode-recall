@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 
+import { getConfigFilePath, loadConfig } from '../src/config'
 import { decodeCursor } from '../src/cursor'
 import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db'
 import type { EmbeddingProvider } from '../src/embedding'
@@ -20,6 +21,133 @@ const BASE_ROW = {
   timeCreated: 1,
   text: 'generic mcp troubleshooting with no figma or azure registry context',
 } satisfies SearchRow
+
+describe('config file loading', () => {
+  test('auto-creates recall.jsonc at the OpenCode config base path', () => {
+    withRecallEnv(() => {
+      const configPath = getConfigFilePath()
+
+      expect(existsSync(configPath)).toBe(false)
+      const config = loadConfig()
+
+      expect(existsSync(configPath)).toBe(true)
+      expect(readFileSync(configPath, 'utf-8')).toContain('"database"')
+      expect(config.database.path).toContain('/opencode/opencode.db')
+      expect(config.database.indexPath).toContain('/opencode/opencode-recall-index.db')
+      expect(config.embeddings).toEqual({
+        ollamaUrl: 'http://127.0.0.1:11434',
+        model: 'all-minilm',
+      })
+    })
+  })
+
+  test('loads JSONC config with comments, trailing commas, and tilde paths', () => {
+    withRecallEnv(({ configDir }) => {
+      writeFileSync(
+        `${configDir}/recall.jsonc`,
+        `{
+          // The parser must not treat URL slashes inside strings as comments.
+          "database": {
+            "path": "~/custom/opencode.db",
+            "indexPath": "~/custom/recall-index.db",
+          },
+          "embeddings": {
+            "ollamaUrl": "http://ollama.example:11434",
+            "model": "mxbai-embed-large",
+          },
+        }`,
+      )
+
+      const home = process.env['HOME'] ?? ''
+      const config = loadConfig()
+
+      expect(config.database.path).toBe(`${home}/custom/opencode.db`)
+      expect(config.database.indexPath).toBe(`${home}/custom/recall-index.db`)
+      expect(config.embeddings).toEqual({
+        ollamaUrl: 'http://ollama.example:11434',
+        model: 'mxbai-embed-large',
+      })
+    })
+  })
+
+  test('environment variables override file config', () => {
+    withRecallEnv(({ configDir }) => {
+      writeFileSync(
+        `${configDir}/recall.jsonc`,
+        JSON.stringify({
+          database: { path: '/file/history.db', indexPath: '/file/index.db' },
+          embeddings: { ollamaUrl: 'http://file.example:11434', model: 'file-model' },
+        }),
+      )
+      process.env['OPENCODE_DB_PATH'] = '/env/history.db'
+      process.env['OPENCODE_RECALL_DB_PATH'] = '/env/index.db'
+      process.env['OPENCODE_RECALL_OLLAMA_URL'] = 'http://env.example:11434'
+      process.env['OPENCODE_RECALL_EMBED_MODEL'] = 'env-model'
+
+      expect(loadConfig()).toEqual({
+        database: { path: '/env/history.db', indexPath: '/env/index.db' },
+        embeddings: { ollamaUrl: 'http://env.example:11434', model: 'env-model' },
+      })
+    })
+  })
+
+  test('default constructors use resolved file config', async () => {
+    await withRecallEnvAsync(async ({ configDir }) => {
+      const historyPath = `/tmp/opencode-recall-config-history-${crypto.randomUUID()}.db`
+      const sidecarPath = `/tmp/opencode-recall-config-sidecar-${crypto.randomUUID()}.db`
+      const db = new Database(historyPath)
+      const originalFetch = globalThis.fetch
+      const requests: string[] = []
+
+      try {
+        db.exec(`
+          create table session (id text primary key, title text, directory text, time_updated integer);
+          create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+          create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+        `)
+        insertTextPart(db, 'ses_config', 'Config DB', 'msg_config', 'part_config', 1)
+        writeFileSync(
+          `${configDir}/recall.jsonc`,
+          JSON.stringify({
+            database: { path: historyPath, indexPath: sidecarPath },
+            embeddings: { ollamaUrl: 'http://config-ollama.test', model: 'config-model' },
+          }),
+        )
+
+        const history = new HistoryDatabase()
+        const index = new RecallSidecarIndex()
+        globalThis.fetch = ((input, init) => {
+          requests.push(String(input))
+          if (String(input).endsWith('/api/version')) {
+            return Promise.resolve(Response.json({ version: 'test' }))
+          }
+          if (String(input).endsWith('/api/tags')) {
+            return Promise.resolve(Response.json({ models: [{ name: 'config-model:latest' }] }))
+          }
+
+          requests.push(String(init?.body))
+          return Promise.resolve(Response.json({ embeddings: [[1, 2, 3]] }))
+        }) as typeof fetch
+
+        try {
+          expect(history.lexicalSearch('invoices cli', { limit: 5 })).toHaveLength(1)
+          expect(existsSync(sidecarPath)).toBe(true)
+          await new OllamaEmbeddingProvider().embed(['config search'])
+          expect(requests).toContain('http://config-ollama.test/api/version')
+          expect(requests.some((request) => request.includes('"model":"config-model"'))).toBe(true)
+        } finally {
+          history.close()
+          index.close()
+        }
+      } finally {
+        globalThis.fetch = originalFetch
+        db.close()
+        removeSqliteFiles(historyPath)
+        removeSqliteFiles(sidecarPath)
+      }
+    })
+  })
+})
 
 describe('cursor decoding', () => {
   test('accepts OpenCode session ids directly', () => {
@@ -481,4 +609,80 @@ function removeSqliteFiles(path: string): void {
   rmSync(path, { force: true })
   rmSync(`${path}-shm`, { force: true })
   rmSync(`${path}-wal`, { force: true })
+}
+
+interface RecallEnvContext {
+  readonly root: string
+  readonly configDir: string
+  readonly dataHome: string
+}
+
+const CONFIG_ENV_KEYS = [
+  'OPENCODE_CONFIG_DIR',
+  'XDG_DATA_HOME',
+  'OPENCODE_DB_PATH',
+  'OPENCODE_RECALL_DB_PATH',
+  'OPENCODE_RECALL_OLLAMA_URL',
+  'OPENCODE_RECALL_EMBED_MODEL',
+] as const
+
+function withRecallEnv<T>(callback: (context: RecallEnvContext) => T): T {
+  const context = createRecallEnvContext()
+  const previous = captureEnv()
+
+  try {
+    applyRecallEnv(context)
+    return callback(context)
+  } finally {
+    restoreEnv(previous)
+    rmSync(context.root, { recursive: true, force: true })
+  }
+}
+
+async function withRecallEnvAsync<T>(
+  callback: (context: RecallEnvContext) => Promise<T>,
+): Promise<T> {
+  const context = createRecallEnvContext()
+  const previous = captureEnv()
+
+  try {
+    applyRecallEnv(context)
+    return await callback(context)
+  } finally {
+    restoreEnv(previous)
+    rmSync(context.root, { recursive: true, force: true })
+  }
+}
+
+function createRecallEnvContext(): RecallEnvContext {
+  const root = `/tmp/opencode-recall-config-${crypto.randomUUID()}`
+  const configDir = `${root}/opencode-config`
+  const dataHome = `${root}/data`
+  mkdirSync(configDir, { recursive: true })
+  mkdirSync(dataHome, { recursive: true })
+  return { root, configDir, dataHome }
+}
+
+function applyRecallEnv(context: RecallEnvContext): void {
+  process.env['OPENCODE_CONFIG_DIR'] = context.configDir
+  process.env['XDG_DATA_HOME'] = context.dataHome
+  delete process.env['OPENCODE_DB_PATH']
+  delete process.env['OPENCODE_RECALL_DB_PATH']
+  delete process.env['OPENCODE_RECALL_OLLAMA_URL']
+  delete process.env['OPENCODE_RECALL_EMBED_MODEL']
+}
+
+function captureEnv(): Map<(typeof CONFIG_ENV_KEYS)[number], string | undefined> {
+  return new Map(CONFIG_ENV_KEYS.map((key) => [key, process.env[key]]))
+}
+
+function restoreEnv(previous: Map<(typeof CONFIG_ENV_KEYS)[number], string | undefined>): void {
+  for (const [key, value] of previous) {
+    if (value === undefined) {
+      delete process.env[key]
+      continue
+    }
+
+    process.env[key] = value
+  }
 }

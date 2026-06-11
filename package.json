@@ -58,7 +58,8 @@
     "prepublishOnly": "bun run build"
   },
   "files": [
-    "dist"
+    "dist",
+    "schema"
   ],
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"
