@@ -110,14 +110,41 @@ The agent runs `history_search`, picks a promising hit, calls `history_read` to 
 
 ## Configuration
 
-All config is environment-driven so the plugin works inside MCP, the CLI, and CI without extra wiring.
+Recall creates a config file automatically on first use:
 
-| Variable                       | Default                                                  | Description                                                       |
-| ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------- |
-| `OPENCODE_DB_PATH`             | `$HOME/.local/share/opencode/opencode.db`                | OpenCode SQLite database (read-only).                             |
-| `OPENCODE_RECALL_DB_PATH`      | `$HOME/.local/share/opencode/opencode-recall-index.db`   | Sidecar embedding index path.                                     |
-| `OPENCODE_RECALL_OLLAMA_URL`   | `http://127.0.0.1:11434`                                 | Ollama base URL.                                                  |
-| `OPENCODE_RECALL_EMBED_MODEL`  | `all-minilm`                                             | Embedding model. Try `mxbai-embed-large` for higher quality.      |
+```text
+<opencode-config-base-path>/recall.jsonc
+```
+
+On a normal Linux/macOS setup that is `~/.config/opencode/recall.jsonc`.
+
+Most users never need to edit it. Open it when your OpenCode database lives somewhere unusual, you want the sidecar index somewhere else, or you want to try a different embedding model.
+
+```jsonc
+{
+  "database": {
+    // OpenCode session database. Opened read-only; recall never writes here.
+    // Default: ~/.local/share/opencode/opencode.db
+    "path": "~/.local/share/opencode/opencode.db",
+
+    // Sidecar embedding index. Safe to delete; rebuilt on next search.
+    // Default: ~/.local/share/opencode/opencode-recall-index.db
+    "indexPath": "~/.local/share/opencode/opencode-recall-index.db"
+  },
+
+  "embeddings": {
+    // Ollama base URL.
+    // Default: http://127.0.0.1:11434
+    "ollamaUrl": "http://127.0.0.1:11434",
+
+    // Try "mxbai-embed-large" for higher quality at the cost of speed and memory.
+    // Default: all-minilm
+    "model": "all-minilm"
+  }
+}
+```
+
+Environment variables still work as overrides for CI, MCP, and temporary experiments: `OPENCODE_DB_PATH`, `OPENCODE_RECALL_DB_PATH`, `OPENCODE_RECALL_OLLAMA_URL`, and `OPENCODE_RECALL_EMBED_MODEL`.
 
 Run `bun run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
 
@@ -126,7 +153,7 @@ Run `bun run eval:embeddings` to compare installed embedding models against the 
 Recall exposes two tools to the agent.
 
 <details>
-<summary><code>history_search</code> — return ranked hits for a query</summary>
+<summary><code>history_search</code>: return ranked hits for a query</summary>
 
 | Arg      | Type     | Notes                                                                                                  |
 | -------- | -------- | ------------------------------------------------------------------------------------------------------ |
@@ -156,7 +183,7 @@ Returns a JSON array of compact hits:
 </details>
 
 <details>
-<summary><code>history_read</code> — read a bounded transcript window around a cursor</summary>
+<summary><code>history_read</code>: read a bounded transcript window around a cursor</summary>
 
 | Arg      | Type   | Notes                                                                                          |
 | -------- | ------ | ---------------------------------------------------------------------------------------------- |
