@@ -310,7 +310,7 @@ describe('strict ranking', () => {
     expect(rows).toEqual([])
   })
 
-  test('requires all terms for short precise queries', () => {
+  test('allows partial term matches with semantic support because recall chunks are short', () => {
     const rows = rankSearchRows(
       'power platform connector',
       [
@@ -319,7 +319,26 @@ describe('strict ranking', () => {
           sessionTitle: 'Platform connector docs',
           messageId: 'msg_platform_connector',
           partId: 'part_platform_connector',
+          score: 0.5,
           text: 'platform connector setup notes without the missing domain term',
+        },
+      ],
+      5,
+    )
+
+    expect(rows[0]?.sessionId).toBe(BASE_ROW.sessionId)
+  })
+
+  test('filters weak partial lexical tails for short queries', () => {
+    const rows = rankSearchRows(
+      'power platform connector',
+      [
+        {
+          ...BASE_ROW,
+          sessionTitle: 'Generic architecture notes',
+          messageId: 'msg_weak_partial',
+          partId: 'part_weak_partial',
+          text: 'platform policy notes for a broad internal marketplace',
         },
       ],
       5,

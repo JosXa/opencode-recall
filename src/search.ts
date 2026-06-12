@@ -269,14 +269,14 @@ function hasAny(text: string, patterns: readonly string[]): boolean {
 }
 
 function minimumScore(terms: readonly string[]): number {
-  return terms.length <= 1 ? 1 : 2.5
+  if (terms.length <= 1) {
+    return 1
+  }
+
+  return terms.length <= 3 ? 3 : 2.5
 }
 
 function requiredTermMatches(terms: readonly string[]): number {
-  if (terms.length <= 3) {
-    return terms.length
-  }
-
   return Math.ceil(terms.length * 0.65)
 }
 
