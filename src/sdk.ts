@@ -3,6 +3,7 @@ import { decodeCursor } from './cursor'
 import { HistoryDatabase, type ReadMode, type SearchOptions, type SearchRow } from './db'
 import { type EmbeddingProvider, OllamaEmbeddingProvider } from './embedding'
 import { normalizeWindow } from './normalizer'
+import { parseReadMode } from './read-mode'
 import { rankSearchRows } from './search'
 import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar'
 import type { TranscriptWindow } from './transcript'
@@ -14,7 +15,6 @@ export type { TranscriptWindow } from './transcript'
 
 const DEFAULT_SEARCH_LIMIT = 50
 const DEFAULT_READ_LIMIT = 12
-const DEFAULT_FULL_LIMIT = 200
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
 
 export interface OpenCodeRecallOptions {
@@ -55,7 +55,6 @@ export interface RecallSearchHit {
 export interface RecallReadOptions {
   readonly mode?: ReadMode
   readonly limit?: number
-  readonly fullLimit?: number
 }
 
 export interface RecallSearchResult {
@@ -121,9 +120,8 @@ export class OpenCodeRecall {
   public read(cursorValue: string, options: RecallReadOptions = {}): TranscriptWindow {
     const cursor = decodeCursor(cursorValue)
     const readOptions = {
-      mode: options.mode ?? 'around',
+      mode: parseReadMode(options.mode),
       limit: options.limit ?? DEFAULT_READ_LIMIT,
-      fullLimit: options.fullLimit ?? DEFAULT_FULL_LIMIT,
     }
 
     return normalizeWindow(

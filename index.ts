@@ -4,9 +4,10 @@ import { tool } from '@opencode-ai/plugin'
 import { ChatmlRenderer } from './src/chatml-renderer'
 import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND } from './src/commands'
 import { decodeCursor } from './src/cursor'
-import { HistoryDatabase, type ReadMode } from './src/db'
+import { HistoryDatabase } from './src/db'
 import { OllamaEmbeddingProvider } from './src/embedding'
 import { normalizeWindow } from './src/normalizer'
+import { parseReadMode } from './src/read-mode'
 import { formatSearchResults, rankSearchRows } from './src/search'
 import { RecallSidecarIndex } from './src/sidecar'
 
@@ -14,9 +15,7 @@ const DEFAULT_SEARCH_LIMIT = 8
 const MAX_SEARCH_LIMIT = 25
 const DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS = 30_000
 const DEFAULT_READ_LIMIT = 12
-const DEFAULT_FULL_LIMIT = 200
 const MAX_READ_LIMIT = 50
-const MAX_FULL_LIMIT = 500
 
 export const RecallPlugin: Plugin = async () => {
   return {
@@ -93,7 +92,7 @@ export const RecallPlugin: Plugin = async () => {
             .optional(),
           mode: tool.schema
             .string()
-            .describe('around (default), next, prev, tail, head, full only if asked.')
+            .describe('around (default), next, prev, tail, head. full is rejected; page instead.')
             .optional(),
           n: tool.schema
             .number()
@@ -110,11 +109,10 @@ export const RecallPlugin: Plugin = async () => {
           const cursor = decodeCursor(cursorValue)
           const mode = parseReadMode(args.mode)
           const limit = clampNumber(args.n, DEFAULT_READ_LIMIT, 1, MAX_READ_LIMIT)
-          const fullLimit = clampNumber(args.n, DEFAULT_FULL_LIMIT, 1, MAX_FULL_LIMIT)
           const db = new HistoryDatabase()
 
           try {
-            const readOptions = { mode, limit, fullLimit }
+            const readOptions = { mode, limit }
             const window = normalizeWindow(
               cursor.messageId === undefined
                 ? db.readWindowForSession(requiredSessionId(cursor.sessionId), readOptions)
@@ -139,21 +137,6 @@ function requiredSessionId(value: string | undefined): string {
 }
 
 export default RecallPlugin
-
-function parseReadMode(value: string | undefined): ReadMode {
-  if (
-    value === 'around' ||
-    value === 'head' ||
-    value === 'next' ||
-    value === 'prev' ||
-    value === 'tail' ||
-    value === 'full'
-  ) {
-    return value
-  }
-
-  return 'around'
-}
 
 function optionalDateFilter(name: 'after', value: string | undefined) {
   const timestamp = optionalDateFilterValue(name, value)

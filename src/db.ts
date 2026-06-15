@@ -12,12 +12,11 @@ export interface SearchOptions {
   readonly excludeSessionId?: string
 }
 
-export type ReadMode = 'around' | 'full' | 'head' | 'next' | 'prev' | 'tail'
+export type ReadMode = 'around' | 'head' | 'next' | 'prev' | 'tail'
 
 export interface ReadOptions {
   readonly mode: ReadMode
   readonly limit: number
-  readonly fullLimit: number
 }
 
 export interface SearchRow {
@@ -380,8 +379,6 @@ function getReadRange(
       return { start: 1, end: options.limit }
     case 'tail':
       return { start: Math.max(1, totalMessages - options.limit + 1), end: totalMessages }
-    case 'full':
-      return { start: 1, end: Math.min(totalMessages, options.fullLimit) }
     default: {
       const exhaustive: never = options.mode
       throw new Error(`Unsupported read mode: ${String(exhaustive)}`)

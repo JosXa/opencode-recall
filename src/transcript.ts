@@ -1,6 +1,6 @@
 export type HistoryFormat = 'chatml' | 'json' | 'markdown'
 
-export type HistoryReadMode = 'around' | 'full' | 'head' | 'next' | 'prev' | 'tail'
+export type HistoryReadMode = 'around' | 'head' | 'next' | 'prev' | 'tail'
 
 export type TranscriptRole = 'user' | 'assistant' | 'system' | 'tool'
 

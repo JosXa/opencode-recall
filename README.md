@@ -191,8 +191,8 @@ Returns a JSON array of compact hits:
 | Arg      | Type   | Notes                                                                                          |
 | -------- | ------ | ---------------------------------------------------------------------------------------------- |
 | `cursor` | string | **Required.** A `msg_…`, a `ses_…`, or an encoded cursor from `history_search`.                |
-| `mode`   | string | `around` (default), `next`, `prev`, `head`, `tail`, or `full`.                                 |
-| `n`      | number | Message count. Default `12`, max `50`. For `full`, default `200`, max `500`.                   |
+| `mode`   | string | `around` (default), `next`, `prev`, `head`, or `tail`. `full` is rejected; page instead.        |
+| `n`      | number | Message count. Default `12`, max `50`.                                                         |
 
 Returns a ChatML-like transcript window:
 
@@ -202,11 +202,11 @@ Returns a ChatML-like transcript window:
 …text and tool_call blocks…
 <|im_end|>
 …more messages…
-<nav cur="…" prev="…" head="…" next="…" tail="…" full="…" />
+<nav cur="…" prev="…" head="…" next="…" tail="…" />
 </hist>
 ```
 
-Tool calls, patches, and file attachments render as structured tags with explicit `truncated` / `original_chars` markers when content is capped. The `<nav/>` element gives the agent cursors to keep paging without re-searching.
+Tool calls, patches, and file attachments render as structured tags with explicit `truncated` / `original_chars` markers when content is capped. The `<nav/>` element gives the agent cursors to keep paging without re-searching. To read from the end upward, start with `mode="tail"`, then pass the returned `prev` cursor back with `mode="prev"` until enough context is loaded. `mode="full"` is intentionally rejected because large transcript responses can still be truncated by the outer tool transport.
 
 </details>
 

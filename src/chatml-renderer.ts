@@ -30,10 +30,6 @@ function renderWindowStart(window: TranscriptWindow): string {
     attr('total', String(window.totalMessages)),
   ]
 
-  if (window.mode === 'full' && window.endIndex < window.totalMessages) {
-    attrs.push(attr('truncated', 'true'))
-  }
-
   if (window.title !== undefined) {
     attrs.push(attr('title', window.title))
   }
@@ -135,7 +131,6 @@ function renderNavigation(window: TranscriptWindow): string {
     attrs.push(attr('tail', window.nextCursor))
   }
 
-  attrs.push(attr('full', window.anchorCursor))
   return `<nav ${attrs.join(' ')} />`
 }
 

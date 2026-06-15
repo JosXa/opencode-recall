@@ -7,6 +7,7 @@ import { decodeCursor } from '../src/cursor'
 import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db'
 import type { EmbeddingProvider } from '../src/embedding'
 import { OllamaEmbeddingProvider } from '../src/embedding'
+import { FULL_MODE_RECOMMENDATION, parseReadMode } from '../src/read-mode'
 import { rankSearchRows } from '../src/search'
 import { OpenCodeRecall, searchHistory } from '../src/sdk'
 import { RecallSidecarIndex } from '../src/sidecar'
@@ -167,6 +168,12 @@ describe('cursor decoding', () => {
     expect(() => decodeCursor('ses_1ea07e649ffe8rG0kUBk4oJQC8:10')).toThrow(
       'Invalid history cursor. Expected msg_..., ses_..., or an encoded cursor from history_search.',
     )
+  })
+})
+
+describe('read mode parsing', () => {
+  test('rejects full mode with paging guidance', () => {
+    expect(() => parseReadMode('full')).toThrow(FULL_MODE_RECOMMENDATION)
   })
 })
 
@@ -548,13 +555,18 @@ describe('library sdk', () => {
 
       try {
         const window = recall.read('ses_read')
+        const rendered = recall.render('msg_read')
 
         expect(window.sessionId).toBe('ses_read')
         expect(window.messages[0]?.parts[0]).toEqual({
           type: 'text',
           text: 'invoices cli location notes',
         })
-        expect(recall.render('msg_read')).toContain('<hist sid="ses_read"')
+        expect(rendered).toContain('<hist sid="ses_read"')
+        expect(rendered).not.toContain(' full=')
+        expect(() => recall.read('ses_read', { mode: 'full' as never })).toThrow(
+          FULL_MODE_RECOMMENDATION,
+        )
       } finally {
         recall.close()
       }

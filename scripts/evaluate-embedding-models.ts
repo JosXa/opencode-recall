@@ -70,7 +70,7 @@ const CASES: readonly RecallEvalCase[] = [
   },
   {
     name: 'history read navigation API',
-    query: 'continue conversation nav next prev head tail full',
+    query: 'continue conversation nav next prev head tail',
     expected: ['nav', 'next', 'mode'],
     directory: '/projects/opencode-recall',
   },
