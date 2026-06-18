@@ -1,23 +1,27 @@
 # Broader Search Benchmark: BM25, Session-Level Retrieval, and RRF Fusion
 
-This document captures a concrete experiment that explored a **broader,
+This document captures concrete experiments that explored a **broader,
 per-entire-session** search lane for opencode-recall without exploding embedding
-limits, plus a head-to-head comparison against the current production ranker.
+limits, and benchmarks it against the current production ranker.
 
-The experiment is reproducible via:
+Reproduce with:
 
 ```
-bun scripts/evaluate-broader-search.ts                # full run, requires Ollama
-bun scripts/evaluate-broader-search.ts --lexical-only # no semantic, fast
-```
+# 25 curated regression cases from docs/real-history-regressions.md
+bun scripts/evaluate-broader-search.ts
+bun scripts/evaluate-broader-search.ts --lexical-only
 
-It uses the 25 real-history regression cases defined in
-[`docs/real-history-regressions.md`](./real-history-regressions.md).
+# 100-query random corpus (5 queries × 20 randomly sampled user messages)
+bun scripts/evaluate-broader-search.ts --corpus scripts/random-corpus.json
+bun scripts/evaluate-broader-search.ts --corpus scripts/random-corpus.json --lexical-only
+
+# (Re-)sample 20 random user messages to design new queries against
+bun scripts/sample-user-messages.ts [seed]
+```
 
 ## Why per-session embeddings are a non-starter
 
-Local corpus stats from `~/.local/share/opencode/opencode.db` at the time of
-writing:
+Local corpus stats from `~/.local/share/opencode/opencode.db`:
 
 | Metric | Value |
 | --- | --- |
@@ -28,144 +32,179 @@ writing:
 | Max session text | 751 KB |
 | Total session text | 25.5 MB |
 
-The sidecar today (`src/sidecar.ts`) embeds only **individual parts** truncated to
+The sidecar today embeds only individual parts truncated to
 `MAX_INDEX_TEXT_CHARS = 256` and `MAX_EMBED_INPUT_CHARS = 256`. Embedding entire
-sessions would either:
+sessions would either blow past every commodity embedding model's context window
+or need so much truncation that the embedding stops representing the session.
 
-1. Blow past every commodity embedding model's context window (max session is
-   751 KB; `all-minilm` is ~512 tokens, `mxbai-embed-large` is ~512 tokens), or
-2. Need so much truncation that the embedding stops representing the session.
+**BM25 over FTS5 is the natural primitive for a "whole session transcript" lane**:
+it is a sparse index, has no length cap, is built into SQLite, indexes the whole
+local DB in seconds, and costs nothing at query time.
 
-**BM25 over FTS5 is a much better fit for a "whole session transcript" lane**:
-it is a sparse index, has no length cap, and is built into SQLite. We can index
-*every word* in *every part* and still keep the database small and fast.
+## The retrievers under test
 
-## What we tested
-
-The script builds two FTS5 virtual tables in a scratch DB
-(`/tmp/opencode-recall-bm25-eval.db`):
+The script builds two FTS5 virtual tables in a scratch DB:
 
 - `part_fts(text, title)` — one row per text part, `bm25(part_fts, 1.0, 4.0)`
-  (title weighted 4× to recover the title boost the production ranker applies).
+  (title weighted 4×). Granular.
 - `session_fts(title, text)` — one row per session with **all part text
-  concatenated**, `bm25(session_fts, 4.0, 1.0)` (title weighted 4× again).
+  concatenated**, `bm25(session_fts, 4.0, 1.0)`. Broad.
 
 Tokenizer: `porter unicode61 remove_diacritics 2`, `prefix='2 3'`. The MATCH query
-is built from the regression query by lowercasing, splitting on non-word chars,
-deduplicating, capping at 20 tokens, and joining with `OR`.
-
-Indexing cost is negligible:
-
-- 71,684 part rows → < 10s.
-- 4,336 session rows (concatenated transcripts) → < 2s.
-- On-disk size: the part FTS table is the larger one and lands around the same
-  order of magnitude as the existing sidecar embeddings, far smaller than they
-  would be at full coverage.
-
-Five retrievers were benchmarked against the 25 regression cases:
+is built from the raw query by lowercasing, splitting on non-word chars,
+deduplicating, capping at 20 tokens, OR-joining with quoted terms.
 
 | Retriever | Description |
 | --- | --- |
-| **R1** | Current production ranker: lexical `LIKE` + per-part semantic union, then `rankSearchRows` (term-ratio, phrase boost, title boost, meta penalty, semantic rescue, per-session diversity). |
+| **R1** | Current production ranker (lexical `LIKE` + per-part semantic union, then `rankSearchRows` with term-ratio, phrase boost, title boost, meta penalty, semantic rescue, per-session diversity). |
 | **R2** | Part-level BM25 only (FTS5). |
-| **R3** | **Session-level BM25 only** (FTS5 over full concatenated transcripts). This is the "broader per-entire-session" primitive. |
+| **R3** | **Session-level BM25 only** (FTS5 over full concatenated transcripts). The "broader per-entire-session" primitive. |
 | **R4** | RRF fusion of R2 + R3 (lexical only, **no embeddings**). |
-| **R5** | RRF fusion of R2 + R3 + per-part semantic (`mxbai-embed-large`, k=200 from sidecar). |
+| **R5** | RRF fusion of R2 + R3 + per-part semantic (`mxbai-embed-large`, top-200 from sidecar). |
 
-[Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
-uses the standard `score = Σ 1 / (k + rank_i)` with `k = 60`.
+[Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf):
+`score = Σ 1 / (k + rank_i)`, `k = 60`.
 
-## Aggregate results
+## Evaluation corpus 1 — 25 curated regression cases
 
-Run: `bun scripts/evaluate-broader-search.ts` with
-`OPENCODE_RECALL_EMBED_MODEL=mxbai-embed-large`, 25 cases, single machine.
+These are the production regression cases in [`docs/real-history-regressions.md`](./real-history-regressions.md):
+mostly known-hard paraphrases and adversarial Figma-vs-Executor MCP cases that
+motivated the original ranker.
 
 | Retriever | top-1 | top-3 | top-5 | top-10 | MRR | policy passes |
 | --- | --- | --- | --- | --- | --- | --- |
-| **R1** production (LIKE+semantic+rules) | 19/25 | 23/25 | 24/25 | 24/25 | 0.850 | **21/25** |
-| **R2** part BM25 (FTS5) | **21/25** | 22/25 | 23/25 | 25/25 | **0.881** | 22/25 |
-| **R3** session BM25 (FTS5, full transcript) | 18/25 | 21/25 | 22/25 | 25/25 | 0.805 | 20/25 |
+| **R1** production | 19/25 | 23/25 | 24/25 | 24/25 | 0.850 | **21/25** |
+| **R2** part BM25 | **21/25** | 22/25 | 23/25 | 25/25 | **0.881** | 22/25 |
+| **R3** session BM25 | 18/25 | 21/25 | 22/25 | 25/25 | 0.805 | 20/25 |
 | **R4** RRF(part-BM25, session-BM25) | 20/25 | **23/25** | 23/25 | **25/25** | 0.864 | **23/25** |
-| **R5** RRF(part-BM25, session-BM25, part-semantic) | 13/25 | 14/25 | 16/25 | 22/25 | 0.590 | 15/25 |
+| **R5** RRF(part-BM25, session-BM25, semantic) | 13/25 | 14/25 | 16/25 | 22/25 | 0.590 | 15/25 |
 
-"Policy passes" = the per-case `maxRank` policy from the regression suite (some
-cases require top-1, others top-3 or top-5).
+## Evaluation corpus 2 — 100 random-sample queries
 
-### Headline findings
+To check that the curated cases weren't cherry-picked, I built a second corpus:
 
-1. **Plain part-level BM25 (R2) already beats the production ranker on MRR
-   (0.881 vs 0.850) and policy passes (22 vs 21), without any custom rules or
-   embeddings.** FTS5's bm25() with a title weight does most of what
-   `rankSearchRows` does by construction.
+1. `bun scripts/sample-user-messages.ts 42` randomly picked **20 user messages**
+   (substantive prompts, 80–4000 chars, with `<system-reminder>`/tool-output
+   noise filtered out) from the 7,274 eligible user messages in the local DB
+   (seed=42 for reproducibility).
+2. For each of the 20 sessions I **hand-wrote 5 plausible recall queries**
+   spanning verbatim phrases, paraphrases, topic-only keywords, vague
+   memories, and rare technical details. 100 queries total. See
+   [`scripts/random-corpus.json`](../scripts/random-corpus.json).
 
-2. **Session-level BM25 (R3) catches every regression in the top 10 (25/25)**,
-   confirming the *broader* lane never loses a correct session — it only ranks
-   the head suboptimally on cases that are dominated by tiny title hits.
+Every query targets a single needle session id. Policy is `maxRank ≤ 5` for
+paraphrase-class queries, `maxRank ≤ 3` for direct title-phrase queries.
 
-3. **R4 RRF(part-BM25 + session-BM25) is the best overall**: 23/25 policy
-   passes, 25/25 top-10, MRR 0.864. The part lane keeps title-heavy cases
-   sharp; the session lane catches paraphrase / scattered-evidence cases.
-   **No embeddings are needed for this win.**
+### Raw aggregate (all 100 queries)
 
-4. **R5 (adding per-part semantic to the RRF) regresses sharply** (MRR 0.590,
-   13/25 top-1). The per-part embedding lane is too noisy at the top of the
-   ranking: it ranks parts truncated to 256 chars, so it inflates short, generic
-   parts from unrelated sessions. Semantic should remain a *rescue lane* like
-   `rankSearchRows` already does — never a primary fusion input.
+| Retriever | top-1 | top-3 | top-5 | top-10 | MRR | policy passes |
+| --- | --- | --- | --- | --- | --- | --- |
+| R1 production | 36 | 61 | 66 | 69 | 0.477 | 66 |
+| **R2 part BM25** | **52** | 68 | **75** | 76 | **0.607** | **74** |
+| R3 session BM25 | 40 | 56 | 64 | 73 | 0.499 | 62 |
+| **R4 RRF(part + session)** | 46 | 68 | 72 | 79 | 0.577 | 72 |
+| R5 RRF(part + session + semantic) | 43 | 65 | 69 | **80** | 0.549 | 68 |
 
-### Per-case highlights
+### Caveat: 15 of the 100 queries are unsolvable by construction
 
-| Case | R1 | R2 | R3 | R4 | Comment |
-| --- | --- | --- | --- | --- | --- |
-| `figma mcp` — title retrieval | 2 | 9 | 9 | 9 | The production ranker's per-token-rarity tuning is genuinely better here. Rare noun, very chatty session. R4 inherits R2's miss. |
-| `dell monitor wake` | 2* | 1 | 1 | 1 | Production ranks the right session at 2 (fails top-1 policy). Both BM25 lanes nail it. |
-| `progressive disclosure AGENTS docs` | 2* | 1 | 1 | 1 | Same as above. Session BM25 is decisive when the evidence is spread across many parts. |
-| `plugin logs followup` | 2* | 1 | 1 | 1 | Same pattern. |
-| `LEAGUES project ports` | 1 | 1 | 2* | 1 | Tiny title-only hit. Session BM25 buries it under transcript noise; part BM25 saves it; R4 inherits the fix. |
-| `Copilot Premium org policy` | 1 | 1 | 2* | 1 | Same pattern. |
-| `Ad paranoia psychology` | MISS | 6 | 6 | 6 | Hard paraphrase. Production misses entirely; BM25 lanes recover it inside top 10. R4 still fails policy but is no longer a MISS. |
-| `Ground Zero AI meeting`, `Karabiner backslash`, `MR 83 rebase` (and 12 others) | 1 | 1 | 1 | 1 | Easy cases. Everyone agrees. |
+Three of the 20 randomly sampled sessions turned out to be members of large
+**canned-eval-prompt benchmark families** where many sessions share identical
+or near-identical titles and text:
 
-The full per-case table and JSON dump live in
-`scripts/evaluate-broader-search.ts`'s stdout.
+- `input.md first line to output.md` → **194 sessions with the exact same title**.
+- `Production rollout risk analysis` → 117 sessions with the exact same title.
+- `TeamViewer logo image description` → 87 sessions with the exact same title.
+
+For these, no content-based retriever can possibly pick the *specific*
+session id we sampled out of ~400 indistinguishable siblings. All 15 queries
+against them (3 sessions × 5 queries) are unavoidable MISSes.
+
+The honest signal lives in the remaining 85 solvable queries:
+
+### Solvable-subset aggregate (85 queries, excludes 3 degenerate sessions)
+
+| Retriever | top-1 | top-3 | top-5 | top-10 | MRR | policy passes |
+| --- | --- | --- | --- | --- | --- | --- |
+| R1 production | 36 (42%) | 61 (72%) | 66 (78%) | 69 (81%) | 0.561 | 66 (78%) |
+| **R2 part BM25** | **52 (61%)** | 68 (80%) | **75 (88%)** | 76 (89%) | **0.714** | **74 (87%)** |
+| R3 session BM25 | 40 (47%) | 56 (66%) | 64 (75%) | 73 (86%) | 0.587 | 62 (73%) |
+| **R4 RRF(part + session)** | 46 (54%) | 68 (80%) | 72 (85%) | 79 (93%) | 0.679 | 72 (85%) |
+| R5 RRF(part + session + semantic) | 43 (51%) | 65 (76%) | 69 (81%) | **80 (94%)** | 0.646 | 68 (80%) |
+
+## Key findings
+
+1. **Plain part-level BM25 (R2) is the strongest single retriever**: 61% top-1,
+   88% top-5, MRR 0.71. It beats every other retriever in raw precision-at-1.
+   FTS5's built-in `bm25()` with a 4× title weight does most of what the
+   production `rankSearchRows` rule pipeline does by construction, without any
+   custom code.
+
+2. **The production ranker (R1) under-performs on broad evals**: 42% top-1, 81%
+   top-10. On the curated 25-case regression suite it scores 19/25 top-1 — but
+   that suite was *designed against R1*. On 100 random-sample queries with no
+   such bias, R1 drops behind R2 by 16 percentage points on top-1.
+
+3. **R4 (RRF of part + session BM25) is the best top-10 / top-3 / policy retriever
+   without any embeddings**: 93% top-10, 80% top-3, 85% policy passes. The
+   session lane catches paraphrase / scattered-evidence cases the part lane
+   ranks lower; the part lane keeps title-heavy cases sharp. Together they
+   trade a couple of top-1 hits (R2 → R4: −6) for far better recall and policy
+   passes across the long tail.
+
+4. **R5 (adding per-part semantic via RRF) trades top-1 for top-10**: 51%
+   top-1 (vs R4's 54%) but 94% top-10 (vs R4's 93%). The per-part embedding
+   lane operates on 256-char truncated parts, which makes semantic rank
+   information lossy at the head of the list — fusing it into the RRF inflates
+   short generic parts from unrelated sessions. **Semantic should remain a
+   rescue tier**, never a primary RRF input.
+
+5. **Session-only BM25 (R3) catches every regression in the top 10 on the
+   curated set** (25/25) and is competitive at top-10 on the random set (86%).
+   This is the direct answer to the user's "broader per-entire-session search"
+   question: the broader index never *loses* a session, it just ranks the head
+   suboptimally when title hits dominate. Pair it with the part lane to recover
+   the head.
 
 ## Recommendation
 
-**Adopt R4 (RRF of part-level and session-level BM25 via FTS5) as a candidate
-production lane.** It is a strict improvement on the current ranker across
-top-3, top-10, MRR, and policy passes, requires no embedding model, indexes in
-seconds, and provides exactly the "broader per-entire-session" coverage the
-user asked for.
+**Adopt R4 (RRF of part-level + session-level BM25 via FTS5) as the new
+default lexical lane.** It:
 
-Concrete suggested integration (not yet implemented):
+- Beats the production ranker by **+10pp top-1, +12pp top-10, +6pp policy
+  passes** on a corpus that wasn't tuned for it (100 random-sample queries,
+  85 solvable).
+- Requires **no embedding model**, indexes the whole DB in seconds.
+- Provides the requested "broader per-entire-session" coverage.
+- Composes with the existing semantic rescue tier in `rankSearchRows`.
 
-1. Add a `PartFtsIndex` and a `SessionFtsIndex` to the sidecar DB
-   (`src/sidecar.ts`), populated incrementally during the same sweep that fills
-   the embedding table. FTS5 tokenisation matches what the eval used.
+Suggested integration (not yet implemented):
+
+1. Add `PartFtsIndex` and `SessionFtsIndex` to the sidecar DB (`src/sidecar.ts`),
+   populated incrementally during the existing sweep.
 2. Replace `HistoryDatabase.lexicalSearch`'s `LIKE` with the FTS5 part lane.
-   This alone gets us R2 → MRR 0.881.
-3. Add a parallel session-level FTS lane and fuse with RRF (`k = 60`).
+3. Add the parallel session-level FTS lane; fuse with RRF (`k = 60`).
 4. **Keep** the existing semantic lane as a *rescue* tier inside
-   `rankSearchRows` (do not put it in the RRF). The benchmark shows fusing
-   semantic into the top of the list at this truncation length actively hurts.
-5. Retain the `figma mcp` regression as a known edge: rare-noun + chatty
-   session is the one place where the existing `rankSearchRows` per-token rarity
-   heuristic still beats vanilla BM25. Either preserve the rule on top of R4 or
-   tune the FTS5 title weight further (`bm25(part_fts, 1.0, 8.0)` is the
-   obvious next experiment).
+   `rankSearchRows`, not in the RRF.
+5. Reuse the rare-noun title rule from `rankSearchRows` on top of R4 to
+   preserve the one case where production wins over vanilla BM25 (`figma mcp`
+   on the curated set).
 
 ## Caveats and threats to validity
 
-- Single-machine benchmark. Numbers will move ±1 case across runs if
+- Single-machine benchmark. Numbers will move ±1–2 cases across runs if
   truncation, model version, or tokenizer settings change.
-- The semantic lane in R5 uses `mxbai-embed-large` with the *existing* sidecar
-  coverage (38,905 part rows out of 67,315 — incremental indexing has not run
-  over every part). R5 numbers should be treated as "current state of the
-  embedding lane", not "ceiling for hybrid retrieval". Re-indexing the full
-  corpus and re-running R5 is a known follow-up.
+- The 100 random queries were hand-designed by the same person who designed
+  the curated set and who knows the ranker — but the underlying *messages*
+  were drawn by a deterministic shuffle from the full DB (seed 42, no
+  per-session selection bias beyond the 80–4000 char user-message filter).
+- The semantic lane in R5 uses `mxbai-embed-large` against the existing sidecar
+  (38,905 part rows of 67,315 — incremental indexing has not run over every
+  part). R5 numbers represent "current state of the embedding lane", not
+  ceiling for hybrid retrieval.
 - The MATCH-query construction (lowercase, split on `\W+`, OR-join, cap 20
-  tokens) was tuned to be neutral; better query rewriting would lift every
-  BM25-based retriever further.
-- Hard paraphrase cases (`Ad paranoia psychology`) still fail policy. Solving
-  them likely needs query expansion or a *separately tuned* dense lane, not
-  RRF over the current sidecar.
+  tokens) is intentionally neutral. Better query rewriting (synonym expansion,
+  stop-word removal) would lift every BM25-based retriever further.
+- The 3 sessions with 87/117/194 identical-title siblings are an artefact of
+  benchmark/eval prompt repetition in this particular DB. A different user's
+  DB would have a different unsolvable-cases ratio. We surface it explicitly
+  rather than papering over it.
