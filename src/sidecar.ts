@@ -6,6 +6,7 @@ import { dirname } from 'node:path'
 import { loadConfig } from './config'
 import type { IndexSourceRow, SearchOptions, SearchRow } from './db'
 import type { EmbeddingProvider } from './embedding'
+import { LexicalIndex } from './lexical-index'
 
 const INDEX_SCHEMA_VERSION = '2'
 const SYNC_OVERLAP_MS = 30 * 60 * 1000
@@ -43,6 +44,7 @@ export interface SyncOptions {
 export class RecallSidecarIndex {
   readonly #db: Database
   readonly #owner = randomUUID()
+  readonly #lexical: LexicalIndex
 
   public constructor(path = defaultSidecarPath()) {
     ensureParentDirectory(path)
@@ -82,6 +84,7 @@ export class RecallSidecarIndex {
     `)
     this.#ensureSourceColumn()
     this.#setMetadata('schema_version', INDEX_SCHEMA_VERSION)
+    this.#lexical = new LexicalIndex(this.#db)
   }
 
   public close(): void {
@@ -110,13 +113,21 @@ export class RecallSidecarIndex {
 
     try {
       const lastSynced = this.#getNumberMetadata('last_source_updated')
-      const since = lastSynced === undefined ? undefined : Math.max(0, lastSynced - SYNC_OVERLAP_MS)
+      // Force a full lexical backfill when the FTS5 tables are empty on an
+      // otherwise-populated sidecar. Happens once per DB after upgrading from
+      // the legacy semantic-only schema.
+      const needsLexicalBackfill = !this.#lexical.hasIndexedRows() && this.hasIndexedChunks()
+      const since =
+        lastSynced === undefined || needsLexicalBackfill
+          ? undefined
+          : Math.max(0, lastSynced - SYNC_OVERLAP_MS)
       const rows = sourceRows(since)
       let maxUpdated = lastSynced ?? 0
 
       for (let index = 0; index < rows.length; index += SYNC_BATCH_SIZE) {
         const batch = rows.slice(index, index + SYNC_BATCH_SIZE)
         indexedRows += await this.#syncBatch(batch, provider)
+        this.#lexical.sync(batch, undefined)
         maxUpdated = maxSourceUpdated(batch, maxUpdated)
         options.onProgress?.({
           processedRows: Math.min(index + batch.length, rows.length),
@@ -126,7 +137,9 @@ export class RecallSidecarIndex {
       }
 
       if (sourcePartIds !== undefined) {
-        deletedRows = this.#deleteStaleChunks(sourcePartIds())
+        const ids = sourcePartIds()
+        deletedRows = this.#deleteStaleChunks(ids)
+        this.#lexical.sync([], ids)
       }
 
       this.#setMetadata('last_source_updated', String(maxUpdated))
@@ -135,6 +148,46 @@ export class RecallSidecarIndex {
     } finally {
       this.#releaseLock()
     }
+  }
+
+  // Bun's `Database.transaction(fn)` returns a callable that re-enters via
+  // begin/commit. We use it inside LexicalIndex so an external sync is enough.
+  public syncLexicalOnly(
+    sourceRows: (since: number | undefined) => readonly IndexSourceRow[],
+    sourcePartIds?: () => readonly string[],
+  ): { indexedRows: number; deletedRows: number; lockAcquired: boolean } {
+    if (!this.#acquireLock()) {
+      return { indexedRows: 0, deletedRows: 0, lockAcquired: false }
+    }
+    try {
+      const lastSynced = this.#getNumberMetadata('last_lexical_synced')
+      const needsBackfill = !this.#lexical.hasIndexedRows()
+      const since =
+        lastSynced === undefined || needsBackfill
+          ? undefined
+          : Math.max(0, lastSynced - SYNC_OVERLAP_MS)
+      const rows = sourceRows(since)
+      const { indexedRows } = this.#lexical.sync(rows, undefined)
+      let deletedRows = 0
+      if (sourcePartIds !== undefined) {
+        const ids = sourcePartIds()
+        const result = this.#lexical.sync([], ids)
+        deletedRows = result.deletedRows
+      }
+      const maxUpdated = maxSourceUpdated(rows, lastSynced ?? 0)
+      this.#setMetadata('last_lexical_synced', String(maxUpdated))
+      return { indexedRows, deletedRows, lockAcquired: true }
+    } finally {
+      this.#releaseLock()
+    }
+  }
+
+  public lexicalSearch(query: string, options: SearchOptions): SearchRow[] {
+    return this.#lexical.search(query, options)
+  }
+
+  public hasLexicalIndex(): boolean {
+    return this.#lexical.hasIndexedRows()
   }
 
   public async search(

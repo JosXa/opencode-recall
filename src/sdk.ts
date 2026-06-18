@@ -96,6 +96,22 @@ export class OpenCodeRecall {
     )
   }
 
+  // Build/refresh just the FTS5 lexical index, skipping embeddings.
+  // Used when callers opt out of semantic but still want lexical recall.
+  public syncLexical(): SyncResult {
+    const start = performance.now()
+    const result = this.#sidecar.syncLexicalOnly(
+      (since) => this.#history.readTextPartsForIndex(since),
+      () => this.#history.readTextPartIds(),
+    )
+    return {
+      elapsedMs: performance.now() - start,
+      indexedRows: result.indexedRows,
+      deletedRows: result.deletedRows,
+      lockAcquired: result.lockAcquired,
+    }
+  }
+
   public async search(
     query: string,
     options: RecallSearchOptions = {},
@@ -108,9 +124,13 @@ export class OpenCodeRecall {
 
     const lexicalEnabled = options.lexical !== false
     const semanticEnabled = options.semantic !== false
-    const syncResult =
-      semanticEnabled && options.sync !== false ? await this.sync(options.syncOptions) : undefined
-    const lexicalRows = lexicalEnabled ? this.#history.lexicalSearch(query, searchOptions) : []
+    const shouldSync = (semanticEnabled || lexicalEnabled) && options.sync !== false
+    const syncResult = shouldSync
+      ? semanticEnabled
+        ? await this.sync(options.syncOptions)
+        : this.syncLexical()
+      : undefined
+    const lexicalRows = lexicalEnabled ? this.#sidecar.lexicalSearch(query, searchOptions) : []
     const semanticRows = semanticEnabled
       ? await this.#sidecar.search(query, searchOptions, this.#provider)
       : []

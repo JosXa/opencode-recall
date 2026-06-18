@@ -466,6 +466,100 @@ describe('current session exclusion', () => {
     }
   })
 
+  test('sidecar lexical search returns FTS5 hits without an embedding provider', async () => {
+    const path = `/tmp/opencode-recall-lex-${crypto.randomUUID()}.db`
+    const index = new RecallSidecarIndex(path)
+    const rows: IndexSourceRow[] = [
+      {
+        sessionId: 'ses_match',
+        sessionTitle: 'Migrate invoices CLI to bun',
+        directory: '/projects/invoices-cli',
+        messageId: 'msg_match',
+        partId: 'part_match',
+        role: 'user',
+        timeCreated: 5,
+        sourceUpdated: 5,
+        text: 'we should port the invoices command line tool from node to bun for speed',
+        source: 'text',
+      },
+      {
+        sessionId: 'ses_other',
+        sessionTitle: 'Unrelated note',
+        directory: '/projects/other',
+        messageId: 'msg_other',
+        partId: 'part_other',
+        role: 'user',
+        timeCreated: 4,
+        sourceUpdated: 4,
+        text: 'lunch plans for the team offsite next month',
+        source: 'text',
+      },
+    ]
+
+    try {
+      const lexicalSync = index.syncLexicalOnly(
+        () => rows,
+        () => rows.map((row) => row.partId),
+      )
+      expect(lexicalSync.lockAcquired).toBe(true)
+      expect(lexicalSync.indexedRows).toBe(2)
+      expect(index.hasLexicalIndex()).toBe(true)
+
+      const hits = index.lexicalSearch('invoices bun', { limit: 5 })
+      expect(hits[0]?.sessionId).toBe('ses_match')
+      expect(hits.some((row) => row.sessionId === 'ses_other')).toBe(false)
+    } finally {
+      index.close()
+      removeSqliteFiles(path)
+    }
+  })
+
+  test('sidecar lexical search excludes the current session by default option', async () => {
+    const path = `/tmp/opencode-recall-lex-exclude-${crypto.randomUUID()}.db`
+    const index = new RecallSidecarIndex(path)
+    const rows: IndexSourceRow[] = [
+      {
+        sessionId: 'ses_current',
+        sessionTitle: 'Current chat',
+        directory: '/projects/invoices-cli',
+        messageId: 'msg_current',
+        partId: 'part_current',
+        role: 'user',
+        timeCreated: 2,
+        sourceUpdated: 2,
+        text: 'invoices cli notes',
+        source: 'text',
+      },
+      {
+        sessionId: 'ses_old',
+        sessionTitle: 'Older chat',
+        directory: '/projects/invoices-cli',
+        messageId: 'msg_old',
+        partId: 'part_old',
+        role: 'user',
+        timeCreated: 1,
+        sourceUpdated: 1,
+        text: 'invoices cli notes',
+        source: 'text',
+      },
+    ]
+
+    try {
+      index.syncLexicalOnly(
+        () => rows,
+        () => rows.map((row) => row.partId),
+      )
+      const excluded = index.lexicalSearch('invoices cli', {
+        limit: 10,
+        excludeSessionId: 'ses_current',
+      })
+      expect(excluded.map((row) => row.sessionId)).toEqual(['ses_old'])
+    } finally {
+      index.close()
+      removeSqliteFiles(path)
+    }
+  })
+
   test('semantic sidecar search excludes the current session by default option', async () => {
     const path = `/tmp/opencode-recall-sidecar-${crypto.randomUUID()}.db`
     const index = new RecallSidecarIndex(path)

@@ -72,8 +72,10 @@ export const RecallPlugin: Plugin = async () => {
               provider,
               () => db.readTextPartIds(),
             )
-            const semanticRows = await sidecar.search(query, options, provider)
-            const lexicalRows = db.lexicalSearch(query, options)
+            const [semanticRows, lexicalRows] = await Promise.all([
+              sidecar.search(query, options, provider),
+              Promise.resolve(sidecar.lexicalSearch(query, options)),
+            ])
             const rows = rankSearchRows(query, [...lexicalRows, ...semanticRows], options.limit)
             return formatSearchResults(rows, syncResult)
           } finally {
