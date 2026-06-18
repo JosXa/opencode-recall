@@ -451,13 +451,28 @@ function aggregate(results: readonly CaseResult[]): Aggregate {
   return { retriever: results[0]?.retriever ?? '?', top1, top3, top5, top10, mrr, passed, total }
 }
 
+async function loadCorpus(): Promise<readonly RegressionCase[]> {
+  const idx = process.argv.indexOf('--corpus')
+  if (idx === -1) return CASES
+  const path = process.argv[idx + 1]
+  if (path === undefined) throw new Error('--corpus requires a path argument')
+  const file = Bun.file(path)
+  const parsed = (await file.json()) as { cases: readonly RegressionCase[] }
+  if (!Array.isArray(parsed.cases) || parsed.cases.length === 0) {
+    throw new Error(`corpus at ${path} has no .cases array`)
+  }
+  return parsed.cases
+}
+
 async function main() {
   const lexicalOnly = process.argv.includes('--lexical-only')
   const ftsPath = '/tmp/opencode-recall-bm25-eval.db'
   const indexPath = '/tmp/opencode-recall-broader-sidecar.db'
   const useDefaultSidecar = !process.argv.includes('--fresh-sidecar')
+  const cases = await loadCorpus()
 
   console.error(`building FTS5 indexes at ${ftsPath}...`)
+  console.error(`evaluating ${cases.length} cases`)
   const history = new HistoryDatabase()
   const fts = buildFtsIndex(ftsPath, history)
 
@@ -474,7 +489,7 @@ async function main() {
   const header = ['case', ...retrievers.map((r) => shortName(r.name))]
   const rows: string[][] = []
 
-  for (const tc of CASES) {
+  for (const tc of cases) {
     const row = [trim(tc.name, 50)]
     for (const r of retrievers) {
       const hits = await r.retrieve(tc.query, limit)

@@ -1,0 +1,124 @@
+{
+  "_comment": "100 queries (5 per session) hand-designed against 20 randomly sampled user messages from the real OpenCode history. Sample produced via `bun scripts/sample-user-messages.ts 42`. Queries deliberately vary in specificity: verbatim phrase, paraphrase, topic-only, vague memory, technical detail. maxRank = 5 for all, since the task is realistic 'recall a past session', not strict top-1. Two sessions about the same tmux feature accept either session id.",
+  "cases": [
+    { "name": "subtask model/provider arg — title phrase", "query": "subtask tool model provider argument support", "expectedSessionId": "ses_20c05feb5ffe9aCZqcqTZgL6aG", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "subtask model/provider arg — task tool delegation", "query": "task tool instructor subagent prompt generation", "expectedSessionId": "ses_20c05feb5ffe9aCZqcqTZgL6aG", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "subtask model/provider arg — vague", "query": "delegate to instructor subagent", "expectedSessionId": "ses_20c05feb5ffe9aCZqcqTZgL6aG", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "subtask model/provider arg — feature", "query": "subagent model override argument", "expectedSessionId": "ses_20c05feb5ffe9aCZqcqTZgL6aG", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "subtask model/provider arg — verbatim", "query": "call task tool with subagent instructor", "expectedSessionId": "ses_20c05feb5ffe9aCZqcqTZgL6aG", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "DCP compress prompt — title", "query": "DCP compress prompt but no action", "expectedSessionId": "ses_22e8273daffe9mZ0ggl6yGiMh7", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "DCP compress prompt — paraphrase", "query": "compress hint but no tool call", "expectedSessionId": "ses_22e8273daffe9mZ0ggl6yGiMh7", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "DCP compress prompt — system reminder", "query": "DCP system reminder include or not", "expectedSessionId": "ses_22e8273daffe9mZ0ggl6yGiMh7", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "DCP compress prompt — vague", "query": "compression nag prompt model ignores", "expectedSessionId": "ses_22e8273daffe9mZ0ggl6yGiMh7", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "DCP compress prompt — opinion", "query": "useful to include compress reminder", "expectedSessionId": "ses_22e8273daffe9mZ0ggl6yGiMh7", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "LiteLLM coding group keys — verbatim", "query": "coding group members cannot create virtual keys", "expectedSessionId": "ses_1c4d65104ffeLl5v0q6fG05PFo", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "LiteLLM coding group keys — title", "query": "LiteLLM key roles clarification", "expectedSessionId": "ses_1c4d65104ffeLl5v0q6fG05PFo", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "LiteLLM coding group keys — paraphrase", "query": "users cannot create virtual keys permission", "expectedSessionId": "ses_1c4d65104ffeLl5v0q6fG05PFo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "LiteLLM coding group keys — vague", "query": "team members no permissions virtual key creation", "expectedSessionId": "ses_1c4d65104ffeLl5v0q6fG05PFo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "LiteLLM coding group keys — concept", "query": "LiteLLM RBAC team key creation", "expectedSessionId": "ses_1c4d65104ffeLl5v0q6fG05PFo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "AI Hub launch UI — title", "query": "launch UI smoke test AI hub", "expectedSessionId": "ses_22a66a9b5ffe9Rlxlf2Jd33r7R", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "AI Hub launch UI — pty error", "query": "AI hub clean local stack frontend crashed", "expectedSessionId": "ses_22a66a9b5ffe9Rlxlf2Jd33r7R", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "AI Hub launch UI — exit code", "query": "frontend.1 stopped rc -15 overmind", "expectedSessionId": "ses_22a66a9b5ffe9Rlxlf2Jd33r7R", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "AI Hub launch UI — vague", "query": "AI hub local dev stack startup failure", "expectedSessionId": "ses_22a66a9b5ffe9Rlxlf2Jd33r7R", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "AI Hub launch UI — keyword", "query": "AI hub smoke test launch", "expectedSessionId": "ses_22a66a9b5ffe9Rlxlf2Jd33r7R", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "LiteLLM cluster move — title", "query": "move LiteLLM to internal cluster", "expectedSessionId": "ses_13464bfcfffeOGqvV3FeQB6be8", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "LiteLLM cluster move — pg_restore", "query": "pg_restore errors ignored on restore", "expectedSessionId": "ses_13464bfcfffeOGqvV3FeQB6be8", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "LiteLLM cluster move — dump restore", "query": "dump test LiteLLM database restore target", "expectedSessionId": "ses_13464bfcfffeOGqvV3FeQB6be8", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "LiteLLM cluster move — concept", "query": "migrate LiteLLM postgres internal cluster", "expectedSessionId": "ses_13464bfcfffeOGqvV3FeQB6be8", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "LiteLLM cluster move — vague", "query": "LiteLLM database backup restore", "expectedSessionId": "ses_13464bfcfffeOGqvV3FeQB6be8", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "Adaptive thinking — title", "query": "adaptive thinking param translation logic", "expectedSessionId": "ses_20c2a79a2ffer5GAsM3EQvREuX", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "Adaptive thinking — LLM arena", "query": "LLM arena GPT 5.5 LiteLLM vs OpenAI direct", "expectedSessionId": "ses_20c2a79a2ffer5GAsM3EQvREuX", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Adaptive thinking — comparison tests", "query": "comparison tests opencode teamviewer plugin gpt 5.5", "expectedSessionId": "ses_20c2a79a2ffer5GAsM3EQvREuX", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Adaptive thinking — DZS quota", "query": "DZS quota 3000 gpt 5.5", "expectedSessionId": "ses_20c2a79a2ffer5GAsM3EQvREuX", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Adaptive thinking — speed compare", "query": "speed comparison litellm proxy direct openai", "expectedSessionId": "ses_20c2a79a2ffer5GAsM3EQvREuX", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "GPT-5.5 Europe Global — title", "query": "GPT 5.5 Europe vs Global rollout tradeoffs", "expectedSessionId": "ses_1fc42915bffeY3QhenJo1h3Tk9", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "GPT-5.5 Europe Global — verbatim", "query": "rollout proposal latency compliance rollback", "expectedSessionId": "ses_1fc42915bffeY3QhenJo1h3Tk9", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "GPT-5.5 Europe Global — blast radius", "query": "operator blast radius rollout", "expectedSessionId": "ses_1fc42915bffeY3QhenJo1h3Tk9", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "GPT-5.5 Europe Global — concept", "query": "Europe Global tradeoffs gpt deployment", "expectedSessionId": "ses_1fc42915bffeY3QhenJo1h3Tk9", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "GPT-5.5 Europe Global — vague", "query": "GPT regional deployment compliance review", "expectedSessionId": "ses_1fc42915bffeY3QhenJo1h3Tk9", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "rq master/slave — title", "query": "rq master slave acquire issue", "expectedSessionId": "ses_19bd26522ffepzRhy5Q1MDwdoq", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "rq master/slave — verbatim", "query": "master spawn browser fetch tokens acquire", "expectedSessionId": "ses_19bd26522ffepzRhy5Q1MDwdoq", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "rq master/slave — chrome ext", "query": "no chrome extension connected acquire", "expectedSessionId": "ses_19bd26522ffepzRhy5Q1MDwdoq", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "rq master/slave — moltbot", "query": "moltbot acquire spawn browser tokens", "expectedSessionId": "ses_19bd26522ffepzRhy5Q1MDwdoq", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "rq master/slave — vague", "query": "openclaw acquire master spawn browser", "expectedSessionId": "ses_19bd26522ffepzRhy5Q1MDwdoq", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "Parallel validation log — title", "query": "fix parallel validation log reporting", "expectedSessionId": "ses_21a90bbd7ffeaGBVe26lm98bUo", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "Parallel validation log — hover", "query": "handle hover state ugly redesign", "expectedSessionId": "ses_21a90bbd7ffeaGBVe26lm98bUo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Parallel validation log — verbatim", "query": "base look for the handle is good", "expectedSessionId": "ses_21a90bbd7ffeaGBVe26lm98bUo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Parallel validation log — vague", "query": "drag handle hover style suggestion", "expectedSessionId": "ses_21a90bbd7ffeaGBVe26lm98bUo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Parallel validation log — concept", "query": "validation parallel logs ui handle", "expectedSessionId": "ses_21a90bbd7ffeaGBVe26lm98bUo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "Azure quota gpt-5.4 DZS — title", "query": "Azure quota request gpt 5.4 Data Zone Standard", "expectedSessionId": "ses_216883dd3ffehW546XK24L82Xa", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "Azure quota gpt-5.4 DZS — skill", "query": "document in managing teamviewer ai providers skill outstanding", "expectedSessionId": "ses_216883dd3ffehW546XK24L82Xa", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Azure quota gpt-5.4 DZS — concept", "query": "DZS quota request gpt 5.4 approval", "expectedSessionId": "ses_216883dd3ffehW546XK24L82Xa", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Azure quota gpt-5.4 DZS — vague", "query": "Azure AI Foundry quota increase 5.4", "expectedSessionId": "ses_216883dd3ffehW546XK24L82Xa", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Azure quota gpt-5.4 DZS — fork", "query": "data zone standard quota fork session", "expectedSessionId": "ses_216883dd3ffehW546XK24L82Xa", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "tmux idle (research) — title", "query": "explore opencode sessions subagent tmux", "expectedSessionId": "ses_22e5c0696ffezUwxZKtHCcA0it", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "tmux idle (research) — anomalyco", "query": "explore anomalyco opencode clone tmux idle", "expectedSessionId": "ses_22e5c0696ffezUwxZKtHCcA0it", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "tmux idle (research) — verbatim", "query": "tmux hotkey cycle idle opencode sessions most recent", "expectedSessionId": "ses_22e5c0696ffezUwxZKtHCcA0it", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "tmux idle (research) — concept", "query": "opencode session state idle busy hooks", "expectedSessionId": "ses_22e5c0696ffezUwxZKtHCcA0it", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "tmux idle (research) — vague", "query": "exploration report opencode session metadata", "expectedSessionId": "ses_22e5c0696ffezUwxZKtHCcA0it", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "MR rebase onto main — title", "query": "MR rebase onto latest main", "expectedSessionId": "ses_22bf81525ffePy6hbJwGQxuP5d", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "MR rebase onto main — instance", "query": "one instance sufficient for production", "expectedSessionId": "ses_22bf81525ffePy6hbJwGQxuP5d", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "MR rebase onto main — spin up", "query": "spin up one instance per run scaling", "expectedSessionId": "ses_22bf81525ffePy6hbJwGQxuP5d", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "MR rebase onto main — vague", "query": "production scaling single instance runs", "expectedSessionId": "ses_22bf81525ffePy6hbJwGQxuP5d", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "MR rebase onto main — concept", "query": "merge request rebase main parallel runs", "expectedSessionId": "ses_22bf81525ffePy6hbJwGQxuP5d", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "tmux idle (impl) — title", "query": "tmux hotkey cycling idle opencode sessions implementation", "expectedSessionId": "ses_22e5c53a9ffetpZor1347Vnwmb", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "tmux idle (impl) — park", "query": "tmux park window idle sessions split unpark", "expectedSessionId": "ses_22e5c53a9ffetpZor1347Vnwmb", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "tmux idle (impl) — verbatim", "query": "split window unpark new session tmux", "expectedSessionId": "ses_22e5c53a9ffetpZor1347Vnwmb", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "tmux idle (impl) — concept", "query": "idle session parking tmux window", "expectedSessionId": "ses_22e5c53a9ffetpZor1347Vnwmb", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "tmux idle (impl) — vague", "query": "tmux cycle idle opencode parking", "expectedSessionId": "ses_22e5c53a9ffetpZor1347Vnwmb", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "CachyOS PC setup — title", "query": "CachyOS new PC setup", "expectedSessionId": "ses_2148c76a9ffeZuWSLyO1hz7vXn", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "CachyOS PC setup — wipe", "query": "wipe C drive ntfs backup dual boot", "expectedSessionId": "ses_2148c76a9ffeZuWSLyO1hz7vXn", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "CachyOS PC setup — install", "query": "Linux install new desktop 2tb drives", "expectedSessionId": "ses_2148c76a9ffeZuWSLyO1hz7vXn", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "CachyOS PC setup — backup drives", "query": "internal external hdd backup before install", "expectedSessionId": "ses_2148c76a9ffeZuWSLyO1hz7vXn", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "CachyOS PC setup — decision", "query": "decided against dual boot windows linux", "expectedSessionId": "ses_2148c76a9ffeZuWSLyO1hz7vXn", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "ASCII diagram snippet — title", "query": "ASCII architecture diagram snippet", "expectedSessionId": "ses_22e30903affeE2d8BD0aTPo5B2", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "ASCII diagram snippet — box drawing", "query": "box drawing characters diagram snippet", "expectedSessionId": "ses_22e30903affeE2d8BD0aTPo5B2", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "ASCII diagram snippet — verbatim", "query": "add a snippet ascii", "expectedSessionId": "ses_22e30903affeE2d8BD0aTPo5B2", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "ASCII diagram snippet — vague", "query": "snippet for architecture diagram proposal", "expectedSessionId": "ses_22e30903affeE2d8BD0aTPo5B2", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "ASCII diagram snippet — concept", "query": "ascii art snippet for diagrams", "expectedSessionId": "ses_22e30903affeE2d8BD0aTPo5B2", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "vMix WebRTC — title", "query": "vMix WebRTC stream interception", "expectedSessionId": "ses_18c289671ffeggfm8Qy16y7LlD", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "vMix WebRTC — livecall bot", "query": "livecall answer bot join url server side audio", "expectedSessionId": "ses_18c289671ffeggfm8Qy16y7LlD", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "vMix WebRTC — vague", "query": "server side audio capture meeting from url", "expectedSessionId": "ses_18c289671ffeggfm8Qy16y7LlD", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "vMix WebRTC — concept", "query": "join meeting from URL without browser audio", "expectedSessionId": "ses_18c289671ffeggfm8Qy16y7LlD", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "vMix WebRTC — paraphrase", "query": "webrtc audio interception livecall server", "expectedSessionId": "ses_18c289671ffeggfm8Qy16y7LlD", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "input.md eval — title", "query": "input.md first line output.md test", "expectedSessionId": "ses_215838e10ffeiJXzNXexetSckB", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "input.md eval — TOOLUSE_OK", "query": "TOOLUSE_OK output md test", "expectedSessionId": "ses_215838e10ffeiJXzNXexetSckB", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "input.md eval — concept", "query": "tool use forcing eval prompt", "expectedSessionId": "ses_215838e10ffeiJXzNXexetSckB", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "input.md eval — verbatim", "query": "read input md write output md eval", "expectedSessionId": "ses_215838e10ffeiJXzNXexetSckB", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "input.md eval — vague", "query": "first non empty line eval test", "expectedSessionId": "ses_215838e10ffeiJXzNXexetSckB", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "Rollout risk eval — title", "query": "production rollout risk analysis", "expectedSessionId": "ses_18cbe6f7fffeXkGtjljxQL4IYp", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "Rollout risk eval — verbatim", "query": "risky rollout latency failure domains rollback", "expectedSessionId": "ses_18cbe6f7fffeXkGtjljxQL4IYp", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Rollout risk eval — auditability", "query": "auditability user confusion rollout", "expectedSessionId": "ses_18cbe6f7fffeXkGtjljxQL4IYp", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Rollout risk eval — bullets", "query": "4 bullets recommendation rollout eval", "expectedSessionId": "ses_18cbe6f7fffeXkGtjljxQL4IYp", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "Rollout risk eval — concept", "query": "rollout risk eval prompt analysis", "expectedSessionId": "ses_18cbe6f7fffeXkGtjljxQL4IYp", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "KPI glossary worktree — title", "query": "KPI Reviewer glossary worktree setup", "expectedSessionId": "ses_1c0ec93dbffeLgOT2nGnXCP2b0", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "KPI glossary worktree — detection mode", "query": "livecall glossary detection mode utterance", "expectedSessionId": "ses_1c0ec93dbffeLgOT2nGnXCP2b0", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "KPI glossary worktree — shareholder", "query": "shareholder meeting glossary entry", "expectedSessionId": "ses_1c0ec93dbffeLgOT2nGnXCP2b0", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "KPI glossary worktree — path", "query": "docs livecall glossary md detection mode", "expectedSessionId": "ses_1c0ec93dbffeLgOT2nGnXCP2b0", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "KPI glossary worktree — rename", "query": "meeting type to detection mode rename", "expectedSessionId": "ses_1c0ec93dbffeLgOT2nGnXCP2b0", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+
+    { "name": "TV logo image — title", "query": "TeamViewer logo image description", "expectedSessionId": "ses_1e0eb771bffetUcH6pO9jwfheo", "kind": "must-top-3", "maxRank": 3, "maxFalsePositivesBeforeHit": 2 },
+    { "name": "TV logo image — describe", "query": "describe TeamViewer logo png", "expectedSessionId": "ses_1e0eb771bffetUcH6pO9jwfheo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "TV logo image — fixture", "query": "teamviewer-logo.png fixture file", "expectedSessionId": "ses_1e0eb771bffetUcH6pO9jwfheo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "TV logo image — plugin", "query": "teamviewer plugin logo image fixture", "expectedSessionId": "ses_1e0eb771bffetUcH6pO9jwfheo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 },
+    { "name": "TV logo image — vague", "query": "image description of TV logo", "expectedSessionId": "ses_1e0eb771bffetUcH6pO9jwfheo", "kind": "known-hard-paraphrase", "maxRank": 5, "maxFalsePositivesBeforeHit": 4 }
+  ]
+}
