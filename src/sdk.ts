@@ -101,6 +101,11 @@ export class OpenCodeRecall {
     options: RecallSearchOptions = {},
   ): Promise<RecallSearchResult> {
     const searchOptions = normalizeSearchOptions(options)
+
+    if (isBlankQuery(query)) {
+      return { hits: this.#history.recent(searchOptions).map(toSearchHit) }
+    }
+
     const lexicalEnabled = options.lexical !== false
     const semanticEnabled = options.semantic !== false
     const syncResult =
@@ -185,6 +190,10 @@ function normalizeSearchOptions(options: RecallSearchOptions): SearchOptions {
     ...(options.directory === undefined ? {} : { directory: options.directory }),
     ...(excluded === undefined ? {} : { excludeSessionId: excluded }),
   }
+}
+
+function isBlankQuery(query: string): boolean {
+  return query.trim().length === 0
 }
 
 function excludedSessionId(options: RecallSearchOptions): string | undefined {

@@ -534,6 +534,40 @@ describe('library sdk', () => {
     }
   })
 
+  test('searchHistory returns recent filtered history for an empty query', async () => {
+    const historyPath = `/tmp/opencode-recall-sdk-recent-${crypto.randomUUID()}.db`
+    const sidecarPath = `/tmp/opencode-recall-sdk-recent-sidecar-${crypto.randomUUID()}.db`
+    const db = new Database(historyPath)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(db, 'ses_old', 'Old SDK work', 'msg_old', 'part_old', 1)
+      insertTextPart(db, 'ses_recent', 'Recent SDK work', 'msg_recent', 'part_recent', 3)
+      insertTextPart(db, 'ses_current', 'Current SDK work', 'msg_current', 'part_current', 4)
+
+      const result = await searchHistory('   ', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        embeddingProvider: new ThrowingEmbeddingProvider(),
+        limit: 5,
+        after: 2,
+        excludeSessionId: 'ses_current',
+      })
+
+      expect(result.sync).toBeUndefined()
+      expect(result.hits.map((hit) => hit.sessionId)).toEqual(['ses_recent'])
+      expect(result.hits[0]?.cursor).toBe('msg_recent')
+    } finally {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
+    }
+  })
+
   test('OpenCodeRecall reads normalized transcript windows', () => {
     const historyPath = `/tmp/opencode-recall-sdk-read-${crypto.randomUUID()}.db`
     const sidecarPath = `/tmp/opencode-recall-sdk-read-sidecar-${crypto.randomUUID()}.db`
@@ -583,6 +617,14 @@ class ConstantEmbeddingProvider implements EmbeddingProvider {
 
   public embed(texts: readonly string[]): Promise<readonly Float32Array[]> {
     return Promise.resolve(texts.map(() => new Float32Array([1, 0, 0])))
+  }
+}
+
+class ThrowingEmbeddingProvider implements EmbeddingProvider {
+  public readonly model = 'throwing-test-model'
+
+  public embed(): Promise<readonly Float32Array[]> {
+    throw new Error('Empty query search must not use embeddings')
   }
 }
 

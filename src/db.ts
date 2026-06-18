@@ -180,6 +180,45 @@ export class HistoryDatabase {
     return rows
   }
 
+  public recent(options: SearchOptions): SearchRow[] {
+    const conditions = [
+      "json_extract(p.data, '$.type') = 'text'",
+      "json_extract(p.data, '$.text') is not null",
+      ...(options.after === undefined ? [] : ['m.time_created >= ?']),
+      ...(options.before === undefined ? [] : ['m.time_created <= ?']),
+      ...(options.directory === undefined ? [] : ['s.directory = ?']),
+      ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
+    ].join(' and ')
+    const params = [
+      ...(options.after === undefined ? [] : [options.after]),
+      ...(options.before === undefined ? [] : [options.before]),
+      ...(options.directory === undefined ? [] : [options.directory]),
+      ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
+      options.limit,
+    ]
+
+    return this.#db
+      .query<SearchRow, (string | number)[]>(`
+        select
+          s.id as sessionId,
+          s.title as sessionTitle,
+          s.directory as directory,
+          m.id as messageId,
+          p.id as partId,
+          json_extract(m.data, '$.role') as role,
+          m.time_created as timeCreated,
+          json_extract(p.data, '$.text') as text,
+          'text' as source
+        from part p
+        join message m on m.id = p.message_id
+        join session s on s.id = p.session_id
+        where ${conditions}
+        order by m.time_created desc, p.id desc
+        limit ?
+      `)
+      .all(...params)
+  }
+
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
     const changedCondition =
       since === undefined

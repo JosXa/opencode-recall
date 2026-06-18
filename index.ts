@@ -36,7 +36,7 @@ export const RecallPlugin: Plugin = async () => {
       [HISTORY_SEARCH_COMMAND]: tool({
         description: 'Recall OpenCode history.',
         args: {
-          q: tool.schema.string().describe('Search query.').optional(),
+          q: tool.schema.string().describe('Recall query. Empty=recent.').optional(),
           n: tool.schema.number().describe(`Max hits. Default ${DEFAULT_SEARCH_LIMIT}.`).optional(),
           directory: tool.schema.string().describe('Session directory.').optional(),
           includeCurrentSession: tool.schema
@@ -47,11 +47,7 @@ export const RecallPlugin: Plugin = async () => {
           before: tool.schema.string().describe('Created before ISO date/time.').optional(),
         },
         async execute(args, context) {
-          const query = args.q
-
-          if (query === undefined || query.length === 0) {
-            throw new Error('history_search requires q')
-          }
+          const query = args.q ?? ''
 
           const includeCurrentSession = args.includeCurrentSession === true
           const before = optionalDateFilterValue('before', args.before)
@@ -66,6 +62,10 @@ export const RecallPlugin: Plugin = async () => {
           const sidecar = new RecallSidecarIndex()
 
           try {
+            if (query.trim().length === 0) {
+              return formatSearchResults(db.recent(options))
+            }
+
             const provider = new OllamaEmbeddingProvider()
             const syncResult = await sidecar.sync(
               (since) => db.readTextPartsForIndex(since),
