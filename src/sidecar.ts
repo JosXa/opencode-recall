@@ -1,12 +1,12 @@
-import { Database } from 'bun:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import { loadConfig } from './config'
-import type { IndexSourceRow, SearchOptions, SearchRow } from './db'
-import type { EmbeddingProvider } from './embedding'
-import { LexicalIndex } from './lexical-index'
+import { loadConfig } from './config.js'
+import type { IndexSourceRow, SearchOptions, SearchRow } from './db.js'
+import type { EmbeddingProvider } from './embedding.js'
+import { LexicalIndex } from './lexical-index.js'
+import { Database } from './sqlite.js'
 
 const INDEX_SCHEMA_VERSION = '2'
 const SYNC_OVERLAP_MS = 30 * 60 * 1000
@@ -150,8 +150,8 @@ export class RecallSidecarIndex {
     }
   }
 
-  // Bun's `Database.transaction(fn)` returns a callable that re-enters via
-  // begin/commit. We use it inside LexicalIndex so an external sync is enough.
+  // LexicalIndex owns nested transactions, so the semantic path keeps its sync
+  // steps explicit instead of wrapping the whole method in another transaction.
   public syncLexicalOnly(
     sourceRows: (since: number | undefined) => readonly IndexSourceRow[],
     sourcePartIds?: () => readonly string[],

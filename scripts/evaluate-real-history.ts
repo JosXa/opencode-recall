@@ -1,9 +1,9 @@
 import { rmSync } from 'node:fs'
 
-import { HistoryDatabase } from '../src/db'
-import { OllamaEmbeddingProvider } from '../src/embedding'
-import { rankSearchRows } from '../src/search'
-import { RecallSidecarIndex } from '../src/sidecar'
+import { HistoryDatabase } from '../src/db.js'
+import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { rankSearchRows } from '../src/search.js'
+import { RecallSidecarIndex } from '../src/sidecar.js'
 
 type RealHistoryCaseKind = 'known-hard-paraphrase' | 'must-top-1' | 'must-top-3'
 

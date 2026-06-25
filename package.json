@@ -3,6 +3,7 @@
   "version": "0.3.0",
   "description": "OpenCode plugin that adds semantic + lexical recall over your local session history, with cursor-paginated ChatML transcript reads.",
   "type": "module",
+  "packageManager": "pnpm@11.1.2",
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,7 +22,7 @@
     "provenance": true
   },
   "engines": {
-    "bun": ">=1.0.0"
+    "node": ">=22.0.0"
   },
   "keywords": [
     "opencode",
@@ -45,17 +46,17 @@
   },
   "homepage": "https://github.com/JosXa/opencode-recall#readme",
   "scripts": {
-    "clean": "rm -rf dist",
-    "build": "bun run clean && tsc -p tsconfig.build.json",
-    "test": "bun test",
-    "eval:real-history": "bun scripts/evaluate-real-history.ts",
-    "eval:embeddings": "bun scripts/evaluate-embedding-models.ts",
+    "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "eval:real-history": "tsx scripts/evaluate-real-history.ts",
+    "eval:embeddings": "tsx scripts/evaluate-embedding-models.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
     "ai:check": "biome check --write --error-on-warnings . && tsgo --noEmit",
     "prepare": "husky",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "pnpm run build"
   },
   "files": [
     "dist",
@@ -65,13 +66,18 @@
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.0.0"
   },
+  "dependencies": {
+    "better-sqlite3": "latest"
+  },
   "devDependencies": {
-    "@biomejs/biome": "latest",
+    "@biomejs/biome": "2.4.15",
     "@opencode-ai/plugin": "latest",
-    "@types/bun": "latest",
+    "@types/better-sqlite3": "latest",
     "@types/node": "latest",
     "@typescript/native-preview": "latest",
     "husky": "latest",
-    "typescript": "latest"
+    "tsx": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
   }
 }

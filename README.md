@@ -71,7 +71,7 @@ This installs the package and wires it into your global OpenCode config.
 <summary>Manual installation</summary>
 
 ```sh
-bun add -d @josxa/opencode-recall
+pnpm add -D @josxa/opencode-recall
 ```
 
 Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json`:
@@ -161,7 +161,7 @@ Most users never need to edit it. Open it when your OpenCode database lives some
 
 Environment variables still work as overrides for CI, MCP, and temporary experiments: `OPENCODE_DB_PATH`, `OPENCODE_RECALL_DB_PATH`, `OPENCODE_RECALL_OLLAMA_URL`, and `OPENCODE_RECALL_EMBED_MODEL`.
 
-Run `bun run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
+Run `pnpm run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
 
 ## Tool reference
 
@@ -251,11 +251,11 @@ Tool calls, patches, and file attachments render as structured tags with explici
 ## Development
 
 ```sh
-bun install
-bun run ai:check           # biome + tsgo type-check
-bun test                   # deterministic ranking + cursor tests
-bun run eval:real-history  # regression suite against your local opencode.db
-bun run build              # emits dist/
+pnpm install
+pnpm run ai:check           # biome + tsgo type-check
+pnpm test                   # deterministic ranking + cursor tests
+pnpm run eval:real-history  # regression suite against your local opencode.db
+pnpm run build              # emits dist/
 ```
 
 Code quality is enforced by `biome` and `tsgo --noEmit`. See [`AGENTS.md`](./AGENTS.md) for the style guide.

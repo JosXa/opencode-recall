@@ -1,8 +1,8 @@
 import { rmSync } from 'node:fs'
 
-import { HistoryDatabase, type SearchRow } from '../src/db'
-import { OllamaEmbeddingProvider } from '../src/embedding'
-import { RecallSidecarIndex, type SyncResult } from '../src/sidecar'
+import { HistoryDatabase, type SearchRow } from '../src/db.js'
+import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { RecallSidecarIndex, type SyncResult } from '../src/sidecar.js'
 
 const DEFAULT_MODELS = ['mxbai-embed-large', 'nomic-embed-text', 'all-minilm']
 const MODEL_NAMES = process.argv.slice(2).length === 0 ? DEFAULT_MODELS : process.argv.slice(2)

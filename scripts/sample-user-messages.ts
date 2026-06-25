@@ -3,11 +3,12 @@
  * id, title, and first ~500 chars of message text. Used to hand-design realistic
  * queries for the broader-search benchmark.
  *
- * Run with: bun scripts/sample-user-messages.ts [seed]
+ * Run with: pnpm exec tsx scripts/sample-user-messages.ts [seed]
  */
-import { Database } from 'bun:sqlite'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+
+import { Database } from '../src/sqlite.js'
 
 const DB_PATH = process.env['OPENCODE_DB_PATH'] ?? join(homedir(), '.local/share/opencode/opencode.db')
 const SEED = Number.parseInt(process.argv[2] ?? '42', 10)

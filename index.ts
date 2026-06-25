@@ -1,29 +1,33 @@
+import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin'
 
-import { ChatmlRenderer } from './src/chatml-renderer'
+import { ChatmlRenderer } from './src/chatml-renderer.js'
 import {
   HISTORY_READ_COMMAND,
   HISTORY_SEARCH_COMMAND,
   RECALL_AGENT_DESCRIPTION,
   RECALL_AGENT_NAME,
-} from './src/commands'
-import { decodeCursor } from './src/cursor'
-import { HistoryDatabase } from './src/db'
-import { OllamaEmbeddingProvider } from './src/embedding'
-import { normalizeWindow } from './src/normalizer'
-import { parseReadMode } from './src/read-mode'
-import { formatSearchResults, rankSearchRows } from './src/search'
-import { RecallSidecarIndex } from './src/sidecar'
+} from './src/commands.js'
+import { decodeCursor } from './src/cursor.js'
+import { HistoryDatabase } from './src/db.js'
+import { OllamaEmbeddingProvider } from './src/embedding.js'
+import { normalizeWindow } from './src/normalizer.js'
+import { parseReadMode } from './src/read-mode.js'
+import { formatSearchResults, rankSearchRows } from './src/search.js'
+import { RecallSidecarIndex } from './src/sidecar.js'
 
 const DEFAULT_SEARCH_LIMIT = 8
 const MAX_SEARCH_LIMIT = 25
 const DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS = 30_000
 const DEFAULT_READ_LIMIT = 12
 const MAX_READ_LIMIT = 50
+const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
 const RECALL_AGENT_PROMPT_PATHS = [
-  `${import.meta.dir}/prompts/recall-agent-prompt.txt`,
-  `${import.meta.dir}/../prompts/recall-agent-prompt.txt`,
+  join(PACKAGE_DIR, 'prompts/recall-agent-prompt.txt'),
+  join(PACKAGE_DIR, '../prompts/recall-agent-prompt.txt'),
 ] as const
 
 type PermissionAction = 'ask' | 'allow' | 'deny'
@@ -159,14 +163,21 @@ export const RecallPlugin: Plugin = async () => {
 
 async function loadRecallAgentPrompt(): Promise<string> {
   for (const path of RECALL_AGENT_PROMPT_PATHS) {
-    const file = Bun.file(path)
-
-    if (await file.exists()) {
-      return file.text()
+    try {
+      return await readFile(path, 'utf-8')
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        continue
+      }
+      throw error
     }
   }
 
   throw new Error('Cannot load recall-agent-prompt.txt from package prompts directory')
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
 
 function recallAgentPermission(): PermissionConfig {

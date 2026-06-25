@@ -12,10 +12,10 @@
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "moduleDetection": "force",
-    "types": ["bun", "node"],
+    "types": ["node", "vitest/globals"],
     "skipLibCheck": true,
     "noEmit": true
   },

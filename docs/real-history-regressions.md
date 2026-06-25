@@ -49,8 +49,8 @@ The implementation now combines lexical DB search with semantic sidecar search, 
 Run the regression suite with:
 
 ```sh
-bun test
-bun run eval:real-history
+pnpm test
+pnpm run eval:real-history
 ```
 
 The real-history evaluator rebuilds an isolated temporary sidecar index and fails non-zero if any expected session misses its rank/noise target.

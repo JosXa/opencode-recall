@@ -238,7 +238,7 @@ const DEFAULT_CONFIG_CONTENT = `{
     // "ollamaUrl": "http://127.0.0.1:11434",
 
     // Embedding model. Try "mxbai-embed-large" for higher quality at the cost
-    // of speed and memory. Run \`bun run eval:embeddings\` to compare models
+    // of speed and memory. Run \`pnpm run eval:embeddings\` to compare models
     // against the regression cases in docs/real-history-regressions.md.
     // Default: all-minilm
     // "model": "all-minilm"

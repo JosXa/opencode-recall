@@ -1,4 +1,6 @@
-import { loadConfig } from './config'
+import { type ChildProcess, spawn } from 'node:child_process'
+
+import { loadConfig } from './config.js'
 
 export interface EmbeddingProvider {
   readonly model: string
@@ -33,7 +35,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   public readonly model: string
   readonly #baseUrl: string
   #ready: Promise<void> | undefined
-  #serverProcess: Bun.Subprocess | undefined
+  #serverProcess: ChildProcess | undefined
 
   public constructor(options: OllamaEmbeddingProviderOptions = {}) {
     const config =
@@ -101,11 +103,9 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   #startServer(): void {
     try {
-      this.#serverProcess = Bun.spawn({
-        cmd: ['ollama', 'serve'],
+      this.#serverProcess = spawn('ollama', ['serve'], {
         env: { ...process.env, OLLAMA_HOST: ollamaHost(this.#baseUrl) },
-        stdout: 'ignore',
-        stderr: 'ignore',
+        stdio: 'ignore',
       })
       this.#serverProcess.unref()
     } catch (error) {
@@ -119,7 +119,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     const deadline = Date.now() + OLLAMA_STARTUP_TIMEOUT_MS
 
     while (Date.now() < deadline) {
-      await Bun.sleep(OLLAMA_STARTUP_POLL_MS)
+      await sleep(OLLAMA_STARTUP_POLL_MS)
 
       if (await this.#isServerReady()) {
         return true
@@ -214,6 +214,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       'Configure with <opencode-config>/recall.jsonc, or override with OPENCODE_RECALL_OLLAMA_URL and OPENCODE_RECALL_EMBED_MODEL.',
     ].join('\n')
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 async function parseEmbeddingResponse(response: Response): Promise<EmbeddingSuccess> {

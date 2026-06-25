@@ -3,7 +3,7 @@ import type {
   TranscriptMessage,
   TranscriptPart,
   TranscriptWindow,
-} from './transcript'
+} from './transcript.js'
 
 export class ChatmlRenderer implements HistoryRenderer<string> {
   public readonly format = 'chatml'

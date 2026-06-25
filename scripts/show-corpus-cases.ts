@@ -5,16 +5,18 @@
  *   - all 5 queries that target it
  * So a human can eyeball whether the queries are reasonable.
  */
-import { Database } from 'bun:sqlite'
+import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+
+import { Database } from '../src/sqlite.js'
 
 const DB_PATH = process.env['OPENCODE_DB_PATH'] ?? join(homedir(), '.local/share/opencode/opencode.db')
 
 type Case = { name: string; query: string; expectedSessionId: string }
 type Corpus = { cases: readonly Case[] }
 
-const corpus = (await Bun.file('scripts/random-corpus.json').json()) as Corpus
+const corpus = JSON.parse(await readFile('scripts/random-corpus.json', 'utf-8')) as Corpus
 
 const bySession = new Map<string, Case[]>()
 for (const c of corpus.cases) {

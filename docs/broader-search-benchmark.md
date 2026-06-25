@@ -8,15 +8,15 @@ Reproduce with:
 
 ```
 # 25 curated regression cases from docs/real-history-regressions.md
-bun scripts/evaluate-broader-search.ts
-bun scripts/evaluate-broader-search.ts --lexical-only
+pnpm exec tsx scripts/evaluate-broader-search.ts
+pnpm exec tsx scripts/evaluate-broader-search.ts --lexical-only
 
 # 100-query random corpus (5 queries × 20 randomly sampled user messages)
-bun scripts/evaluate-broader-search.ts --corpus scripts/random-corpus.json
-bun scripts/evaluate-broader-search.ts --corpus scripts/random-corpus.json --lexical-only
+pnpm exec tsx scripts/evaluate-broader-search.ts --corpus scripts/random-corpus.json
+pnpm exec tsx scripts/evaluate-broader-search.ts --corpus scripts/random-corpus.json --lexical-only
 
 # (Re-)sample 20 random user messages to design new queries against
-bun scripts/sample-user-messages.ts [seed]
+pnpm exec tsx scripts/sample-user-messages.ts [seed]
 ```
 
 ## Why per-session embeddings are a non-starter
@@ -83,7 +83,7 @@ motivated the original ranker.
 
 To check that the curated cases weren't cherry-picked, I built a second corpus:
 
-1. `bun scripts/sample-user-messages.ts 42` randomly picked **20 user messages**
+1. `pnpm exec tsx scripts/sample-user-messages.ts 42` randomly picked **20 user messages**
    (substantive prompts, 80–4000 chars, with `<system-reminder>`/tool-output
    noise filtered out) from the 7,274 eligible user messages in the local DB
    (seed=42 for reproducibility).

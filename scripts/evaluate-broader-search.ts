@@ -21,13 +21,14 @@
 // Output: aggregate Top-1/3/5, MRR, plus per-case rank table + pass/fail under the
 // existing maxRank/maxFalsePositive thresholds defined in evaluate-real-history.ts.
 
-import { Database } from 'bun:sqlite'
 import { rmSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 
-import { HistoryDatabase } from '../src/db'
-import { OllamaEmbeddingProvider } from '../src/embedding'
-import { rankSearchRows } from '../src/search'
-import { RecallSidecarIndex } from '../src/sidecar'
+import { HistoryDatabase } from '../src/db.js'
+import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { rankSearchRows } from '../src/search.js'
+import { RecallSidecarIndex } from '../src/sidecar.js'
+import { Database } from '../src/sqlite.js'
 
 type CaseKind = 'known-hard-paraphrase' | 'must-top-1' | 'must-top-3'
 
@@ -456,8 +457,7 @@ async function loadCorpus(): Promise<readonly RegressionCase[]> {
   if (idx === -1) return CASES
   const path = process.argv[idx + 1]
   if (path === undefined) throw new Error('--corpus requires a path argument')
-  const file = Bun.file(path)
-  const parsed = (await file.json()) as { cases: readonly RegressionCase[] }
+  const parsed = JSON.parse(await readFile(path, 'utf-8')) as { cases: readonly RegressionCase[] }
   if (!Array.isArray(parsed.cases) || parsed.cases.length === 0) {
     throw new Error(`corpus at ${path} has no .cases array`)
   }

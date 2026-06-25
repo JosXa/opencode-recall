@@ -1,10 +1,10 @@
 import { rmSync } from 'node:fs'
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'vitest'
 
-import type { IndexSourceRow } from '../src/db'
-import { OllamaEmbeddingProvider } from '../src/embedding'
-import { RecallSidecarIndex } from '../src/sidecar'
+import type { IndexSourceRow } from '../src/db.js'
+import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { RecallSidecarIndex } from '../src/sidecar.js'
 
 const REAL_OLLAMA_ENABLED = process.env['OPENCODE_RECALL_REAL_OLLAMA'] === '1'
 const realOllamaTest = REAL_OLLAMA_ENABLED ? test : test.skip

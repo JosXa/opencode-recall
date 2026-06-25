@@ -1,6 +1,6 @@
-import { encodeCursor } from './cursor'
-import type { SearchRow } from './db'
-import type { SyncResult } from './sidecar'
+import { encodeCursor } from './cursor.js'
+import type { SearchRow } from './db.js'
+import type { SyncResult } from './sidecar.js'
 
 const SYNC_NOTICE_THRESHOLD_MS = 5_000
 const MAX_RESULTS_PER_SESSION = 2

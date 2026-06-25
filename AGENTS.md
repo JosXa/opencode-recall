@@ -1,19 +1,19 @@
 # Project Notes
 
-ALWAYS use Bun. NEVER npm. Commands: `bun install`, `bun add`, `bun remove`, `bun run`, `bun test`.
+ALWAYS use pnpm with plain Node.js. NEVER use Bun. Commands: `pnpm install`, `pnpm add`, `pnpm remove`, `pnpm run`, `pnpm test`.
 
 - Keep changes small, typed, and direct. Avoid `any`, avoid avoidable `else`/`try`/`catch`, and do not add compatibility paths without a concrete need.
-- Run `bun run ai:check` before calling work done. Run `bun test` when behavior changes.
+- Run `pnpm run ai:check` before calling work done. Run `pnpm test` when behavior changes.
 - `history_read` cursors are exact values only: `msg_...`, `ses_...`, or values copied from search results / `<nav ...>` attributes. Never invent suffixes like `:10`.
 
-# Bun APIs
+# Node APIs
 
-MUST use Bun-native APIs over Node.js equivalents when practical:
+MUST use Node.js APIs over Bun APIs:
 
-- `Bun.file()`, `Bun.write()` instead of `node:fs`
-- `Bun.spawn()` instead of `node:child_process`
+- `node:fs` / `node:fs/promises` instead of `Bun.file()` / `Bun.write()`
+- `node:child_process` instead of `Bun.spawn()`
 
-Use `node:*` imports only when no Bun equivalent exists.
+Use `node:*` imports for Node built-ins. Do not introduce `bun:*` imports or global `Bun` APIs.
 
 # Release Workflow
 
@@ -43,11 +43,11 @@ git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z
 
 - Biome for formatting, linting, and import organization
 - `tsgo --noEmit` for type checking
-- Bun is the package manager and runtime for project scripts
+- pnpm is the package manager; Node.js is the runtime for project scripts
 
 ## Code Quality
 
-MUST run `bun run ai:check` after concluding any changes.
+MUST run `pnpm run ai:check` after concluding any changes.
 
 Any change we make must be tested thoroughly in OpenCode.
 
@@ -73,11 +73,11 @@ PREFER:
 
 - small direct functions over speculative abstractions
 - keeping logic in one function unless reusable or composable
-- Bun APIs where they are a clean fit
+- Node APIs and small typed wrappers where they are a clean fit
 
 # Pre-Commit Lint Check
 
-MUST run `bun run ai:check` before any git commit.
+MUST run `pnpm run ai:check` before any git commit.
 
 **Behavior:**
 

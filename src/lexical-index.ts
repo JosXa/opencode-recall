@@ -1,6 +1,5 @@
-import type { Database } from 'bun:sqlite'
-
-import type { IndexSourceRow, SearchOptions, SearchRow, SearchSource } from './db'
+import type { IndexSourceRow, SearchOptions, SearchRow, SearchSource } from './db.js'
+import type { Database } from './sqlite.js'
 
 const FTS_CANDIDATE_LIMIT = 200
 const RRF_K = 60

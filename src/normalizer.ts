@@ -1,6 +1,6 @@
-import { encodeCursor } from './cursor'
-import type { PartRow, WindowRows } from './db'
-import type { TranscriptMessage, TranscriptPart, TranscriptWindow } from './transcript'
+import { encodeCursor } from './cursor.js'
+import type { PartRow, WindowRows } from './db.js'
+import type { TranscriptMessage, TranscriptPart, TranscriptWindow } from './transcript.js'
 
 const MAX_TOOL_INPUT_CHARS = 2_000
 const MAX_TOOL_OUTPUT_CHARS = 6_000

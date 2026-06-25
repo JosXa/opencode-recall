@@ -1,6 +1,5 @@
-import { Database } from 'bun:sqlite'
-
-import { loadConfig } from './config'
+import { loadConfig } from './config.js'
+import { Database } from './sqlite.js'
 
 const WHITESPACE_REGEX = /\s+/u
 

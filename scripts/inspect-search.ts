@@ -1,7 +1,7 @@
-import { HistoryDatabase, type SearchRow } from '../src/db'
-import { OllamaEmbeddingProvider } from '../src/embedding'
-import { rankSearchRows } from '../src/search'
-import { RecallSidecarIndex } from '../src/sidecar'
+import { HistoryDatabase, type SearchRow } from '../src/db.js'
+import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { rankSearchRows } from '../src/search.js'
+import { RecallSidecarIndex } from '../src/sidecar.js'
 
 interface InspectOptions {
   readonly query: string
@@ -80,7 +80,7 @@ function parseArgs(args: readonly string[]): InspectOptions {
   const query = queryParts.join(' ').trim()
 
   if (query.length === 0) {
-    throw new Error('Usage: bun scripts/inspect-search.ts <query> [--limit 12]')
+    throw new Error('Usage: pnpm exec tsx scripts/inspect-search.ts <query> [--limit 12]')
   }
 
   return { query, limit, semanticLimit, lexicalLimit }

@@ -1,19 +1,19 @@
-import { describe, expect, test } from 'bun:test'
 import type { Config, PluginInput, ToolContext } from '@opencode-ai/plugin'
-import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { describe, expect, test } from 'vitest'
 
-import { RecallPlugin } from '../index'
-import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND, RECALL_AGENT_NAME } from '../src/commands'
-import { getConfigFilePath, loadConfig } from '../src/config'
-import { decodeCursor } from '../src/cursor'
-import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db'
-import type { EmbeddingProvider } from '../src/embedding'
-import { OllamaEmbeddingProvider } from '../src/embedding'
-import { FULL_MODE_RECOMMENDATION, parseReadMode } from '../src/read-mode'
-import { rankSearchRows } from '../src/search'
-import { OpenCodeRecall, searchHistory } from '../src/sdk'
-import { RecallSidecarIndex } from '../src/sidecar'
+import { RecallPlugin } from '../index.js'
+import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND, RECALL_AGENT_NAME } from '../src/commands.js'
+import { getConfigFilePath, loadConfig } from '../src/config.js'
+import { decodeCursor } from '../src/cursor.js'
+import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db.js'
+import type { EmbeddingProvider } from '../src/embedding.js'
+import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { FULL_MODE_RECOMMENDATION, parseReadMode } from '../src/read-mode.js'
+import { rankSearchRows } from '../src/search.js'
+import { OpenCodeRecall, searchHistory } from '../src/sdk.js'
+import { RecallSidecarIndex } from '../src/sidecar.js'
+import { Database } from '../src/sqlite.js'
 
 const BASE_ROW = {
   sessionId: 'ses_other',
@@ -630,7 +630,7 @@ describe('current session exclusion', () => {
 
 describe('library sdk', () => {
   test('root module stays plugin-only for file URL loading', async () => {
-    const root = await import('../index')
+    const root = await import('../index.js')
 
     expect(Object.keys(root).sort()).toEqual(['RecallPlugin', 'default'])
   })
