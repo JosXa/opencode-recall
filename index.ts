@@ -2,7 +2,12 @@ import type { Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin'
 
 import { ChatmlRenderer } from './src/chatml-renderer'
-import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND } from './src/commands'
+import {
+  HISTORY_READ_COMMAND,
+  HISTORY_SEARCH_COMMAND,
+  RECALL_AGENT_DESCRIPTION,
+  RECALL_AGENT_NAME,
+} from './src/commands'
 import { decodeCursor } from './src/cursor'
 import { HistoryDatabase } from './src/db'
 import { OllamaEmbeddingProvider } from './src/embedding'
@@ -16,8 +21,17 @@ const MAX_SEARCH_LIMIT = 25
 const DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS = 30_000
 const DEFAULT_READ_LIMIT = 12
 const MAX_READ_LIMIT = 50
+const RECALL_AGENT_PROMPT_PATHS = [
+  `${import.meta.dir}/prompts/recall-agent-prompt.txt`,
+  `${import.meta.dir}/../prompts/recall-agent-prompt.txt`,
+] as const
+
+type PermissionAction = 'ask' | 'allow' | 'deny'
+type PermissionConfig = Record<string, PermissionAction | Record<string, PermissionAction>>
 
 export const RecallPlugin: Plugin = async () => {
+  const recallAgentPrompt = await loadRecallAgentPrompt()
+
   return {
     config: async (config) => {
       config.command ??= {}
@@ -30,6 +44,15 @@ export const RecallPlugin: Plugin = async () => {
         description: 'Read a cursor-paginated ChatML window from OpenCode history',
         template: '',
       }
+
+      config.agent ??= {}
+      const recallAgent = {
+        description: RECALL_AGENT_DESCRIPTION,
+        mode: 'subagent',
+        prompt: recallAgentPrompt,
+        permission: recallAgentPermission(),
+      } as NonNullable<typeof config.agent>[string]
+      config.agent[RECALL_AGENT_NAME] = recallAgent
     },
 
     tool: {
@@ -47,6 +70,8 @@ export const RecallPlugin: Plugin = async () => {
           before: tool.schema.string().describe('Created before ISO date/time.').optional(),
         },
         async execute(args, context) {
+          assertRecallAgent(context.agent)
+
           const query = args.q ?? ''
 
           const includeCurrentSession = args.includeCurrentSession === true
@@ -101,7 +126,9 @@ export const RecallPlugin: Plugin = async () => {
             .describe(`Message limit (default ${DEFAULT_READ_LIMIT}).`)
             .optional(),
         },
-        async execute(args) {
+        async execute(args, context) {
+          assertRecallAgent(context.agent)
+
           const cursorValue = args.cursor
 
           if (cursorValue === undefined || cursorValue.length === 0) {
@@ -128,6 +155,34 @@ export const RecallPlugin: Plugin = async () => {
       }),
     },
   }
+}
+
+async function loadRecallAgentPrompt(): Promise<string> {
+  for (const path of RECALL_AGENT_PROMPT_PATHS) {
+    const file = Bun.file(path)
+
+    if (await file.exists()) {
+      return file.text()
+    }
+  }
+
+  throw new Error('Cannot load recall-agent-prompt.txt from package prompts directory')
+}
+
+function recallAgentPermission(): PermissionConfig {
+  return {
+    '*': 'deny',
+    [HISTORY_SEARCH_COMMAND]: 'allow',
+    [HISTORY_READ_COMMAND]: 'allow',
+  }
+}
+
+function assertRecallAgent(agent: string): void {
+  if (agent === RECALL_AGENT_NAME) {
+    return
+  }
+
+  throw new Error('OpenCode history tools are only available through the @recall subagent.')
 }
 
 function requiredSessionId(value: string | undefined): string {

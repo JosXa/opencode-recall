@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import type { Config, PluginInput, ToolContext } from '@opencode-ai/plugin'
 import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 
+import { RecallPlugin } from '../index'
+import { HISTORY_READ_COMMAND, HISTORY_SEARCH_COMMAND, RECALL_AGENT_NAME } from '../src/commands'
 import { getConfigFilePath, loadConfig } from '../src/config'
 import { decodeCursor } from '../src/cursor'
 import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db'
@@ -22,6 +25,44 @@ const BASE_ROW = {
   timeCreated: 1,
   text: 'generic mcp troubleshooting with no figma or azure registry context',
 } satisfies SearchRow
+
+describe('plugin recall subagent', () => {
+  test('registers a recall-only subagent with history tool permissions', async () => {
+    const plugin = await RecallPlugin(pluginInput())
+    const config: Config = {}
+
+    await plugin.config?.(config)
+
+    const recall = config.agent?.[RECALL_AGENT_NAME]
+    const permission = recall?.permission as unknown as Record<string, unknown>
+
+    expect(recall?.mode).toBe('subagent')
+    expect(recall?.description).toContain('Source-grounded')
+    expect(recall?.description).toContain('**Reinvoke** subagent for follow-ups/detail')
+    expect(recall?.description).toContain('starts out with fresh context window')
+    expect(recall?.description).not.toContain('source cursors')
+    expect(recall?.prompt).toContain('You do not inspect the live filesystem')
+    expect(recall?.prompt).toContain('did not verify current files')
+    expect(recall?.prompt).toContain('Do not report `msg_...` message ids')
+    expect(permission).toEqual({
+      '*': 'deny',
+      [HISTORY_SEARCH_COMMAND]: 'allow',
+      [HISTORY_READ_COMMAND]: 'allow',
+    })
+    expect(permission).not.toHaveProperty('read')
+  })
+
+  test('keeps history tools behind the recall subagent', async () => {
+    const plugin = await RecallPlugin(pluginInput())
+
+    await expect(
+      plugin.tool?.[HISTORY_SEARCH_COMMAND]?.execute({}, toolContext('build')),
+    ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
+    await expect(
+      plugin.tool?.[HISTORY_READ_COMMAND]?.execute({ cursor: 'ses_example' }, toolContext('build')),
+    ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
+  })
+})
 
 describe('config file loading', () => {
   test('auto-creates recall.jsonc at the OpenCode config base path', () => {
@@ -776,6 +817,33 @@ function removeSqliteFiles(path: string): void {
   rmSync(path, { force: true })
   rmSync(`${path}-shm`, { force: true })
   rmSync(`${path}-wal`, { force: true })
+}
+
+function pluginInput(): PluginInput {
+  return {
+    client: {},
+    project: {},
+    directory: '/projects/opencode-recall',
+    worktree: '/projects/opencode-recall',
+    experimental_workspace: { register() {} },
+    serverUrl: new URL('http://127.0.0.1:4096'),
+    $: {},
+  } as unknown as PluginInput
+}
+
+function toolContext(agent: string): ToolContext {
+  return {
+    sessionID: 'ses_current',
+    messageID: 'msg_current',
+    agent,
+    directory: '/projects/opencode-recall',
+    worktree: '/projects/opencode-recall',
+    abort: new AbortController().signal,
+    metadata() {},
+    ask() {
+      throw new Error('test tool context does not support permission prompts')
+    },
+  } as unknown as ToolContext
 }
 
 interface RecallEnvContext {

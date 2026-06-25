@@ -99,7 +99,19 @@ Lexical search still works without Ollama, but you lose paraphrase recall, which
 
 ## How to actually use it
 
-Recall is explicit. The agent searches when you ask it to. Some prompts that work well:
+Recall is explicit. Ask the dedicated subagent when you want old session context:
+
+```text
+@recall how did we set up trusted publishing last time?
+@recall find the session where we debugged recall lookup accuracy
+@recall what did we decide about the rate limiter design?
+```
+
+The `recall` subagent starts with fresh context, searches and reads past sessions, then returns only a concise answer to the parent agent. It reports useful source session ids, titles, and directories, but not internal `msg_...` cursors unless you explicitly ask for raw read anchors. That gives you the useful part of session-level querying without dumping raw transcript pages into the main conversation. If you ask a follow-up about the same recalled session, the parent should invoke `@recall` again instead of answering from memory.
+
+The subagent only checks OpenCode history. It does not read current files, run commands, or verify whether old session facts are still true.
+
+Some natural-language prompts that should trigger recall:
 
 - *"Recall how we set up the GitHub Actions release workflow."*
 - *"Did we ever debug the Postgres connection pool exhaustion? Find that conversation."*
@@ -107,7 +119,7 @@ Recall is explicit. The agent searches when you ask it to. Some prompts that wor
 - *"Search my history for anything about Figma MCP and Azure."*
 - *"What were the file names involved when we worked on the timeline component?"*
 
-The agent runs `history_search`, picks a promising hit, calls `history_read` to load the surrounding messages, and can page forward or back if more context is needed.
+The recall subagent runs `history_search`, picks a promising hit, calls `history_read` to load the surrounding messages, and can page forward or back if more context is needed.
 
 ## Configuration
 
@@ -153,7 +165,7 @@ Run `bun run eval:embeddings` to compare installed embedding models against the 
 
 ## Tool reference
 
-Recall exposes two tools to the agent.
+Recall exposes two history tools. They are intended to be called by the `recall` subagent, not by the main agent directly.
 
 <details>
 <summary><code>history_search</code>: return ranked hits for a query</summary>
