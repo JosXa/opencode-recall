@@ -32,6 +32,10 @@ export type HistoryWorkerRequest =
       readonly kind: 'read'
       readonly args: HistoryReadWorkerArgs
     }
+  | {
+      readonly kind: 'read-window'
+      readonly args: HistoryReadWorkerArgs
+    }
 
 export type HistoryWorkerResponse =
   | {

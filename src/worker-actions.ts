@@ -13,6 +13,7 @@ import {
   MAX_READ_LIMIT,
   MAX_SEARCH_LIMIT,
 } from './tool-defaults.js'
+import type { TranscriptWindow } from './transcript.js'
 import type { HistoryWorkerRequest } from './worker-protocol.js'
 
 export async function executeWorkerRequest(request: HistoryWorkerRequest): Promise<string> {
@@ -20,7 +21,13 @@ export async function executeWorkerRequest(request: HistoryWorkerRequest): Promi
     return executeHistorySearch(request)
   }
 
-  return executeHistoryRead(request)
+  const window = executeHistoryReadWindow(request)
+
+  if (request.kind === 'read-window') {
+    return JSON.stringify(window)
+  }
+
+  return new ChatmlRenderer().render(window)
 }
 
 async function executeHistorySearch(
@@ -82,9 +89,9 @@ async function executeHistorySearch(
   }
 }
 
-function executeHistoryRead(
-  request: Extract<HistoryWorkerRequest, { readonly kind: 'read' }>,
-): string {
+function executeHistoryReadWindow(
+  request: Extract<HistoryWorkerRequest, { readonly kind: 'read' | 'read-window' }>,
+): TranscriptWindow {
   const cursorValue = request.args.cursor
 
   if (cursorValue === undefined || cursorValue.length === 0) {
@@ -98,12 +105,11 @@ function executeHistoryRead(
 
   try {
     const readOptions = { mode, limit }
-    const window = normalizeWindow(
+    return normalizeWindow(
       cursor.messageId === undefined
         ? db.readWindowForSession(requiredSessionId(cursor.sessionId), readOptions)
         : db.readWindow(cursor.messageId, readOptions),
     )
-    return new ChatmlRenderer().render(window)
   } finally {
     db.close()
   }

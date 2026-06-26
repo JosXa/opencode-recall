@@ -10,15 +10,10 @@ import type {
   RecallSearchOptions,
   RecallSearchResult,
 } from './sdk-direct.js'
-import {
-  DirectOpenCodeRecall,
-  directReadHistoryWindow,
-  directRenderHistoryWindow,
-} from './sdk-direct.js'
 import type { HistorySearchResult } from './search.js'
 import type { SyncOptions, SyncResult } from './sidecar.js'
 import type { TranscriptWindow } from './transcript.js'
-import type { HistorySearchWorkerArgs } from './worker-protocol.js'
+import type { HistoryReadWorkerArgs, HistorySearchWorkerArgs } from './worker-protocol.js'
 
 export type { EmbeddingProvider, OllamaEmbeddingProviderOptions } from './embedding.js'
 export { OllamaEmbeddingProvider } from './embedding.js'
@@ -67,26 +62,15 @@ export class OpenCodeRecall {
   }
 
   public read(cursorValue: string, options: RecallReadOptions = {}): TranscriptWindow {
-    const recall = new DirectOpenCodeRecall(this.#options)
-
-    try {
-      return recall.read(cursorValue, options)
-    } finally {
-      recall.close()
-    }
+    return readHistoryWindow(cursorValue, { ...this.#options, ...options })
   }
 
   public render(cursorValue: string, options: RecallReadOptions = {}): string {
-    const recall = new DirectOpenCodeRecall(this.#options)
-
-    try {
-      return recall.render(cursorValue, options)
-    } finally {
-      recall.close()
-    }
+    return renderHistoryWindow(cursorValue, { ...this.#options, ...options })
   }
 
   async #direct() {
+    const { DirectOpenCodeRecall } = await import('./sdk-direct.js')
     const recall = new DirectOpenCodeRecall(this.#options)
 
     return {
@@ -155,26 +139,40 @@ export function readHistoryWindow(
   cursor: string,
   options: RecallReadOptions & OpenCodeRecallOptions = {},
 ): TranscriptWindow {
-  return directReadHistoryWindow(cursor, options)
+  const parsed = JSON.parse(
+    executeNodeWorkerSync(PACKAGE_DIR, {
+      kind: 'read-window',
+      args: readWorkerArgs(cursor, options),
+    }),
+  ) as unknown
+
+  if (isTranscriptWindow(parsed)) {
+    return parsed
+  }
+
+  throw new Error('Node worker returned invalid transcript window JSON')
 }
 
 export function renderHistoryWindow(
   cursor: string,
   options: RecallReadOptions & OpenCodeRecallOptions = {},
 ): string {
-  if (options.embeddingProvider !== undefined) {
-    return directRenderHistoryWindow(cursor, options)
-  }
-
   return executeNodeWorkerSync(PACKAGE_DIR, {
     kind: 'read',
-    args: {
-      cursor,
-      mode: options.mode,
-      n: options.limit,
-      historyDbPath: options.historyDbPath,
-    },
+    args: readWorkerArgs(cursor, options),
   })
+}
+
+function readWorkerArgs(
+  cursor: string,
+  options: RecallReadOptions & OpenCodeRecallOptions,
+): HistoryReadWorkerArgs {
+  return {
+    cursor,
+    mode: options.mode,
+    n: options.limit,
+    historyDbPath: options.historyDbPath,
+  }
 }
 
 function searchWorkerArgs(
@@ -258,6 +256,25 @@ function toSearchHit(result: HistorySearchResult): RecallSearchHit {
     text: result.text,
     ...(result.source === undefined ? {} : { source: result.source }),
   }
+}
+
+function isTranscriptWindow(value: unknown): value is TranscriptWindow {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const window = value as Partial<Record<keyof TranscriptWindow, unknown>>
+  return (
+    typeof window.sessionId === 'string' &&
+    typeof window.directory === 'string' &&
+    typeof window.mode === 'string' &&
+    typeof window.startIndex === 'number' &&
+    typeof window.endIndex === 'number' &&
+    typeof window.anchorIndex === 'number' &&
+    typeof window.anchorCursor === 'string' &&
+    typeof window.totalMessages === 'number' &&
+    Array.isArray(window.messages)
+  )
 }
 
 function defaultExcludedSessionId(options: RecallSearchOptions): string | undefined {
