@@ -62,6 +62,49 @@ describe('plugin recall subagent', () => {
       plugin.tool?.[HISTORY_READ_COMMAND]?.execute({ cursor: 'ses_example' }, toolContext('build')),
     ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
   })
+
+  test('executes history tools through the Node worker', async () => {
+    await withRecallEnvAsync(async ({ configDir }) => {
+      const historyPath = `/tmp/opencode-recall-worker-history-${crypto.randomUUID()}.db`
+      const sidecarPath = `/tmp/opencode-recall-worker-sidecar-${crypto.randomUUID()}.db`
+      const db = new Database(historyPath)
+
+      try {
+        db.exec(`
+          create table session (id text primary key, title text, directory text, time_updated integer);
+          create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+          create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+        `)
+        insertTextPart(db, 'ses_worker', 'Worker DB', 'msg_worker', 'part_worker', 1)
+        writeFileSync(
+          `${configDir}/recall.jsonc`,
+          JSON.stringify({
+            database: { path: historyPath, indexPath: sidecarPath },
+            embeddings: { ollamaUrl: 'http://worker-ollama.test', model: 'worker-model' },
+          }),
+        )
+
+        const plugin = await RecallPlugin(pluginInput())
+        const search = await plugin.tool?.[HISTORY_SEARCH_COMMAND]?.execute(
+          { q: '', includeCurrentSession: true, n: 5 },
+          toolContext(RECALL_AGENT_NAME),
+        )
+        const read = await plugin.tool?.[HISTORY_READ_COMMAND]?.execute(
+          { cursor: 'ses_worker', n: 5 },
+          toolContext(RECALL_AGENT_NAME),
+        )
+
+        expect(search).toContain('"sid": "ses_worker"')
+        expect(search).toContain('"title": "Worker DB"')
+        expect(read).toContain('<hist sid="ses_worker"')
+        expect(read).toContain('invoices cli location notes')
+      } finally {
+        db.close()
+        removeSqliteFiles(historyPath)
+        removeSqliteFiles(sidecarPath)
+      }
+    })
+  })
 })
 
 describe('config file loading', () => {

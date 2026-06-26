@@ -1,13 +1,19 @@
-import SQLite from 'better-sqlite3'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
 
 export type SqliteBindValue = string | number | bigint | null | Buffer | Uint8Array
 export type SqliteBindParams = readonly SqliteBindValue[]
+export interface SqliteRunResult {
+  readonly changes: number | bigint
+  readonly lastInsertRowid: number | bigint
+}
 
 export class Database {
-  readonly #db: SQLite.Database
+  readonly #db: DatabaseSync
 
   public constructor(path: string, options: { readonly?: boolean } = {}) {
-    this.#db = new SQLite(path, { readonly: options.readonly === true })
+    this.#db = new DatabaseSync(path, {
+      readOnly: options.readonly === true,
+    })
   }
 
   public exec(sql: string): void {
@@ -31,17 +37,23 @@ export class Database {
   }
 
   public transaction(callback: () => void): () => void {
-    const transaction = this.#db.transaction(callback)
     return () => {
-      transaction()
+      this.#db.exec('begin')
+      try {
+        callback()
+        this.#db.exec('commit')
+      } catch (error) {
+        this.#db.exec('rollback')
+        throw error
+      }
     }
   }
 }
 
 class Statement<TResult, TParams extends SqliteBindParams> {
-  readonly #statement: SQLite.Statement
+  readonly #statement: StatementSync
 
-  public constructor(statement: SQLite.Statement) {
+  public constructor(statement: StatementSync) {
     this.#statement = statement
   }
 
@@ -53,7 +65,7 @@ class Statement<TResult, TParams extends SqliteBindParams> {
     return (this.#statement.get(...params) as TResult | undefined) ?? null
   }
 
-  public run(...params: TParams): SQLite.RunResult {
+  public run(...params: TParams): SqliteRunResult {
     return this.#statement.run(...params)
   }
 }

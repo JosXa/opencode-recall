@@ -1,0 +1,5 @@
+export const DEFAULT_SEARCH_LIMIT = 8
+export const MAX_SEARCH_LIMIT = 25
+export const DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS = 30_000
+export const DEFAULT_READ_LIMIT = 12
+export const MAX_READ_LIMIT = 50

@@ -33,6 +33,7 @@ export interface HistorySearchResult {
   readonly time: string
   readonly role: string
   readonly score?: number
+  readonly source?: SearchRow['source']
   readonly text: string
 }
 
@@ -97,6 +98,7 @@ function formatSearchResult(row: SearchRow): HistorySearchResult {
     title: row.sessionTitle,
     role: row.role,
     ...(row.score === undefined ? {} : { score: Number(row.score.toFixed(4)) }),
+    ...(row.source === undefined ? {} : { source: row.source }),
     time: new Date(row.timeCreated).toISOString(),
     text: makeSnippet(row.text),
   }
