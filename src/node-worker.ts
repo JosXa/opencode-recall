@@ -45,7 +45,11 @@ function isHistoryWorkerRequest(value: unknown): value is HistoryWorkerRequest {
     return isRecord(args)
   }
 
-  return kind === 'search' && isRecord(args) && isRecord(context)
+  return (
+    (kind === 'search' || kind === 'session-index' || kind === 'session-save') &&
+    isRecord(args) &&
+    isRecord(context)
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,10 +1,17 @@
 import { ChatmlRenderer } from './chatml-renderer.js'
 import { decodeCursor } from './cursor.js'
-import { HistoryDatabase, type ReadMode, type SearchOptions, type SearchRow } from './db.js'
+import {
+  HistoryDatabase,
+  type ReadMode,
+  type SearchOptions,
+  type SearchRow,
+  type SessionIndexOptions,
+  type SessionIndexRow,
+} from './db.js'
 import { type EmbeddingProvider, OllamaEmbeddingProvider } from './embedding.js'
 import { normalizeWindow } from './normalizer.js'
 import { parseReadMode } from './read-mode.js'
-import { rankSearchRows } from './search.js'
+import { makeSearchSnippet, rankSearchRows } from './search.js'
 import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar.js'
 import type { TranscriptWindow } from './transcript.js'
 
@@ -14,6 +21,7 @@ export type { SyncOptions, SyncResult } from './sidecar.js'
 export type { TranscriptWindow } from './transcript.js'
 
 const DEFAULT_SEARCH_LIMIT = 50
+const DEFAULT_SESSION_INDEX_LIMIT = 20
 const DEFAULT_READ_LIMIT = 12
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
 
@@ -35,6 +43,7 @@ export interface RecallSearchOptions {
   readonly lexical?: boolean
   readonly sync?: boolean
   readonly syncOptions?: SyncOptions
+  readonly workerTimeoutMs?: number | false
 }
 
 export interface RecallSearchHit {
@@ -50,6 +59,41 @@ export interface RecallSearchHit {
   readonly time: string
   readonly text: string
   readonly source?: SearchRow['source']
+}
+
+export interface RecallSessionIndexOptions {
+  readonly limit?: number
+  readonly title?: string
+  readonly after?: Date | number | string
+  readonly before?: Date | number | string
+  readonly directory?: string
+  readonly includeCurrentSession?: boolean
+  readonly currentSessionId?: string
+  readonly excludeSessionId?: string
+  readonly workerTimeoutMs?: number | false
+}
+
+export interface RecallSessionIndexEntry {
+  readonly cursor: string
+  readonly sessionId: string
+  readonly title: string
+  readonly directory: string
+  readonly updatedAt: number
+  readonly updated: string
+  readonly firstMessageAt?: number
+  readonly firstMessage?: string
+  readonly lastMessageAt?: number
+  readonly lastMessage?: string
+  readonly messages: number
+  readonly turns: number
+  readonly assistantMessages: number
+  readonly toolMessages: number
+  readonly textParts: number
+  readonly approxContextChars: number
+}
+
+export interface RecallSessionIndexResult {
+  readonly sessions: readonly RecallSessionIndexEntry[]
 }
 
 export interface RecallReadOptions {
@@ -142,6 +186,14 @@ export class DirectOpenCodeRecall {
     }
   }
 
+  public sessionIndex(options: RecallSessionIndexOptions = {}): RecallSessionIndexResult {
+    return {
+      sessions: this.#history
+        .sessionIndex(normalizeSessionIndexOptions(options))
+        .map(toSessionIndexEntry),
+    }
+  }
+
   public read(cursorValue: string, options: RecallReadOptions = {}): TranscriptWindow {
     const cursor = decodeCursor(cursorValue)
     const readOptions = {
@@ -169,6 +221,18 @@ export async function directSearchHistory(
 
   try {
     return await recall.search(query, options)
+  } finally {
+    recall.close()
+  }
+}
+
+export function directSessionIndex(
+  options: RecallSessionIndexOptions & OpenCodeRecallOptions = {},
+): RecallSessionIndexResult {
+  const recall = new DirectOpenCodeRecall(options)
+
+  try {
+    return recall.sessionIndex(options)
   } finally {
     recall.close()
   }
@@ -212,11 +276,26 @@ function normalizeSearchOptions(options: RecallSearchOptions): SearchOptions {
   }
 }
 
+function normalizeSessionIndexOptions(options: RecallSessionIndexOptions): SessionIndexOptions {
+  const excluded = excludedSessionId(options)
+
+  return {
+    limit: options.limit ?? DEFAULT_SESSION_INDEX_LIMIT,
+    ...optionalTimestampFilter('after', options.after),
+    ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
+    ...(options.directory === undefined ? {} : { directory: options.directory }),
+    ...(options.title === undefined ? {} : { title: options.title }),
+    ...(excluded === undefined ? {} : { excludeSessionId: excluded }),
+  }
+}
+
 function isBlankQuery(query: string): boolean {
   return query.trim().length === 0
 }
 
-function excludedSessionId(options: RecallSearchOptions): string | undefined {
+function excludedSessionId(
+  options: RecallSearchOptions | RecallSessionIndexOptions,
+): string | undefined {
   if (options.includeCurrentSession === true) {
     return options.excludeSessionId
   }
@@ -224,7 +303,9 @@ function excludedSessionId(options: RecallSearchOptions): string | undefined {
   return options.excludeSessionId ?? options.currentSessionId
 }
 
-function defaultBefore(options: RecallSearchOptions): number | undefined {
+function defaultBefore(
+  options: RecallSearchOptions | RecallSessionIndexOptions,
+): number | undefined {
   if (options.includeCurrentSession === true || options.currentSessionId === undefined) {
     return undefined
   }
@@ -279,8 +360,37 @@ function toSearchHit(row: SearchRow): RecallSearchHit {
     ...(row.score === undefined ? {} : { score: Number(row.score.toFixed(4)) }),
     timeCreated: row.timeCreated,
     time: new Date(row.timeCreated).toISOString(),
-    text: row.text,
+    text: makeSearchSnippet(row.text),
     ...(row.source === undefined ? {} : { source: row.source }),
+  }
+}
+
+function toSessionIndexEntry(row: SessionIndexRow): RecallSessionIndexEntry {
+  return {
+    cursor: row.sessionId,
+    sessionId: row.sessionId,
+    title: row.title,
+    directory: row.directory,
+    updatedAt: row.updatedAt,
+    updated: new Date(row.updatedAt).toISOString(),
+    ...(row.firstMessageAt === null
+      ? {}
+      : {
+          firstMessageAt: row.firstMessageAt,
+          firstMessage: new Date(row.firstMessageAt).toISOString(),
+        }),
+    ...(row.lastMessageAt === null
+      ? {}
+      : {
+          lastMessageAt: row.lastMessageAt,
+          lastMessage: new Date(row.lastMessageAt).toISOString(),
+        }),
+    messages: row.messageCount,
+    turns: row.turns,
+    assistantMessages: row.assistantMessages,
+    toolMessages: row.toolMessages,
+    textParts: row.textPartCount,
+    approxContextChars: row.approxContextChars,
   }
 }
 

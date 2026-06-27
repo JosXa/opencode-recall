@@ -9,16 +9,18 @@ export class ChatmlRenderer implements HistoryRenderer<string> {
   public readonly format = 'chatml'
 
   public render(window: TranscriptWindow): string {
-    const lines = [renderWindowStart(window)]
+    const lines = [renderSystemMessage(renderWindowStart(window))]
 
     for (const message of window.messages) {
       lines.push(renderMessage(message))
     }
 
-    lines.push(renderNavigation(window), '</hist>')
+    lines.push(renderSystemMessage(renderNavigation(window)))
     return lines.join('\n')
   }
 }
+
+const CHATML_ROLES = new Set(['system', 'user', 'assistant', 'tool', 'developer'])
 
 function renderWindowStart(window: TranscriptWindow): string {
   const attrs = [
@@ -34,22 +36,18 @@ function renderWindowStart(window: TranscriptWindow): string {
     attrs.push(attr('title', window.title))
   }
 
-  return `<hist ${attrs.join(' ')}>`
+  return `<hist ${attrs.join(' ')} />`
 }
 
 function renderMessage(message: TranscriptMessage): string {
-  const lines = [
-    `<|im_start|>${message.role} ${attr('name', message.id)} ${attr(
-      'index',
-      String(message.index),
-    )} ${attr('time', new Date(message.timeCreated).toISOString())}`,
-  ]
+  const role = chatmlRole(message.role)
+  const lines = [`<|im_start|>${role}`, `<message ${messageAttrs(message, role).join(' ')}>`]
 
   for (const part of message.parts) {
     lines.push(renderPart(part))
   }
 
-  lines.push('<|im_end|>')
+  lines.push('</message>', '<|im_end|>')
   return lines.join('\n')
 }
 
@@ -63,7 +61,7 @@ function renderPart(part: TranscriptPart): string {
     case 'patch':
       return renderPatchPart(part.files, part.hash)
     case 'text':
-      return part.text
+      return escapeText(part.text)
     case 'tool':
       return renderToolPart(part)
     default: {
@@ -71,6 +69,28 @@ function renderPart(part: TranscriptPart): string {
       throw new Error(`Unsupported transcript part: ${String(exhaustive)}`)
     }
   }
+}
+
+function renderSystemMessage(content: string): string {
+  return ['<|im_start|>system', content, '<|im_end|>'].join('\n')
+}
+
+function chatmlRole(role: string): string {
+  return CHATML_ROLES.has(role) ? role : 'system'
+}
+
+function messageAttrs(message: TranscriptMessage, role: string): string[] {
+  const attrs = [
+    attr('id', message.id),
+    attr('index', String(message.index)),
+    attr('time', new Date(message.timeCreated).toISOString()),
+  ]
+
+  if (role !== message.role) {
+    attrs.push(attr('original_role', message.role))
+  }
+
+  return attrs
 }
 
 function renderPatchPart(files: readonly string[], hash: string | undefined): string {

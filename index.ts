@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Plugin } from '@opencode-ai/plugin'
+import type { Config, Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin'
 
 import {
@@ -9,9 +9,15 @@ import {
   HISTORY_SEARCH_COMMAND,
   RECALL_AGENT_DESCRIPTION,
   RECALL_AGENT_NAME,
+  SESSION_INDEX_COMMAND,
+  SESSION_SAVE_COMMAND,
 } from './src/commands.js'
 import { executeNodeWorker } from './src/node-worker-client.js'
-import { DEFAULT_READ_LIMIT, DEFAULT_SEARCH_LIMIT } from './src/tool-defaults.js'
+import {
+  DEFAULT_READ_LIMIT,
+  DEFAULT_SEARCH_LIMIT,
+  DEFAULT_SESSION_INDEX_LIMIT,
+} from './src/tool-defaults.js'
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
 const RECALL_AGENT_PROMPT_PATHS = [
@@ -21,6 +27,7 @@ const RECALL_AGENT_PROMPT_PATHS = [
 
 type PermissionAction = 'ask' | 'allow' | 'deny'
 type PermissionConfig = Record<string, PermissionAction | Record<string, PermissionAction>>
+type DynamicPermissionConfig = NonNullable<Config['permission']> & PermissionConfig
 
 export const RecallPlugin: Plugin = async () => {
   const recallAgentPrompt = await loadRecallAgentPrompt()
@@ -37,6 +44,19 @@ export const RecallPlugin: Plugin = async () => {
         description: 'Read a cursor-paginated ChatML window from OpenCode history',
         template: '',
       }
+
+      config.command[SESSION_INDEX_COMMAND] = {
+        description:
+          'Browse recallable OpenCode sessions by recency, title, and usefulness signals',
+        template: '',
+      }
+
+      config.command[SESSION_SAVE_COMMAND] = {
+        description: 'Materialize session to file',
+        template: '',
+      }
+
+      config.permission = recallToolDenyPermission(config.permission)
 
       config.agent ??= {}
       const recallAgent = {
@@ -95,6 +115,54 @@ export const RecallPlugin: Plugin = async () => {
           return executeNodeWorker(PACKAGE_DIR, { kind: 'read', args }, context.abort)
         },
       }),
+
+      [SESSION_INDEX_COMMAND]: tool({
+        description: 'Browse OpenCode history sessions.',
+        args: {
+          n: tool.schema
+            .number()
+            .describe(`Max sessions. Default ${DEFAULT_SESSION_INDEX_LIMIT}.`)
+            .optional(),
+          title: tool.schema.string().describe('Case-insensitive session title filter.').optional(),
+          directory: tool.schema.string().describe('Exact session directory.').optional(),
+          includeCurrentSession: tool.schema
+            .boolean()
+            .describe('Include current session. Default false.')
+            .optional(),
+          after: tool.schema.string().describe('Session updated after ISO date/time.').optional(),
+          before: tool.schema.string().describe('Session updated before ISO date/time.').optional(),
+        },
+        async execute(args, context) {
+          assertRecallAgent(context.agent)
+
+          return executeNodeWorker(
+            PACKAGE_DIR,
+            { kind: 'session-index', args, context: { sessionID: context.sessionID } },
+            context.abort,
+          )
+        },
+      }),
+
+      [SESSION_SAVE_COMMAND]: tool({
+        description: 'Materialize session to file.',
+        args: {
+          cursor: tool.schema.string().describe('Session cursor. ses_* only.'),
+          path: tool.schema.string().describe('Workspace-relative destination.'),
+          format: tool.schema
+            .enum(['chatml', 'markdown', 'jsonl'])
+            .describe('Transcript encoding. Default chatml.')
+            .optional(),
+        },
+        async execute(args, context) {
+          assertRecallAgent(context.agent)
+
+          return executeNodeWorker(
+            PACKAGE_DIR,
+            { kind: 'session-save', args, context: { directory: context.directory } },
+            context.abort,
+          )
+        },
+      }),
     },
   }
 }
@@ -123,7 +191,23 @@ function recallAgentPermission(): PermissionConfig {
     '*': 'deny',
     [HISTORY_SEARCH_COMMAND]: 'allow',
     [HISTORY_READ_COMMAND]: 'allow',
+    [SESSION_INDEX_COMMAND]: 'allow',
+    [SESSION_SAVE_COMMAND]: 'allow',
   }
+}
+
+function recallToolDenyPermission(
+  permission: Config['permission'] | PermissionAction | undefined,
+): DynamicPermissionConfig {
+  const normalized = typeof permission === 'string' ? { '*': permission } : permission
+
+  return {
+    ...normalized,
+    [HISTORY_SEARCH_COMMAND]: 'deny',
+    [HISTORY_READ_COMMAND]: 'deny',
+    [SESSION_INDEX_COMMAND]: 'deny',
+    [SESSION_SAVE_COMMAND]: 'deny',
+  } as DynamicPermissionConfig
 }
 
 function assertRecallAgent(agent: string): void {

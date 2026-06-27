@@ -11,6 +11,30 @@ export interface SearchOptions {
   readonly excludeSessionId?: string
 }
 
+export interface SessionIndexOptions {
+  readonly limit: number
+  readonly after?: number
+  readonly before?: number
+  readonly directory?: string
+  readonly title?: string
+  readonly excludeSessionId?: string
+}
+
+export interface SessionIndexRow {
+  readonly sessionId: string
+  readonly title: string
+  readonly directory: string
+  readonly updatedAt: number
+  readonly firstMessageAt: number | null
+  readonly lastMessageAt: number | null
+  readonly messageCount: number
+  readonly turns: number
+  readonly assistantMessages: number
+  readonly toolMessages: number
+  readonly textPartCount: number
+  readonly approxContextChars: number
+}
+
 export type ReadMode = 'around' | 'head' | 'next' | 'prev' | 'tail'
 
 export interface ReadOptions {
@@ -218,6 +242,71 @@ export class HistoryDatabase {
       .all(...params)
   }
 
+  public sessionIndex(options: SessionIndexOptions): SessionIndexRow[] {
+    const conditions = [
+      ...(options.after === undefined ? [] : ['coalesce(s.time_updated, 0) >= ?']),
+      ...(options.before === undefined ? [] : ['coalesce(s.time_updated, 0) <= ?']),
+      ...(options.directory === undefined ? [] : ['s.directory = ?']),
+      ...(options.title === undefined ? [] : ["lower(coalesce(s.title, '')) like ? escape '\\'"]),
+      ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
+    ]
+    const where = conditions.length === 0 ? '' : `where ${conditions.join(' and ')}`
+    const params = [
+      ...(options.after === undefined ? [] : [options.after]),
+      ...(options.before === undefined ? [] : [options.before]),
+      ...(options.directory === undefined ? [] : [options.directory]),
+      ...(options.title === undefined ? [] : [`%${escapeLikeTerm(options.title.toLowerCase())}%`]),
+      ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
+      options.limit,
+    ]
+
+    return this.#db
+      .query<SessionIndexRow, (string | number)[]>(`
+        with message_stats as (
+          select
+            m.session_id as sessionId,
+            min(m.time_created) as firstMessageAt,
+            max(m.time_created) as lastMessageAt,
+            count(*) as messageCount,
+            sum(case when json_extract(m.data, '$.role') = 'user' then 1 else 0 end) as turns,
+            sum(case when json_extract(m.data, '$.role') = 'assistant' then 1 else 0 end) as assistantMessages,
+            sum(case when json_extract(m.data, '$.role') = 'tool' then 1 else 0 end) as toolMessages
+          from message m
+          group by m.session_id
+        ),
+        part_stats as (
+          select
+            p.session_id as sessionId,
+            count(*) as textPartCount,
+            sum(length(coalesce(json_extract(p.data, '$.text'), ''))) as approxContextChars
+          from part p
+          where json_extract(p.data, '$.type') = 'text'
+            and json_extract(p.data, '$.text') is not null
+          group by p.session_id
+        )
+        select
+          s.id as sessionId,
+          coalesce(s.title, '') as title,
+          coalesce(s.directory, '') as directory,
+          coalesce(s.time_updated, ms.lastMessageAt, 0) as updatedAt,
+          ms.firstMessageAt as firstMessageAt,
+          ms.lastMessageAt as lastMessageAt,
+          coalesce(ms.messageCount, 0) as messageCount,
+          coalesce(ms.turns, 0) as turns,
+          coalesce(ms.assistantMessages, 0) as assistantMessages,
+          coalesce(ms.toolMessages, 0) as toolMessages,
+          coalesce(ps.textPartCount, 0) as textPartCount,
+          coalesce(ps.approxContextChars, 0) as approxContextChars
+        from session s
+        left join message_stats ms on ms.sessionId = s.id
+        left join part_stats ps on ps.sessionId = s.id
+        ${where}
+        order by updatedAt desc, s.id desc
+        limit ?
+      `)
+      .all(...params)
+  }
+
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
     const changedCondition =
       since === undefined
@@ -326,6 +415,16 @@ export class HistoryDatabase {
     }
 
     return this.readWindow(anchor.messageId, options)
+  }
+
+  public readSession(sessionId: string): WindowRows {
+    const totalMessages = countMessages(this.#db, sessionId)
+
+    if (totalMessages === 0) {
+      throw new Error(`History session cursor points to missing or empty session: ${sessionId}`)
+    }
+
+    return this.readWindowForSession(sessionId, { mode: 'head', limit: totalMessages })
   }
 
   public readWindow(anchorMessageId: string, options: ReadOptions): WindowRows {

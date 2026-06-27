@@ -28,6 +28,8 @@ const META_TEXT_PATTERNS = [
 export interface HistorySearchResult {
   readonly cursor: string
   readonly sid: string
+  readonly messageId?: string
+  readonly partId?: string
   readonly directory: string
   readonly title: string
   readonly time: string
@@ -84,7 +86,7 @@ function formatSyncNotice(syncResult: SyncResult | undefined): string | undefine
   return `<sync indexed_rows="${syncResult.indexedRows}" seconds="${(syncResult.elapsedMs / 1000).toFixed(2)}" />`
 }
 
-function formatSearchResult(row: SearchRow): HistorySearchResult {
+export function formatSearchResult(row: SearchRow): HistorySearchResult {
   return {
     cursor: encodeCursor({
       version: 1,
@@ -94,13 +96,15 @@ function formatSearchResult(row: SearchRow): HistorySearchResult {
       timeCreated: row.timeCreated,
     }),
     sid: row.sessionId,
+    messageId: row.messageId,
+    partId: row.partId,
     directory: row.directory,
     title: row.sessionTitle,
     role: row.role,
     ...(row.score === undefined ? {} : { score: Number(row.score.toFixed(4)) }),
     ...(row.source === undefined ? {} : { source: row.source }),
     time: new Date(row.timeCreated).toISOString(),
-    text: makeSnippet(row.text),
+    text: makeSearchSnippet(row.text),
   }
 }
 
@@ -282,7 +286,7 @@ function requiredTermMatches(terms: readonly string[]): number {
   return Math.ceil(terms.length * 0.65)
 }
 
-function makeSnippet(text: string): string {
+export function makeSearchSnippet(text: string): string {
   const normalized = text.replaceAll(/\s+/gu, ' ').trim()
 
   if (normalized.length <= 280) {

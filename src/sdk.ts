@@ -1,7 +1,7 @@
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { decodeCursor } from './cursor.js'
+import { decodeCursor, type HistoryCursor } from './cursor.js'
 import { executeNodeWorker, executeNodeWorkerSync } from './node-worker-client.js'
 import type {
   OpenCodeRecallOptions,
@@ -9,11 +9,18 @@ import type {
   RecallSearchHit,
   RecallSearchOptions,
   RecallSearchResult,
+  RecallSessionIndexEntry,
+  RecallSessionIndexOptions,
+  RecallSessionIndexResult,
 } from './sdk-direct.js'
 import type { HistorySearchResult } from './search.js'
 import type { SyncOptions, SyncResult } from './sidecar.js'
 import type { TranscriptWindow } from './transcript.js'
-import type { HistoryReadWorkerArgs, HistorySearchWorkerArgs } from './worker-protocol.js'
+import type {
+  HistoryReadWorkerArgs,
+  HistorySearchWorkerArgs,
+  SessionIndexWorkerArgs,
+} from './worker-protocol.js'
 
 export type { EmbeddingProvider, OllamaEmbeddingProviderOptions } from './embedding.js'
 export { OllamaEmbeddingProvider } from './embedding.js'
@@ -23,12 +30,17 @@ export type {
   RecallSearchHit,
   RecallSearchOptions,
   RecallSearchResult,
+  RecallSessionIndexEntry,
+  RecallSessionIndexOptions,
+  RecallSessionIndexResult,
 } from './sdk-direct.js'
 export type { SyncOptions, SyncResult } from './sidecar.js'
 export type { TranscriptWindow } from './transcript.js'
 
 const DEFAULT_SEARCH_LIMIT = 50
+const DEFAULT_SESSION_INDEX_LIMIT = 20
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
+const DEFAULT_WORKER_TIMEOUT_MS = 120_000
 const PACKAGE_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
 export class OpenCodeRecall {
@@ -59,6 +71,16 @@ export class OpenCodeRecall {
     }
 
     return searchHistory(query, { ...this.#options, ...options })
+  }
+
+  public async sessionIndex(
+    options: RecallSessionIndexOptions = {},
+  ): Promise<RecallSessionIndexResult> {
+    if (this.#options.embeddingProvider !== undefined) {
+      return this.#direct().then((recall) => recall.sessionIndex(options))
+    }
+
+    return sessionIndex({ ...this.#options, ...options })
   }
 
   public read(cursorValue: string, options: RecallReadOptions = {}): TranscriptWindow {
@@ -95,6 +117,13 @@ export class OpenCodeRecall {
           recall.close()
         }
       },
+      sessionIndex: (options: RecallSessionIndexOptions) => {
+        try {
+          return recall.sessionIndex(options)
+        } finally {
+          recall.close()
+        }
+      },
       read: (cursor: string, options: RecallReadOptions) => {
         try {
           return recall.read(cursor, options)
@@ -122,6 +151,12 @@ export async function searchHistory(
     return directSearchHistory(query, options)
   }
 
+  if (options.syncOptions !== undefined) {
+    throw new Error(
+      'syncOptions require an embeddingProvider because callbacks cannot cross worker process boundaries',
+    )
+  }
+
   const raw = await executeNodeWorker(
     PACKAGE_DIR,
     {
@@ -129,10 +164,31 @@ export async function searchHistory(
       args: searchWorkerArgs(query, options),
       context: { sessionID: options.currentSessionId ?? '' },
     },
-    AbortSignal.timeout(120_000),
+    workerSignal(options.workerTimeoutMs),
   )
 
-  return { hits: parseWorkerSearchHits(raw) }
+  return parseWorkerSearchResult(raw)
+}
+
+export async function sessionIndex(
+  options: RecallSessionIndexOptions & OpenCodeRecallOptions = {},
+): Promise<RecallSessionIndexResult> {
+  if (options.embeddingProvider !== undefined) {
+    const { directSessionIndex } = await import('./sdk-direct.js')
+    return directSessionIndex(options)
+  }
+
+  const raw = await executeNodeWorker(
+    PACKAGE_DIR,
+    {
+      kind: 'session-index',
+      args: sessionIndexWorkerArgs(options),
+      context: { sessionID: options.currentSessionId ?? '' },
+    },
+    workerSignal(options.workerTimeoutMs),
+  )
+
+  return parseWorkerSessionIndexResult(raw)
 }
 
 export function readHistoryWindow(
@@ -182,6 +238,7 @@ function searchWorkerArgs(
   return {
     q: query,
     n: options.limit ?? DEFAULT_SEARCH_LIMIT,
+    maxSearchLimit: Math.max(options.limit ?? DEFAULT_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT),
     directory: options.directory,
     includeCurrentSession: options.includeCurrentSession,
     excludeSessionId: options.excludeSessionId ?? defaultExcludedSessionId(options),
@@ -192,33 +249,49 @@ function searchWorkerArgs(
     semantic: options.semantic,
     lexical: options.lexical,
     sync: options.sync,
+    format: 'json',
   }
 }
 
-function parseWorkerSearchHits(value: string): readonly RecallSearchHit[] {
-  const json = searchJsonPayload(value)
-
-  if (json === undefined) {
-    return []
+function sessionIndexWorkerArgs(
+  options: RecallSessionIndexOptions & OpenCodeRecallOptions,
+): SessionIndexWorkerArgs {
+  return {
+    n: options.limit ?? DEFAULT_SESSION_INDEX_LIMIT,
+    title: options.title,
+    directory: options.directory,
+    includeCurrentSession: options.includeCurrentSession,
+    excludeSessionId: options.excludeSessionId ?? defaultExcludedSessionId(options),
+    after: optionalDateArg(options.after),
+    before: optionalDateArg(options.before ?? defaultBefore(options)),
+    historyDbPath: options.historyDbPath,
+    format: 'json',
   }
-
-  const parsed = JSON.parse(json) as unknown
-
-  if (!Array.isArray(parsed)) {
-    return []
-  }
-
-  return parsed.flatMap((item) => (isHistorySearchResult(item) ? [toSearchHit(item)] : []))
 }
 
-function searchJsonPayload(value: string): string | undefined {
-  const start = value.indexOf('[')
+function parseWorkerSearchResult(value: string): RecallSearchResult {
+  const parsed = JSON.parse(value) as unknown
 
-  if (start === -1) {
-    return undefined
+  if (!isWorkerSearchResult(parsed)) {
+    throw new Error('Node worker returned invalid SDK search JSON')
   }
 
-  return value.slice(start)
+  return {
+    hits: parsed.hits.map(toSearchHit),
+    ...(parsed.sync === undefined ? {} : { sync: parsed.sync }),
+  }
+}
+
+function parseWorkerSessionIndexResult(value: string): RecallSessionIndexResult {
+  const parsed = JSON.parse(value) as unknown
+
+  if (!isWorkerSessionIndexResult(parsed)) {
+    throw new Error('Node worker returned invalid SDK session index JSON')
+  }
+
+  return {
+    sessions: parsed.sessions.map(toSessionIndexEntry),
+  }
 }
 
 function isHistorySearchResult(value: unknown): value is HistorySearchResult {
@@ -230,6 +303,8 @@ function isHistorySearchResult(value: unknown): value is HistorySearchResult {
   return (
     typeof result.cursor === 'string' &&
     typeof result.sid === 'string' &&
+    (result.messageId === undefined || typeof result.messageId === 'string') &&
+    (result.partId === undefined || typeof result.partId === 'string') &&
     typeof result.title === 'string' &&
     typeof result.directory === 'string' &&
     typeof result.time === 'string' &&
@@ -238,8 +313,58 @@ function isHistorySearchResult(value: unknown): value is HistorySearchResult {
   )
 }
 
+function isWorkerSessionIndexResult(value: unknown): value is {
+  readonly sessions: readonly WorkerSessionIndexEntry[]
+} {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const result = value as { readonly sessions?: unknown }
+  return Array.isArray(result.sessions) && result.sessions.every(isWorkerSessionIndexEntry)
+}
+
+interface WorkerSessionIndexEntry {
+  readonly cursor: string
+  readonly sid: string
+  readonly title: string
+  readonly directory: string
+  readonly updated: string
+  readonly firstMessage?: string
+  readonly lastMessage?: string
+  readonly messages: number
+  readonly turns: number
+  readonly assistantMessages: number
+  readonly toolMessages: number
+  readonly textParts: number
+  readonly approxContextChars: number
+}
+
+function isWorkerSessionIndexEntry(value: unknown): value is WorkerSessionIndexEntry {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const entry = value as Partial<Record<keyof WorkerSessionIndexEntry, unknown>>
+  return (
+    typeof entry.cursor === 'string' &&
+    typeof entry.sid === 'string' &&
+    typeof entry.title === 'string' &&
+    typeof entry.directory === 'string' &&
+    typeof entry.updated === 'string' &&
+    (entry.firstMessage === undefined || typeof entry.firstMessage === 'string') &&
+    (entry.lastMessage === undefined || typeof entry.lastMessage === 'string') &&
+    typeof entry.messages === 'number' &&
+    typeof entry.turns === 'number' &&
+    typeof entry.assistantMessages === 'number' &&
+    typeof entry.toolMessages === 'number' &&
+    typeof entry.textParts === 'number' &&
+    typeof entry.approxContextChars === 'number'
+  )
+}
+
 function toSearchHit(result: HistorySearchResult): RecallSearchHit {
-  const cursor = decodeCursor(result.cursor)
+  const cursor = safeDecodeCursor(result.cursor)
   const timeCreated = Date.parse(result.time)
 
   return {
@@ -247,14 +372,74 @@ function toSearchHit(result: HistorySearchResult): RecallSearchHit {
     sessionId: result.sid,
     sessionTitle: result.title,
     directory: result.directory,
-    messageId: cursor.messageId ?? '',
-    partId: cursor.partId ?? '',
+    messageId: result.messageId ?? cursor.messageId ?? '',
+    partId: result.partId ?? cursor.partId ?? '',
     role: result.role,
     ...(result.score === undefined ? {} : { score: result.score }),
     timeCreated: Number.isFinite(timeCreated) ? timeCreated : 0,
     time: result.time,
     text: result.text,
     ...(result.source === undefined ? {} : { source: result.source }),
+  }
+}
+
+function toSessionIndexEntry(result: WorkerSessionIndexEntry): RecallSessionIndexEntry {
+  const updatedAt = Date.parse(result.updated)
+  const firstMessageAt = optionalParsedTime(result.firstMessage)
+  const lastMessageAt = optionalParsedTime(result.lastMessage)
+
+  return {
+    cursor: result.cursor,
+    sessionId: result.sid,
+    title: result.title,
+    directory: result.directory,
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+    updated: result.updated,
+    ...(firstMessageAt === undefined ? {} : { firstMessageAt, firstMessage: result.firstMessage }),
+    ...(lastMessageAt === undefined ? {} : { lastMessageAt, lastMessage: result.lastMessage }),
+    messages: result.messages,
+    turns: result.turns,
+    assistantMessages: result.assistantMessages,
+    toolMessages: result.toolMessages,
+    textParts: result.textParts,
+    approxContextChars: result.approxContextChars,
+  }
+}
+
+function optionalParsedTime(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function workerSignal(workerTimeoutMs: number | false | undefined): AbortSignal {
+  if (workerTimeoutMs === false) {
+    return new AbortController().signal
+  }
+
+  return AbortSignal.timeout(workerTimeoutMs ?? DEFAULT_WORKER_TIMEOUT_MS)
+}
+
+function isWorkerSearchResult(value: unknown): value is {
+  readonly hits: readonly HistorySearchResult[]
+  readonly sync?: SyncResult
+} {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const result = value as { readonly hits?: unknown; readonly sync?: unknown }
+  return Array.isArray(result.hits) && result.hits.every(isHistorySearchResult)
+}
+
+function safeDecodeCursor(value: string): HistoryCursor {
+  try {
+    return decodeCursor(value)
+  } catch {
+    return { version: 1, messageId: value }
   }
 }
 
@@ -277,7 +462,9 @@ function isTranscriptWindow(value: unknown): value is TranscriptWindow {
   )
 }
 
-function defaultExcludedSessionId(options: RecallSearchOptions): string | undefined {
+function defaultExcludedSessionId(
+  options: RecallSearchOptions | RecallSessionIndexOptions,
+): string | undefined {
   if (options.includeCurrentSession === true) {
     return undefined
   }
@@ -285,7 +472,9 @@ function defaultExcludedSessionId(options: RecallSearchOptions): string | undefi
   return options.currentSessionId
 }
 
-function defaultBefore(options: RecallSearchOptions): Date | number | string | undefined {
+function defaultBefore(
+  options: RecallSearchOptions | RecallSessionIndexOptions,
+): Date | number | string | undefined {
   if (options.includeCurrentSession === true || options.currentSessionId === undefined) {
     return undefined
   }

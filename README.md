@@ -165,7 +165,65 @@ Run `pnpm run eval:embeddings` to compare installed embedding models against the
 
 ## Tool reference
 
-Recall exposes two history tools. They are intended to be called by the `recall` subagent, not by the main agent directly.
+Recall exposes four history tools. They are intended to be called by the `recall` subagent, not by the main agent directly.
+
+<details>
+<summary><code>session_index</code>: browse sessions by recency and usefulness</summary>
+
+| Arg      | Type     | Notes                                                                                                  |
+| -------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `n`      | number   | Max sessions (default `20`, max `100`).                                                                |
+| `title`  | string   | Case-insensitive session title filter.                                                                |
+| `directory` | string   | Exact OpenCode session directory filter.                                                               |
+| `after`  | ISO date | Only sessions updated at or after this timestamp.                                                      |
+| `before` | ISO date | Only sessions updated at or before this timestamp. Defaults to *now - 30 s* to exclude the live chat.  |
+
+Returns newest-first session rows with a `ses_...` cursor for `history_read` and quick usefulness signals:
+
+```jsonc
+[
+  {
+    "cursor": "ses_...",
+    "sid": "ses_...",
+    "title": "Release debugging notes",
+    "directory": "/Users/you/projects/foo",
+    "updated": "2026-04-12T08:21:44.000Z",
+    "messages": 84,
+    "turns": 18,
+    "assistantMessages": 32,
+    "toolMessages": 9,
+    "textParts": 76,
+    "approxContextChars": 118420
+  }
+]
+```
+
+Use this when you do not have a search term yet and want to spot substantial past sessions at a glance.
+
+</details>
+
+<details>
+<summary><code>session_save</code>: materialize a session file</summary>
+
+| Arg      | Type                             | Notes                                           |
+| -------- | -------------------------------- | ----------------------------------------------- |
+| `cursor` | string                           | **Required.** A `ses_...` session cursor only.  |
+| `path`   | string                           | **Required.** Workspace-relative destination.   |
+| `format` | `chatml` \| `markdown` \| `jsonl` | Transcript encoding. Default `chatml`.          |
+
+Writes the full normalized session transcript and returns a compact receipt:
+
+```jsonc
+{
+  "path": "recall/ses_....chatml",
+  "bytes": 48321,
+  "messages": 94
+}
+```
+
+The destination is always overwritten and must stay inside the active workspace.
+
+</details>
 
 <details>
 <summary><code>history_search</code>: return ranked hits for a query</summary>
@@ -174,7 +232,7 @@ Recall exposes two history tools. They are intended to be called by the `recall`
 | -------- | -------- | ------------------------------------------------------------------------------------------------------ |
 | `q`      | string   | **Required.** Free-text query.                                                                         |
 | `n`      | number   | Max hits (default `8`, max `25`).                                                                      |
-| `dir`    | string   | Exact OpenCode session directory filter.                                                               |
+| `directory` | string   | Exact OpenCode session directory filter.                                                               |
 | `after`  | ISO date | Only messages at or after this timestamp.                                                              |
 | `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* to exclude the live conversation.  |
 
