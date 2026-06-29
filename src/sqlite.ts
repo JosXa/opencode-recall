@@ -1,5 +1,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 
+const BUSY_TIMEOUT_MS = 5000
+
 export type SqliteBindValue = string | number | bigint | null | Buffer | Uint8Array
 export type SqliteBindParams = readonly SqliteBindValue[]
 export interface SqliteRunResult {
@@ -13,7 +15,9 @@ export class Database {
   public constructor(path: string, options: { readonly?: boolean } = {}) {
     this.#db = new DatabaseSync(path, {
       readOnly: options.readonly === true,
+      timeout: BUSY_TIMEOUT_MS,
     })
+    this.#db.exec(`pragma busy_timeout = ${BUSY_TIMEOUT_MS}`)
   }
 
   public exec(sql: string): void {

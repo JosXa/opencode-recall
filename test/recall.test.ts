@@ -1,5 +1,8 @@
 import type { Config, PluginInput, ToolContext } from '@opencode-ai/plugin'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { describe, expect, test } from 'vitest'
 
 import { RecallPlugin } from '../index.js'
@@ -563,6 +566,34 @@ describe('strict ranking', () => {
 })
 
 describe('current session exclusion', () => {
+  test('sqlite wrapper waits for transient database locks', async () => {
+    const path = `/tmp/opencode-recall-locked-history-${crypto.randomUUID()}.db`
+    const setup = new Database(path)
+
+    try {
+      setup.exec('create table item (id integer primary key); insert into item values (1);')
+    } finally {
+      setup.close()
+    }
+
+    const locker = new DatabaseSync(path)
+
+    try {
+      locker.exec('begin exclusive')
+      const { done: read, ready } = readCountInChild(path)
+      await ready
+      await sleep(100)
+      locker.exec('commit')
+
+      await expect(read).resolves.toEqual({ code: 0, stderr: '', stdout: '1' })
+    } finally {
+      if (locker.isOpen) {
+        locker.close()
+      }
+      removeSqliteFiles(path)
+    }
+  })
+
   test('lexical search excludes the current session by default option', () => {
     const path = `/tmp/opencode-recall-history-${crypto.randomUUID()}.db`
     const db = new Database(path)
@@ -1209,6 +1240,70 @@ function indexRow(
     text: 'invoices cli location notes',
     source: 'text',
   }
+}
+
+interface ChildReadResult {
+  readonly code: number | null
+  readonly stderr: string
+  readonly stdout: string
+}
+
+function readCountInChild(path: string): {
+  readonly done: Promise<ChildReadResult>
+  readonly ready: Promise<void>
+} {
+  const child = spawn(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '-e',
+      `
+        import { Database } from './src/sqlite.ts'
+        process.send?.('ready')
+        const db = new Database(${JSON.stringify(path)}, { readonly: true })
+        try {
+          const row = db.query('select count(*) as count from item').get()
+          console.log(String(row?.count ?? 0))
+        } finally {
+          db.close()
+        }
+      `,
+    ],
+    { cwd: '/projects/opencode-recall', env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
+  )
+  if (!child.stdout || !child.stderr) {
+    throw new Error('child process stdio was not piped')
+  }
+
+  const stdout: Buffer[] = []
+  const stderr: Buffer[] = []
+
+  child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+  child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+
+  const ready = new Promise<void>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('message', (message) => {
+      if (message === 'ready') {
+        resolve()
+      }
+    })
+  })
+
+  const done = new Promise<ChildReadResult>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (code) => {
+      resolve({
+        code,
+        stderr: Buffer.concat(stderr).toString('utf-8').trim(),
+        stdout: Buffer.concat(stdout).toString('utf-8').trim(),
+      })
+    })
+  })
+
+  return { done, ready }
 }
 
 function removeSqliteFiles(path: string): void {
