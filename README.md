@@ -310,13 +310,13 @@ Tool calls, patches, and file attachments render as structured tags with explici
 
 ```sh
 pnpm install
-pnpm run ai:check           # biome + tsgo type-check
+pnpm run ai:check           # biome + tsc type-check
 pnpm test                   # deterministic ranking + cursor tests
 pnpm run eval:real-history  # regression suite against your local opencode.db
 pnpm run build              # emits dist/
 ```
 
-Code quality is enforced by `biome` and `tsgo --noEmit`. See [`AGENTS.md`](./AGENTS.md) for the style guide.
+Code quality is enforced by `biome` and `tsc --noEmit`. See [`AGENTS.md`](./AGENTS.md) for the style guide.
 
 ## License
 

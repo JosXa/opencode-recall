@@ -51,10 +51,10 @@
     "test": "vitest run",
     "eval:real-history": "tsx scripts/evaluate-real-history.ts",
     "eval:embeddings": "tsx scripts/evaluate-embedding-models.ts",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
-    "ai:check": "biome check --write --error-on-warnings . && tsgo --noEmit",
+    "ai:check": "biome check --write --error-on-warnings . && tsc --noEmit",
     "prepare": "husky",
     "prepublishOnly": "pnpm run build"
   },
@@ -70,10 +70,9 @@
     "@biomejs/biome": "2.5.1",
     "@opencode-ai/plugin": "latest",
     "@types/node": "latest",
-    "@typescript/native-preview": "latest",
     "husky": "latest",
     "tsx": "latest",
-    "typescript": "latest",
+    "typescript": "^7.0.2",
     "vitest": "latest"
   }
 }

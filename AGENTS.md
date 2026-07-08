@@ -42,7 +42,7 @@ git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z
 ## Stack
 
 - Biome for formatting, linting, and import organization
-- `tsgo --noEmit` for type checking
+- `tsc --noEmit` for type checking
 - pnpm is the package manager; Node.js is the runtime for project scripts
 
 ## Code Quality
