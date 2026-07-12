@@ -60,6 +60,7 @@ export const RecallPlugin: Plugin = async () => {
 
       config.agent ??= {}
       const recallAgent = {
+        ...config.agent[RECALL_AGENT_NAME],
         description: RECALL_AGENT_DESCRIPTION,
         mode: 'subagent',
         prompt: recallAgentPrompt,

@@ -163,6 +163,27 @@ Environment variables still work as overrides for CI, MCP, and temporary experim
 
 Run `pnpm run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
 
+### Choosing the `recall` subagent model
+
+Recall integrates with the native OpenCode `agent.recall` configuration instead of replacing it. The plugin always supplies Recall's description, subagent mode, prompt, and history-only tool permissions. Other agent settings, including `model`, `variant`, and `temperature`, stay under your control.
+
+For example, configure a small model for Recall independently of the parent agent:
+
+```jsonc
+// ~/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "recall": {
+      "model": "example-provider/recall-mini",
+      "variant": "low"
+    }
+  }
+}
+```
+
+Recall keeps this model when a parent agent uses a different one, matching native OpenCode subagent behavior. Each machine can select a provider and model available in its own OpenCode configuration. When `agent.recall` is unset, Recall uses OpenCode's normal default model resolution.
+
 ## Tool reference
 
 Recall exposes four history tools. They are intended to be called by the `recall` subagent, not by the main agent directly.

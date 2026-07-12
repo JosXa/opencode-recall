@@ -38,7 +38,15 @@ const BASE_ROW = {
 describe('plugin recall subagent', () => {
   test('registers a recall-only subagent with history tool permissions', async () => {
     const plugin = await RecallPlugin(pluginInput())
-    const config: Config = {}
+    const config: Config = {
+      agent: {
+        [RECALL_AGENT_NAME]: {
+          model: 'example/recall-mini',
+          variant: 'low',
+          temperature: 0.2,
+        },
+      },
+    }
 
     await plugin.config?.(config)
 
@@ -47,6 +55,9 @@ describe('plugin recall subagent', () => {
     const topPermission = config.permission as unknown as Record<string, unknown>
 
     expect(recall?.mode).toBe('subagent')
+    expect(recall?.['model']).toBe('example/recall-mini')
+    expect(recall?.['variant']).toBe('low')
+    expect(recall?.['temperature']).toBe(0.2)
     expect(recall?.description).toContain('Source-grounded')
     expect(recall?.description).toContain('**Reinvoke** subagent for follow-ups/detail')
     expect(recall?.description).toContain('starts out with fresh context window')
