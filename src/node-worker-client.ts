@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 import type { HistoryWorkerRequest, HistoryWorkerResponse } from './worker-protocol.js'
@@ -13,11 +14,11 @@ interface WorkerCommand {
 }
 
 export function executeNodeWorker(
-  packageDir: string,
+  workerDir: string,
   request: HistoryWorkerRequest,
   signal: AbortSignal,
 ): Promise<string> {
-  const worker = resolveWorkerCommand(packageDir)
+  const worker = resolveWorkerCommand(workerDir)
 
   return new Promise((resolve, reject) => {
     const child = spawn(worker.command, worker.args, {
@@ -76,8 +77,8 @@ export function executeNodeWorker(
   })
 }
 
-export function executeNodeWorkerSync(packageDir: string, request: HistoryWorkerRequest): string {
-  const worker = resolveWorkerCommand(packageDir)
+export function executeNodeWorkerSync(workerDir: string, request: HistoryWorkerRequest): string {
+  const worker = resolveWorkerCommand(workerDir)
   const result = spawnSync(worker.command, worker.args, {
     env: process.env,
     input: JSON.stringify(request),
@@ -97,14 +98,21 @@ export function executeNodeWorkerSync(packageDir: string, request: HistoryWorker
   return parsed.value
 }
 
-function resolveWorkerCommand(packageDir: string): WorkerCommand {
-  const builtWorkerPath = join(packageDir, 'src/node-worker.js')
+function resolveWorkerCommand(workerDir: string): WorkerCommand {
+  const builtWorkerPath = join(workerDir, 'node-worker.js')
 
   if (existsSync(builtWorkerPath)) {
     return { command: 'node', args: [builtWorkerPath] }
   }
 
-  return { command: 'node', args: ['--import', 'tsx', join(packageDir, 'src/node-worker.ts')] }
+  const sourceWorkerPath = join(workerDir, 'node-worker.ts')
+  if (!existsSync(sourceWorkerPath)) {
+    throw new Error(`opencode-recall worker entry not found in ${workerDir}`)
+  }
+
+  // Source checkouts need tsx, but resolve it here so Node never searches from the consumer cwd.
+  const tsxLoaderPath = createRequire(import.meta.url).resolve('tsx')
+  return { command: 'node', args: ['--import', tsxLoaderPath, sourceWorkerPath] }
 }
 
 function parseWorkerResult(

@@ -20,6 +20,7 @@ import {
 } from './src/tool-defaults.js'
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
+const WORKER_DIR = join(PACKAGE_DIR, 'src')
 const RECALL_AGENT_PROMPT_PATHS = [
   join(PACKAGE_DIR, 'prompts/recall-agent-prompt.txt'),
   join(PACKAGE_DIR, '../prompts/recall-agent-prompt.txt'),
@@ -87,7 +88,7 @@ export const RecallPlugin: Plugin = async () => {
           assertRecallAgent(context.agent)
 
           return executeNodeWorker(
-            PACKAGE_DIR,
+            WORKER_DIR,
             { kind: 'search', args, context: { sessionID: context.sessionID } },
             context.abort,
           )
@@ -113,7 +114,7 @@ export const RecallPlugin: Plugin = async () => {
         async execute(args, context) {
           assertRecallAgent(context.agent)
 
-          return executeNodeWorker(PACKAGE_DIR, { kind: 'read', args }, context.abort)
+          return executeNodeWorker(WORKER_DIR, { kind: 'read', args }, context.abort)
         },
       }),
 
@@ -137,7 +138,7 @@ export const RecallPlugin: Plugin = async () => {
           assertRecallAgent(context.agent)
 
           return executeNodeWorker(
-            PACKAGE_DIR,
+            WORKER_DIR,
             { kind: 'session-index', args, context: { sessionID: context.sessionID } },
             context.abort,
           )
@@ -158,7 +159,7 @@ export const RecallPlugin: Plugin = async () => {
           assertRecallAgent(context.agent)
 
           return executeNodeWorker(
-            PACKAGE_DIR,
+            WORKER_DIR,
             { kind: 'session-save', args, context: { directory: context.directory } },
             context.abort,
           )

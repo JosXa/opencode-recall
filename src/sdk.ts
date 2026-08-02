@@ -41,7 +41,7 @@ const DEFAULT_SEARCH_LIMIT = 50
 const DEFAULT_SESSION_INDEX_LIMIT = 20
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
 const DEFAULT_WORKER_TIMEOUT_MS = 120_000
-const PACKAGE_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
+const WORKER_DIR = dirname(fileURLToPath(import.meta.url))
 
 export class OpenCodeRecall {
   readonly #options: OpenCodeRecallOptions
@@ -158,7 +158,7 @@ export async function searchHistory(
   }
 
   const raw = await executeNodeWorker(
-    PACKAGE_DIR,
+    WORKER_DIR,
     {
       kind: 'search',
       args: searchWorkerArgs(query, options),
@@ -179,7 +179,7 @@ export async function sessionIndex(
   }
 
   const raw = await executeNodeWorker(
-    PACKAGE_DIR,
+    WORKER_DIR,
     {
       kind: 'session-index',
       args: sessionIndexWorkerArgs(options),
@@ -196,7 +196,7 @@ export function readHistoryWindow(
   options: RecallReadOptions & OpenCodeRecallOptions = {},
 ): TranscriptWindow {
   const parsed = JSON.parse(
-    executeNodeWorkerSync(PACKAGE_DIR, {
+    executeNodeWorkerSync(WORKER_DIR, {
       kind: 'read-window',
       args: readWorkerArgs(cursor, options),
     }),
@@ -213,7 +213,7 @@ export function renderHistoryWindow(
   cursor: string,
   options: RecallReadOptions & OpenCodeRecallOptions = {},
 ): string {
-  return executeNodeWorkerSync(PACKAGE_DIR, {
+  return executeNodeWorkerSync(WORKER_DIR, {
     kind: 'read',
     args: readWorkerArgs(cursor, options),
   })
