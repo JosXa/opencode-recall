@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 
 import { RecallPlugin } from '../index.js'
@@ -23,6 +24,8 @@ import { rankSearchRows } from '../src/search.js'
 import { OpenCodeRecall, searchHistory, sessionIndex } from '../src/sdk.js'
 import { RecallSidecarIndex } from '../src/sidecar.js'
 import { Database } from '../src/sqlite.js'
+
+const REPOSITORY_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 const BASE_ROW = {
   sessionId: 'ses_other',
@@ -1282,7 +1285,7 @@ function readCountInChild(path: string): {
         }
       `,
     ],
-    { cwd: '/projects/opencode-recall', env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
+    { cwd: REPOSITORY_ROOT, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
   )
   if (!child.stdout || !child.stderr) {
     throw new Error('child process stdio was not piped')
