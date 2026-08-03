@@ -308,14 +308,20 @@ export class HistoryDatabase {
   }
 
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
-    const changedCondition =
-      since === undefined
-        ? ''
-        : 'and max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) >= ?'
+    // OpenCode advances session.time_updated when its messages or parts change.
+    // Starting incremental reads from those sessions lets SQLite use the
+    // session indexes instead of scanning every JSON part in the history DB.
+    const changedCondition = since === undefined ? '' : 'and coalesce(s.time_updated, 0) >= ?'
     const params = since === undefined ? [] : [since]
 
     const textRows = this.#db
       .query<IndexSourceRow, number[]>(`
+        with changed_sessions as materialized (
+          select s.id, s.title, s.directory, s.time_updated
+          from session s
+          where 1 = 1
+            ${changedCondition}
+        )
         select
           s.id as sessionId,
           s.title as sessionTitle,
@@ -327,12 +333,11 @@ export class HistoryDatabase {
           json_extract(p.data, '$.text') as text,
           'text' as source,
           max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
-        from part p
+        from changed_sessions s
+        cross join part p on p.session_id = s.id
         join message m on m.id = p.message_id
-        join session s on s.id = p.session_id
         where json_extract(p.data, '$.type') = 'text'
           and json_extract(p.data, '$.text') is not null
-          ${changedCondition}
         order by sourceUpdated, p.id
       `)
       .all(...params)
@@ -346,28 +351,25 @@ export class HistoryDatabase {
 
     return this.#db
       .query<IndexSourceRow, number[]>(`
-        with first_message as (
-          select
-            m.session_id as sessionId,
-            m.id as messageId,
-            json_extract(m.data, '$.role') as role,
-            m.time_created as timeCreated,
-            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
-          from message m
-        )
         select
           s.id as sessionId,
           s.title as sessionTitle,
           s.directory as directory,
-          fm.messageId as messageId,
+          fm.id as messageId,
           'session-title:' || s.id as partId,
-          coalesce(fm.role, 'user') as role,
-          coalesce(fm.timeCreated, s.time_updated) as timeCreated,
+          coalesce(json_extract(fm.data, '$.role'), 'user') as role,
+          coalesce(fm.time_created, s.time_updated) as timeCreated,
           trim('Title: ' || coalesce(s.title, '') || char(10) || 'Directory: ' || coalesce(s.directory, '')) as text,
           'session-title' as source,
           coalesce(s.time_updated, 0) as sourceUpdated
         from session s
-        join first_message fm on fm.sessionId = s.id and fm.messageIndex = 1
+        join message fm on fm.id = (
+          select m.id
+          from message m
+          where m.session_id = s.id
+          order by m.time_created, m.id
+          limit 1
+        )
         ${changedCondition}
         order by sourceUpdated, s.id
       `)

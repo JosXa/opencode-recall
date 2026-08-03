@@ -127,14 +127,20 @@ export class RecallSidecarIndex {
       for (let index = 0; index < rows.length; index += SYNC_BATCH_SIZE) {
         const batch = rows.slice(index, index + SYNC_BATCH_SIZE)
         indexedRows += await this.#syncBatch(batch, provider)
-        this.#lexical.sync(batch, undefined)
         maxUpdated = maxSourceUpdated(batch, maxUpdated)
+        // A killed worker must resume after its last completed embedding batch,
+        // rather than restarting the entire backlog on the next search.
+        this.#setMetadata('last_source_updated', String(maxUpdated))
         options.onProgress?.({
           processedRows: Math.min(index + batch.length, rows.length),
           totalRows: rows.length,
           indexedRows,
         })
       }
+
+      // Rebuilding a session-level FTS document per embedding batch becomes
+      // quadratic for large sessions. Apply all lexical changes in one pass.
+      this.#lexical.sync(rows, undefined)
 
       if (sourcePartIds !== undefined) {
         const ids = sourcePartIds()

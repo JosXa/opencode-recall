@@ -757,6 +757,50 @@ describe('current session exclusion', () => {
       removeSqliteFiles(path)
     }
   })
+
+  test('semantic sync checkpoints completed batches before a later batch fails', async () => {
+    const path = `/tmp/opencode-recall-checkpoint-${crypto.randomUUID()}.db`
+    const index = new RecallSidecarIndex(path)
+    const interval = 31 * 60 * 1000
+    const rows = Array.from({ length: 65 }, (_, rowIndex) =>
+      indexRow(
+        'ses_checkpoint',
+        `msg_${rowIndex}`,
+        `part_${rowIndex}`,
+        (rowIndex + 1) * interval,
+      ),
+    )
+    let embedCalls = 0
+    const interruptedProvider: EmbeddingProvider = {
+      model: 'checkpoint-test-model',
+      embed(texts) {
+        embedCalls += 1
+        if (embedCalls === 2) {
+          throw new Error('simulated worker interruption')
+        }
+        return Promise.resolve(texts.map(() => new Float32Array([1, 0, 0])))
+      },
+    }
+
+    try {
+      index.syncLexicalOnly(() => rows.slice(0, 1))
+      await expect(index.sync(() => rows, interruptedProvider)).rejects.toThrow(
+        'simulated worker interruption',
+      )
+
+      let resumedSince: number | undefined
+      await index.sync((since) => {
+        resumedSince = since
+        return rows.filter((row) => since === undefined || row.sourceUpdated >= since)
+      }, interruptedProvider)
+
+      expect(resumedSince).toBeGreaterThan(rows[62]?.sourceUpdated ?? 0)
+      expect(embedCalls).toBe(3)
+    } finally {
+      index.close()
+      removeSqliteFiles(path)
+    }
+  })
 })
 
 describe('library sdk', () => {
