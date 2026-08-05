@@ -1019,6 +1019,67 @@ describe('library sdk', () => {
     }
   })
 
+  test('worker search skips stale cleanup while explicit lexical sync preserves it', async () => {
+    const historyPath = `/tmp/opencode-recall-worker-stale-${crypto.randomUUID()}.db`
+    const sidecarPath = `/tmp/opencode-recall-worker-stale-sidecar-${crypto.randomUUID()}.db`
+    const db = new Database(historyPath)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(
+        db,
+        'ses_stale',
+        'Deleted worker history',
+        'msg_stale',
+        'part_stale',
+        1,
+        'uniquely deleted worker history',
+      )
+
+      await searchHistory('uniquely deleted worker history', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        semantic: false,
+        lexical: true,
+        includeCurrentSession: true,
+      })
+      db.query('delete from part where id = ?').run('part_stale')
+
+      const ordinarySearch = await searchHistory('uniquely deleted worker history', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        semantic: false,
+        lexical: true,
+        includeCurrentSession: true,
+      })
+      expect(ordinarySearch.hits.map((hit) => hit.partId)).toContain('part_stale')
+
+      const explicitSync = await new OpenCodeRecall({
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+      }).syncLexical()
+      expect(explicitSync.deletedRows).toBeGreaterThan(0)
+
+      const afterCleanup = await searchHistory('uniquely deleted worker history', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        semantic: false,
+        lexical: true,
+        sync: false,
+        includeCurrentSession: true,
+      })
+      expect(afterCleanup.hits.map((hit) => hit.partId)).not.toContain('part_stale')
+    } finally {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
+    }
+  })
+
   test('sessionIndex returns newest sessions with title filters and usefulness metrics', async () => {
     const historyPath = `/tmp/opencode-recall-sdk-session-index-${crypto.randomUUID()}.db`
     const sidecarPath = `/tmp/opencode-recall-sdk-session-index-sidecar-${crypto.randomUUID()}.db`
