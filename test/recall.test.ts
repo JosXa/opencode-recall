@@ -1019,7 +1019,7 @@ describe('library sdk', () => {
     }
   })
 
-  test('worker search skips stale cleanup while explicit lexical sync preserves it', async () => {
+  test('worker search removes stale rows from eventless history databases', async () => {
     const historyPath = `/tmp/opencode-recall-worker-stale-${crypto.randomUUID()}.db`
     const sidecarPath = `/tmp/opencode-recall-worker-stale-sidecar-${crypto.randomUUID()}.db`
     const db = new Database(historyPath)
@@ -1056,23 +1056,7 @@ describe('library sdk', () => {
         lexical: true,
         includeCurrentSession: true,
       })
-      expect(ordinarySearch.hits.map((hit) => hit.partId)).toContain('part_stale')
-
-      const explicitSync = await new OpenCodeRecall({
-        historyDbPath: historyPath,
-        sidecarDbPath: sidecarPath,
-      }).syncLexical()
-      expect(explicitSync.deletedRows).toBeGreaterThan(0)
-
-      const afterCleanup = await searchHistory('uniquely deleted worker history', {
-        historyDbPath: historyPath,
-        sidecarDbPath: sidecarPath,
-        semantic: false,
-        lexical: true,
-        sync: false,
-        includeCurrentSession: true,
-      })
-      expect(afterCleanup.hits.map((hit) => hit.partId)).not.toContain('part_stale')
+      expect(ordinarySearch.hits.map((hit) => hit.partId)).not.toContain('part_stale')
     } finally {
       db.close()
       removeSqliteFiles(historyPath)

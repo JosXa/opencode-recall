@@ -12,16 +12,16 @@ Use `--history <path>` and `--sidecar <path>` to select non-default databases. `
 
 ## Measured result
 
-The September 4, 2026 run used Node.js 25.9.0 on macOS against a 10,523,136,000-byte local `opencode.db`. The sidecar contained 123,150 source part IDs. The incremental sample covered the latest 1,000 persisted event rows.
+The September 4, 2026 post-rebase run used Node.js 25.9.0 on macOS against a 10,539,073,536-byte local `opencode.db`. The sidecar contained 123,222 source part IDs. The incremental sample covered the latest 1,000 persisted event rows.
 
 | Plan | Work selected | Time |
 | --- | --- | ---: |
-| Legacy overlap query | 830 changed rows | 22,726.57 ms |
-| Legacy global stale-ID scan | 123,150 IDs | 19,982.37 ms |
-| **Legacy total** | Two full source-table scans | **42,708.94 ms** |
-| **Event-log change discovery** | 10 affected sessions, 147 current rows | **16.33 ms** |
+| Legacy overlap query | 930 changed rows | 387.23 ms |
+| Legacy global stale-ID scan | 123,222 IDs | 25,092.78 ms |
+| **Legacy total** | Two full source-table scans | **25,480.01 ms** |
+| **Event-log change discovery** | 4 affected sessions, 135 current rows | **15.08 ms** |
 
-The observed source-change discovery wall time was 2,615 times lower. This is a comparison of the old and new source-read plans, not equal-row microbenchmarks: the old plan deliberately reads a 30-minute overlap and every source part ID, while the new plan deliberately reads a bounded event window and only affected sessions. The legacy queries run first, so filesystem caching may favor the incremental measurement. Idle event-feed planning measured from the latest cursor took 0.15 ms and read no transcript rows. Production reconciliation additionally compares about 9,000 source and indexed session IDs to detect sessions whose aggregate events were removed during deletion; the end-to-end timings below include that work.
+The observed source-change discovery wall time was 1,690 times lower. This is a comparison of the old and new source-read plans, not equal-row microbenchmarks: the old plan deliberately reads a 30-minute overlap and every source part ID, while the new plan deliberately reads a bounded event window and only affected sessions. The legacy queries run first, so filesystem caching may favor the incremental measurement. Idle event-feed planning measured from the latest cursor took 0.15 ms and read no transcript rows. Production reconciliation additionally compares about 9,000 source and indexed session IDs to detect sessions whose aggregate events were removed during deletion; the end-to-end timings below include that work.
 
 ## End-to-end behavior
 
