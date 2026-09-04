@@ -11,6 +11,7 @@ export interface SqliteRunResult {
 
 export class Database {
   readonly #db: DatabaseSync
+  #transactionDepth = 0
 
   public constructor(path: string, options: { readonly?: boolean } = {}) {
     this.#db = new DatabaseSync(path, {
@@ -40,15 +41,29 @@ export class Database {
     return this.query(sql)
   }
 
-  public transaction(callback: () => void): () => void {
+  public transaction<TResult>(callback: () => TResult, immediate = false): () => TResult {
     return () => {
-      this.#db.exec('begin')
+      const depth = this.#transactionDepth
+      const outermost = depth === 0
+      const savepoint = `nested_transaction_${depth}`
+      this.#db.exec(
+        outermost ? (immediate ? 'begin immediate' : 'begin') : `savepoint ${savepoint}`,
+      )
+      this.#transactionDepth = depth + 1
       try {
-        callback()
-        this.#db.exec('commit')
+        const result = callback()
+        this.#db.exec(outermost ? 'commit' : `release savepoint ${savepoint}`)
+        return result
       } catch (error) {
-        this.#db.exec('rollback')
+        if (outermost) {
+          this.#db.exec('rollback')
+        } else {
+          this.#db.exec(`rollback to savepoint ${savepoint}`)
+          this.#db.exec(`release savepoint ${savepoint}`)
+        }
         throw error
+      } finally {
+        this.#transactionDepth = depth
       }
     }
   }

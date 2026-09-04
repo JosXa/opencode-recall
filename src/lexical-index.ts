@@ -87,6 +87,39 @@ export class LexicalIndex {
     return { indexedRows: indexed, deletedRows: deleted }
   }
 
+  public reconcileSessions(
+    rows: readonly IndexSourceRow[],
+    sessionIds: readonly string[],
+  ): { indexedRows: number; deletedRows: number } {
+    const affectedSessions = new Set(sessionIds)
+    const sourcePartIds = new Set(rows.map((row) => row.partId))
+    let indexedRows = 0
+
+    this.#db.transaction(() => {
+      for (const row of rows) {
+        const text = normalizeText(row.text)
+        if (text.length === 0) {
+          sourcePartIds.delete(row.partId)
+          continue
+        }
+        this.#upsertPart(row, text)
+        affectedSessions.add(row.sessionId)
+        indexedRows += 1
+      }
+    })()
+
+    const deletedRows = this.#removeStaleForSessions([...affectedSessions], sourcePartIds)
+    if (affectedSessions.size > 0) {
+      this.#db.transaction(() => {
+        for (const sessionId of affectedSessions) {
+          this.#rebuildSession(sessionId)
+        }
+      })()
+    }
+
+    return { indexedRows, deletedRows }
+  }
+
   public search(query: string, options: SearchOptions): SearchRow[] {
     const match = buildMatchQuery(query)
     if (match.length === 0) {
@@ -113,6 +146,15 @@ export class LexicalIndex {
       .query<{ readonly count: number }, []>('select count(*) as count from lex_part_meta')
       .get()
     return (row?.count ?? 0) > 0
+  }
+
+  public indexedSessionIds(): string[] {
+    return this.#db
+      .query<{ readonly sessionId: string }, []>(
+        'select session_id as sessionId from lex_session_meta',
+      )
+      .all()
+      .map((row) => row.sessionId)
   }
 
   #initialize(): void {
@@ -346,6 +388,41 @@ export class LexicalIndex {
     return removed
   }
 
+  #removeStaleForSessions(sessionIds: readonly string[], sourcePartIds: Set<string>): number {
+    if (sessionIds.length === 0) {
+      return 0
+    }
+
+    let removed = 0
+    for (const batch of batches(sessionIds)) {
+      const placeholders = batch.map(() => '?').join(',')
+      const indexedRows = this.#db
+        .query<{ readonly rowid: number; readonly partId: string }, string[]>(`
+          select rowid, part_id as partId
+          from lex_part_meta
+          where session_id in (${placeholders})
+        `)
+        .all(...batch)
+
+      this.#db.transaction(() => {
+        for (const row of indexedRows) {
+          if (sourcePartIds.has(row.partId)) {
+            continue
+          }
+          this.#db
+            .query<unknown, [number]>('delete from lex_part_fts where rowid = ?')
+            .run(row.rowid)
+          this.#db
+            .query<unknown, [number]>('delete from lex_part_meta where rowid = ?')
+            .run(row.rowid)
+          removed += 1
+        }
+      })()
+    }
+
+    return removed
+  }
+
   #searchParts(match: string, filters: Filters): readonly LexicalPartRow[] {
     const params: (string | number)[] = [match]
     const where = buildFilterClauses(filters, params, 'pm')
@@ -531,6 +608,16 @@ const TOKEN_SPLIT = /[^\p{L}\p{N}_]+/u
 
 function normalizeText(text: string): string {
   return text.replaceAll(WHITESPACE_RUN, ' ').trim()
+}
+
+const SQLITE_BATCH_SIZE = 500
+
+function batches(values: readonly string[]): readonly string[][] {
+  const output: string[][] = []
+  for (let index = 0; index < values.length; index += SQLITE_BATCH_SIZE) {
+    output.push(values.slice(index, index + SQLITE_BATCH_SIZE))
+  }
+  return output
 }
 
 // FTS5 query sanitiser: drop operators, lowercase, quote each term, OR-join.

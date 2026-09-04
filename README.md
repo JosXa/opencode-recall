@@ -93,7 +93,7 @@ Semantic search uses [Ollama](https://ollama.com) running locally. Install it, t
 ollama --version  # should print a version. install from https://ollama.com/download if not.
 ```
 
-Everything else is handled for you. The first `history_search` call will start `ollama serve` if it isn't running, pull the default embedding model (`all-minilm`, small and fast) if it isn't installed, and build the sidecar index incrementally. Subsequent calls reuse and sync it.
+Everything else is handled for you. The first `history_search` call will start `ollama serve` if it isn't running, pull the default embedding model (`all-minilm`, small and fast) if it isn't installed, and build the sidecar index. Subsequent calls reuse it and synchronize only sessions changed since the previous search.
 
 Lexical search still works without Ollama, but you lose paraphrase recall, which is half the value.
 
@@ -323,7 +323,7 @@ Tool calls, patches, and file attachments render as structured tags with explici
 
 - **Source of truth.** `opencode.db` is opened read-only. The plugin never writes to it.
 - **Sidecar index.** A separate SQLite database (`opencode-recall-index.db`) stores text chunks, content hashes, and `Float32` embedding blobs. Synthetic `session-title:<id>` rows are indexed so proper-noun title queries beat noisy snippet matches.
-- **Sync.** Each `history_search` call performs an incremental sync with a 30-minute overlap window and a lock so concurrent agents don't fight. Stale rows are pruned by comparing part ids.
+- **Sync.** Searches use OpenCode's persisted event log to reconcile only changed sessions, including deletions. There is no watcher or background process. Existing sidecars upgrade automatically; custom eventless databases retain the timestamp fallback.
 - **Ranking.** Lexical and semantic candidates are merged, scored with title/text/directory term ratios plus phrase boosts, filtered to require enough query-term overlap, and diversified to at most two hits per session. A small semantic-rescue lane admits paraphrase matches that miss lexical filters but have high embedding similarity.
 - **Reads.** Windows are computed by `row_number()` over `(session_id, time_created, id)`, then parts are normalized into `text | tool | patch | file` and capped (tool input 2 000 chars, output 6 000 chars).
 

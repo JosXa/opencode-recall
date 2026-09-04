@@ -49,6 +49,7 @@
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "build": "pnpm run clean && tsc -p tsconfig.build.json",
     "test": "vitest run",
+    "benchmark:sync": "tsx scripts/benchmark-sync.ts",
     "eval:real-history": "tsx scripts/evaluate-real-history.ts",
     "eval:embeddings": "tsx scripts/evaluate-embedding-models.ts",
     "typecheck": "tsc --noEmit",

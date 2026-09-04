@@ -3,7 +3,13 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import { loadConfig } from './config.js'
-import type { IndexSourceRow, SearchOptions, SearchRow } from './db.js'
+import type {
+  HistoryDatabase,
+  HistoryEventCursor,
+  IndexSourceRow,
+  SearchOptions,
+  SearchRow,
+} from './db.js'
 import type { EmbeddingProvider } from './embedding.js'
 import { LexicalIndex } from './lexical-index.js'
 import { Database } from './sqlite.js'
@@ -45,6 +51,7 @@ export class RecallSidecarIndex {
   readonly #db: Database
   readonly #owner = randomUUID()
   readonly #lexical: LexicalIndex
+  #syncActive = false
 
   public constructor(path = defaultSidecarPath()) {
     ensureParentDirectory(path)
@@ -81,6 +88,7 @@ export class RecallSidecarIndex {
       create index if not exists chunk_time_created_idx on chunk(time_created);
       create index if not exists chunk_source_updated_idx on chunk(source_updated);
       create index if not exists chunk_message_id_idx on chunk(message_id);
+      create index if not exists chunk_session_id_idx on chunk(session_id);
     `)
     this.#ensureSourceColumn()
     this.#setMetadata('schema_version', INDEX_SCHEMA_VERSION)
@@ -156,6 +164,82 @@ export class RecallSidecarIndex {
     }
   }
 
+  public async syncHistory(
+    history: HistoryDatabase,
+    provider: EmbeddingProvider,
+    options: SyncOptions = {},
+  ): Promise<SyncResult> {
+    const start = performance.now()
+    if (!this.#acquireLock()) {
+      return emptySyncResult(start)
+    }
+
+    let indexedRows = 0
+    let deletedRows = 0
+    let lockLost = false
+    const lockHeartbeat = setInterval(() => {
+      try {
+        lockLost ||= !this.#refreshLock()
+      } catch {
+        lockLost = true
+      }
+    }, LOCK_TTL_MS / 3)
+    lockHeartbeat.unref()
+    try {
+      const modelChanged = this.#getMetadata('embedding_model') !== provider.model
+      const cursor = modelChanged ? undefined : this.#getEventCursor('semantic')
+      const changes = history.readIndexChanges(cursor)
+      if (changes.mode === 'legacy') {
+        return await this.#syncHistoryLegacy(
+          history,
+          provider,
+          options,
+          start,
+          modelChanged,
+          () => lockLost || !this.#refreshLock(),
+        )
+      }
+
+      for (let index = 0; index < changes.rows.length; index += SYNC_BATCH_SIZE) {
+        const batch = changes.rows.slice(index, index + SYNC_BATCH_SIZE)
+        indexedRows += await this.#syncBatch(batch, provider, () => lockLost)
+        if (lockLost || !this.#refreshLock()) {
+          throw new Error('Recall sidecar synchronization lock expired')
+        }
+        options.onProgress?.({
+          processedRows: Math.min(index + batch.length, changes.rows.length),
+          totalRows: changes.rows.length,
+          indexedRows,
+        })
+      }
+
+      const sessionIds =
+        changes.mode === 'full'
+          ? changes.sessionIds
+          : this.#includeDeletedSessionIds(history, changes.sessionIds)
+      const partIds = indexablePartIds(changes.rows)
+      this.#withOwnedLock(() => {
+        deletedRows =
+          changes.mode === 'full'
+            ? this.#deleteStaleChunks(partIds)
+            : this.#deleteStaleChunksForSessions(sessionIds, partIds)
+        if (changes.mode === 'full') {
+          this.#lexical.sync(changes.rows, partIds)
+        } else {
+          this.#lexical.reconcileSessions(changes.rows, sessionIds)
+        }
+        if (changes.cursor !== undefined) {
+          this.#setEventCursors(changes.cursor)
+        }
+        this.#setMetadata('embedding_model', provider.model)
+      }, lockLost)
+      return { elapsedMs: performance.now() - start, indexedRows, deletedRows, lockAcquired: true }
+    } finally {
+      clearInterval(lockHeartbeat)
+      this.#releaseLock()
+    }
+  }
+
   // LexicalIndex owns nested transactions, so the semantic path keeps its sync
   // steps explicit instead of wrapping the whole method in another transaction.
   public syncLexicalOnly(
@@ -184,6 +268,53 @@ export class RecallSidecarIndex {
       this.#setMetadata('last_lexical_synced', String(maxUpdated))
       return { indexedRows, deletedRows, lockAcquired: true }
     } finally {
+      this.#releaseLock()
+    }
+  }
+
+  public syncLexicalHistory(history: HistoryDatabase): SyncResult {
+    const start = performance.now()
+    if (!this.#acquireLock()) {
+      return emptySyncResult(start)
+    }
+
+    let lockLost = false
+    const lockHeartbeat = setInterval(() => {
+      try {
+        lockLost ||= !this.#refreshLock()
+      } catch {
+        lockLost = true
+      }
+    }, LOCK_TTL_MS / 3)
+    lockHeartbeat.unref()
+    try {
+      const changes = history.readIndexChanges(this.#getEventCursor('lexical'))
+      if (changes.mode === 'legacy') {
+        const result = this.#syncLexicalHistoryLegacy(
+          history,
+          () => lockLost || !this.#refreshLock(),
+        )
+        return { ...result, elapsedMs: performance.now() - start }
+      }
+
+      const sessionIds =
+        changes.mode === 'full'
+          ? changes.sessionIds
+          : this.#includeDeletedSessionIds(history, changes.sessionIds)
+      const partIds = indexablePartIds(changes.rows)
+      const result = this.#withOwnedLock(() => {
+        const reconciled =
+          changes.mode === 'full'
+            ? this.#lexical.sync(changes.rows, partIds)
+            : this.#lexical.reconcileSessions(changes.rows, sessionIds)
+        if (changes.cursor !== undefined) {
+          this.#setEventCursor('lexical', changes.cursor)
+        }
+        return reconciled
+      }, lockLost)
+      return { ...result, elapsedMs: performance.now() - start, lockAcquired: true }
+    } finally {
+      clearInterval(lockHeartbeat)
       this.#releaseLock()
     }
   }
@@ -288,33 +419,53 @@ export class RecallSidecarIndex {
     return (row?.count ?? 0) > 0
   }
 
-  async #syncBatch(batch: readonly IndexSourceRow[], provider: EmbeddingProvider): Promise<number> {
-    const pending = batch
+  async #syncBatch(
+    batch: readonly IndexSourceRow[],
+    provider: EmbeddingProvider,
+    lockWasLost: () => boolean = () => false,
+  ): Promise<number> {
+    const candidates = batch
       .map((row) => {
         const text = normalizeIndexText(row.text)
         return { row, text, hash: contentHash(row, text, provider.model) }
       })
-      .filter(
-        (item) => item.text.length > 0 && this.#needsEmbedding(item.row, item.hash, provider.model),
-      )
+      .filter((item) => item.text.length > 0)
+    const pending = candidates.filter((item) =>
+      this.#needsEmbedding(item.row, item.hash, provider.model),
+    )
 
     if (pending.length === 0) {
+      this.#withOwnedLock(() => {
+        for (const item of candidates) {
+          this.#updateChunkMetadata(item.row, item.text)
+        }
+      }, lockWasLost())
       return 0
     }
 
     const embeddings = await provider.embed(pending.map((item) => item.text))
+    if (embeddings.length !== pending.length) {
+      throw new Error(
+        `Embedding provider returned ${embeddings.length} vectors for ${pending.length} texts`,
+      )
+    }
     let indexedRows = 0
 
-    for (const [pendingIndex, embedding] of embeddings.entries()) {
-      const item = pending[pendingIndex]
-
-      if (item === undefined) {
-        continue
+    this.#withOwnedLock(() => {
+      for (const item of candidates) {
+        if (!pending.includes(item)) {
+          this.#updateChunkMetadata(item.row, item.text)
+        }
       }
-
-      this.#upsertChunk(item.row, item.text, item.hash, provider.model, embedding)
-      indexedRows += 1
-    }
+      for (const [pendingIndex, embedding] of embeddings.entries()) {
+        const item = pending[pendingIndex]
+        if (item === undefined) {
+          continue
+        }
+        this.#upsertChunk(item.row, item.text, item.hash, provider.model, embedding)
+        indexedRows += 1
+      }
+    }, lockWasLost())
 
     return indexedRows
   }
@@ -346,6 +497,90 @@ export class RecallSidecarIndex {
     }
 
     return deletedRows
+  }
+
+  #deleteStaleChunksForSessions(
+    sessionIds: readonly string[],
+    sourcePartIds: readonly string[],
+  ): number {
+    if (sessionIds.length === 0) {
+      return 0
+    }
+
+    const sourceIds = new Set(sourcePartIds)
+    let deletedRows = 0
+    for (const batch of batches(sessionIds)) {
+      const placeholders = batch.map(() => '?').join(',')
+      const indexedIds = this.#db
+        .query<{ readonly partId: string }, string[]>(`
+          select part_id as partId
+          from chunk
+          where session_id in (${placeholders})
+        `)
+        .all(...batch)
+      for (const row of indexedIds) {
+        if (sourceIds.has(row.partId)) {
+          continue
+        }
+        this.#db.query<unknown, [string]>('delete from chunk where part_id = ?').run(row.partId)
+        deletedRows += 1
+      }
+    }
+    return deletedRows
+  }
+
+  #includeDeletedSessionIds(
+    history: HistoryDatabase,
+    changedSessionIds: readonly string[],
+  ): string[] {
+    const sourceSessionIds = new Set(history.readSessionIds())
+    const indexedSessionIds = this.#db
+      .query<{ readonly sessionId: string }, []>(
+        'select distinct session_id as sessionId from chunk',
+      )
+      .all()
+      .map((row) => row.sessionId)
+    indexedSessionIds.push(...this.#lexical.indexedSessionIds())
+
+    const sessionIds = new Set(changedSessionIds)
+    for (const sessionId of indexedSessionIds) {
+      if (!sourceSessionIds.has(sessionId)) {
+        sessionIds.add(sessionId)
+      }
+    }
+    return [...sessionIds]
+  }
+
+  #updateChunkMetadata(row: IndexSourceRow, text: string): void {
+    this.#db
+      .query<
+        unknown,
+        [string, string, string, string, string, number, number, string, string, string]
+      >(`
+        update chunk set
+          session_id = ?,
+          session_title = ?,
+          directory = ?,
+          message_id = ?,
+          role = ?,
+          time_created = ?,
+          source_updated = ?,
+          text = ?,
+          source = ?
+        where part_id = ?
+      `)
+      .run(
+        row.sessionId,
+        row.sessionTitle,
+        row.directory,
+        row.messageId,
+        row.role,
+        row.timeCreated,
+        row.sourceUpdated,
+        text,
+        row.source ?? 'text',
+        row.partId,
+      )
   }
 
   #upsertChunk(
@@ -416,26 +651,65 @@ export class RecallSidecarIndex {
   }
 
   #acquireLock(): boolean {
+    if (this.#syncActive) {
+      return false
+    }
+    this.#syncActive = true
     const now = Date.now()
     const expiresAt = now + LOCK_TTL_MS
-    this.#db
-      .query<unknown, [string, number, number]>(`
-        insert into sync_lock (name, owner, expires_at) values ('sync', ?, ?)
-        on conflict(name) do update set owner = excluded.owner, expires_at = excluded.expires_at
-        where sync_lock.expires_at < ?
-      `)
-      .run(this.#owner, expiresAt, now)
-    const row = this.#db
-      .query<{ readonly owner: string }, []>("select owner from sync_lock where name = 'sync'")
-      .get()
-
-    return row?.owner === this.#owner
+    try {
+      this.#db
+        .query<unknown, [string, number, number]>(`
+          insert into sync_lock (name, owner, expires_at) values ('sync', ?, ?)
+          on conflict(name) do update set owner = excluded.owner, expires_at = excluded.expires_at
+          where sync_lock.expires_at < ?
+        `)
+        .run(this.#owner, expiresAt, now)
+      const row = this.#db
+        .query<{ readonly owner: string }, []>("select owner from sync_lock where name = 'sync'")
+        .get()
+      const acquired = row?.owner === this.#owner
+      this.#syncActive = acquired
+      return acquired
+    } catch (error) {
+      this.#syncActive = false
+      if (isSqliteContention(error)) {
+        return false
+      }
+      throw error
+    }
   }
 
   #releaseLock(): void {
-    this.#db
-      .query<unknown, [string]>("delete from sync_lock where name = 'sync' and owner = ?")
-      .run(this.#owner)
+    try {
+      this.#db
+        .query<unknown, [string]>("delete from sync_lock where name = 'sync' and owner = ?")
+        .run(this.#owner)
+    } finally {
+      this.#syncActive = false
+    }
+  }
+
+  #refreshLock(): boolean {
+    const result = this.#db
+      .query<unknown, [number, string]>(
+        "update sync_lock set expires_at = ? where name = 'sync' and owner = ?",
+      )
+      .run(Date.now() + LOCK_TTL_MS, this.#owner)
+    return Number(result.changes) === 1
+  }
+
+  #withOwnedLock<TResult>(callback: () => TResult, alreadyLost = false): TResult {
+    return this.#db.transaction(() => {
+      const row = this.#db
+        .query<{ readonly owner: string }, []>("select owner from sync_lock where name = 'sync'")
+        .get()
+      if (alreadyLost || row?.owner !== this.#owner) {
+        throw new Error('Recall sidecar synchronization lock expired')
+      }
+      this.#refreshLock()
+      return callback()
+    }, true)()
   }
 
   #ensureSourceColumn(): void {
@@ -463,6 +737,94 @@ export class RecallSidecarIndex {
     return Number.isFinite(value) ? value : undefined
   }
 
+  #getMetadata(key: string): string | undefined {
+    const row = this.#db
+      .query<{ readonly value: string }, [string]>('select value from metadata where key = ?')
+      .get(key)
+    return row?.value
+  }
+
+  #getEventCursor(lane: 'lexical' | 'semantic'): HistoryEventCursor | undefined {
+    const rowId = this.#getNumberMetadata(`event_cursor_${lane}_rowid`)
+    const eventId = this.#getMetadata(`event_cursor_${lane}_event_id`)
+    if (rowId === undefined || eventId === undefined || !Number.isSafeInteger(rowId) || rowId < 0) {
+      return undefined
+    }
+    return { rowId, eventId }
+  }
+
+  #setEventCursor(lane: 'lexical' | 'semantic', cursor: HistoryEventCursor): void {
+    this.#setMetadata(`event_cursor_${lane}_rowid`, String(cursor.rowId))
+    this.#setMetadata(`event_cursor_${lane}_event_id`, cursor.eventId)
+  }
+
+  #setEventCursors(cursor: HistoryEventCursor): void {
+    this.#db.transaction(() => {
+      this.#setEventCursor('lexical', cursor)
+      this.#setEventCursor('semantic', cursor)
+    })()
+  }
+
+  async #syncHistoryLegacy(
+    history: HistoryDatabase,
+    provider: EmbeddingProvider,
+    options: SyncOptions,
+    start: number,
+    forceFull: boolean,
+    lockWasLost: () => boolean,
+  ): Promise<SyncResult> {
+    const lastSynced = this.#getNumberMetadata('last_source_updated')
+    const needsLexicalBackfill = !this.#lexical.hasIndexedRows() && this.hasIndexedChunks()
+    const since =
+      forceFull || lastSynced === undefined || needsLexicalBackfill
+        ? undefined
+        : Math.max(0, lastSynced - SYNC_OVERLAP_MS)
+    const rows = history.readTextPartsForIndex(since)
+    let indexedRows = 0
+    let maxUpdated = lastSynced ?? 0
+    for (let index = 0; index < rows.length; index += SYNC_BATCH_SIZE) {
+      const batch = rows.slice(index, index + SYNC_BATCH_SIZE)
+      indexedRows += await this.#syncBatch(batch, provider, lockWasLost)
+      this.#withOwnedLock(() => this.#lexical.sync(batch, undefined), lockWasLost())
+      maxUpdated = maxSourceUpdated(batch, maxUpdated)
+      options.onProgress?.({
+        processedRows: Math.min(index + batch.length, rows.length),
+        totalRows: rows.length,
+        indexedRows,
+      })
+    }
+    const partIds = history.readTextPartIds()
+    const deletedRows = this.#withOwnedLock(() => {
+      const deleted = this.#deleteStaleChunks(partIds)
+      this.#lexical.sync([], partIds)
+      this.#setMetadata('last_source_updated', String(maxUpdated))
+      this.#setMetadata('embedding_model', provider.model)
+      return deleted
+    }, lockWasLost())
+    return { elapsedMs: performance.now() - start, indexedRows, deletedRows, lockAcquired: true }
+  }
+
+  #syncLexicalHistoryLegacy(
+    history: HistoryDatabase,
+    lockWasLost: () => boolean,
+  ): {
+    indexedRows: number
+    deletedRows: number
+    lockAcquired: true
+  } {
+    const lastSynced = this.#getNumberMetadata('last_lexical_synced')
+    const since = lastSynced === undefined ? undefined : Math.max(0, lastSynced - SYNC_OVERLAP_MS)
+    const rows = history.readTextPartsForIndex(since)
+    const ids = history.readTextPartIds()
+    const { indexedRows, deletedRows } = this.#withOwnedLock(() => {
+      const indexed = this.#lexical.sync(rows, undefined).indexedRows
+      const deleted = this.#lexical.sync([], ids).deletedRows
+      this.#setMetadata('last_lexical_synced', String(maxSourceUpdated(rows, lastSynced ?? 0)))
+      return { indexedRows: indexed, deletedRows: deleted }
+    }, lockWasLost())
+    return { indexedRows, deletedRows, lockAcquired: true }
+  }
+
   #setMetadata(key: string, value: string): void {
     this.#db
       .query<unknown, [string, string]>(`
@@ -478,6 +840,37 @@ function normalizeIndexText(text: string): string {
   return normalized.length > MAX_INDEX_TEXT_CHARS
     ? normalized.slice(0, MAX_INDEX_TEXT_CHARS)
     : normalized
+}
+
+function emptySyncResult(start: number): SyncResult {
+  return {
+    elapsedMs: performance.now() - start,
+    indexedRows: 0,
+    deletedRows: 0,
+    lockAcquired: false,
+  }
+}
+
+function isSqliteContention(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  const code = 'code' in error ? String(error.code) : ''
+  return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED'
+}
+
+function indexablePartIds(rows: readonly IndexSourceRow[]): string[] {
+  return rows.filter((row) => normalizeIndexText(row.text).length > 0).map((row) => row.partId)
+}
+
+const SQLITE_BATCH_SIZE = 500
+
+function batches(values: readonly string[]): readonly string[][] {
+  const output: string[][] = []
+  for (let index = 0; index < values.length; index += SQLITE_BATCH_SIZE) {
+    output.push(values.slice(index, index + SQLITE_BATCH_SIZE))
+  }
+  return output
 }
 
 function contentHash(row: IndexSourceRow, text: string, model: string): string {

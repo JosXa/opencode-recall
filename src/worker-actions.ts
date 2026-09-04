@@ -137,17 +137,11 @@ async function executeHistorySearch(
       return formatSearchResponse(request, rows)
     }
 
-    const syncStart = performance.now()
     const provider = semanticEnabled ? new OllamaEmbeddingProvider() : undefined
     const syncResult = shouldSync
       ? semanticEnabled && provider !== undefined
-        ? await sidecar.sync((since) => db.readTextPartsForIndex(since), provider)
-        : {
-            // Ordinary searches refresh changed rows but leave the global stale
-            // audit to explicit sync, avoiding a full source database scan.
-            ...sidecar.syncLexicalOnly((since) => db.readTextPartsForIndex(since)),
-            elapsedMs: performance.now() - syncStart,
-          }
+        ? await sidecar.syncHistory(db, provider)
+        : sidecar.syncLexicalHistory(db)
       : undefined
     const [semanticRows, lexicalRows] = await Promise.all([
       semanticEnabled && provider !== undefined

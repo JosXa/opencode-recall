@@ -132,36 +132,13 @@ export class DirectOpenCodeRecall {
   }
 
   public async sync(options: SyncOptions = {}): Promise<SyncResult> {
-    return this.#sync(options, true)
-  }
-
-  async #sync(options: SyncOptions, pruneStale: boolean): Promise<SyncResult> {
-    return this.#sidecar.sync(
-      (since) => this.#history.readTextPartsForIndex(since),
-      this.#provider,
-      pruneStale ? () => this.#history.readTextPartIds() : undefined,
-      options,
-    )
+    return this.#sidecar.syncHistory(this.#history, this.#provider, options)
   }
 
   // Build/refresh just the FTS5 lexical index, skipping embeddings.
   // Used when callers opt out of semantic but still want lexical recall.
   public syncLexical(): SyncResult {
-    return this.#syncLexical(true)
-  }
-
-  #syncLexical(pruneStale: boolean): SyncResult {
-    const start = performance.now()
-    const result = this.#sidecar.syncLexicalOnly(
-      (since) => this.#history.readTextPartsForIndex(since),
-      pruneStale ? () => this.#history.readTextPartIds() : undefined,
-    )
-    return {
-      elapsedMs: performance.now() - start,
-      indexedRows: result.indexedRows,
-      deletedRows: result.deletedRows,
-      lockAcquired: result.lockAcquired,
-    }
+    return this.#sidecar.syncLexicalHistory(this.#history)
   }
 
   public async search(
@@ -179,8 +156,8 @@ export class DirectOpenCodeRecall {
     const shouldSync = (semanticEnabled || lexicalEnabled) && options.sync !== false
     const syncResult = shouldSync
       ? semanticEnabled
-        ? await this.#sync(options.syncOptions ?? {}, false)
-        : this.#syncLexical(false)
+        ? await this.sync(options.syncOptions)
+        : this.syncLexical()
       : undefined
     const lexicalRows = lexicalEnabled ? this.#sidecar.lexicalSearch(query, searchOptions) : []
     const semanticRows = semanticEnabled
