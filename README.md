@@ -143,7 +143,7 @@ Most users never need to edit it. Open it when your OpenCode database lives some
     "path": "~/.local/share/opencode/opencode.db",
 
     // Sidecar embedding index. Safe to delete; rebuilt on next search.
-    // Default: ~/.local/share/opencode/opencode-recall-index.db
+    // Default: a filename derived from the canonical source path.
     "indexPath": "~/.local/share/opencode/opencode-recall-index.db"
   },
 
@@ -160,6 +160,31 @@ Most users never need to edit it. Open it when your OpenCode database lives some
 ```
 
 Environment variables still work as overrides for CI, MCP, and temporary experiments: `OPENCODE_DB_PATH`, `OPENCODE_RECALL_DB_PATH`, `OPENCODE_RECALL_OLLAMA_URL`, and `OPENCODE_RECALL_EMBED_MODEL`.
+
+### Read V1 and V2 history from either runtime
+
+Set the same named sources in both runtimes' `recall.jsonc` files:
+
+```jsonc
+{
+  "database": {
+    "sources": [
+      { "id": "v1", "path": "~/.local/share/opencode/opencode.db", "indexPath": "~/.local/share/opencode/recall-v1.db" },
+      { "id": "v2", "path": "~/.local/share/opencode/opencode-v2.db", "indexPath": "~/.local/share/opencode/recall-v2.db" }
+    ]
+  }
+}
+```
+
+Each source has one sidecar shared by all Recall hosts. Event cursors, embeddings, sync locks and stale-row cleanup remain local to that source. Source databases remain read-only, and the hosts keep their own session databases. Missing sources are skipped without opening or pruning their sidecars. A cursor naming an unavailable source reports an error.
+
+Source IDs must be unique and contain only letters, digits, `_` or `-`. Keep them stable across configs so saved cursors remain usable. Each canonical source path must be unique, each sidecar must be unique, and a sidecar cannot alias any source. Existing symlinks are resolved. A sidecar records its source identity atomically; conflicting configurations fail instead of reconciling the wrong database. Existing unbound indexes are rebuilt when first bound because their source cannot be established reliably. Use fresh per-source sidecars when migrating a previously shared index.
+
+With multiple sources, results include `sourceId`, and cursors are qualified, for example `v1::msg_example` or `v2::ses_example`. Copy these exact values into read and save calls, including navigation cursors. Do not append offsets. Raw `msg_...` and `ses_...` inputs still work when only one available source contains the ID; ambiguous IDs produce an error listing qualified choices. Copies in different sources remain distinct results, and ranking, result limits, recent entries and session lists merge globally. A qualified `excludeSessionId` filters only that source; a raw exclusion applies to every source. Current-session exclusion is scoped to the host database when it matches a configured source.
+
+The SDK accepts the same list as `new OpenCodeRecall({ sources: [...] })` or `searchHistory(query, { sources: [...] })`. Hits and transcript windows retain raw IDs plus `sourceId`; use the `cursor` and navigation fields to read. The worker SDK and direct SDK with a custom embedding provider share the same federation coordinator.
+
+`database.path` / `database.indexPath` and SDK `historyDbPath` / `sidecarDbPath` remain supported for one source, with unchanged cursor output. The default source follows `OPENCODE_DB`, or `opencode.db` in the OpenCode data directory. Default sidecars use `opencode-recall-<source-path-hash>.db` so V1 and V2 cannot accidentally share an index. `OPENCODE_DB_PATH` or `OPENCODE_RECALL_DB_PATH` suppresses the configured source list for isolated runs; explicit SDK source lists take precedence. The former `legacyPath` option resolves to a separate `legacy` source; new configurations should use `sources`.
 
 Run `pnpm run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
 
@@ -228,7 +253,7 @@ Use this when you do not have a search term yet and want to spot substantial pas
 
 | Arg      | Type                             | Notes                                           |
 | -------- | -------------------------------- | ----------------------------------------------- |
-| `cursor` | string                           | **Required.** A `ses_...` session cursor only.  |
+| `cursor` | string                           | **Required.** An exact session cursor, including source-qualified `ses_...` cursors. |
 | `path`   | string                           | **Required.** Workspace-relative destination.   |
 | `format` | `chatml` \| `markdown` \| `jsonl` | Transcript encoding. Default `chatml`.          |
 
@@ -281,7 +306,7 @@ Returns a JSON array of compact hits:
 
 | Arg      | Type   | Notes                                                                                          |
 | -------- | ------ | ---------------------------------------------------------------------------------------------- |
-| `cursor` | string | **Required.** A `msg_…`, a `ses_…`, or an encoded cursor from `history_search`.                |
+| `cursor` | string | **Required.** An exact cursor from search or navigation, including source-qualified cursors; raw `msg_…` and `ses_…` inputs also work when unambiguous. |
 | `mode`   | string | `around` (default), `next`, `prev`, `head`, or `tail`. `full` is rejected; page instead.        |
 | `n`      | number | Message count. Default `12`, max `50`.                                                         |
 

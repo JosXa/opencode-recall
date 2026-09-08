@@ -1,4 +1,5 @@
 import { loadConfig } from './config.js'
+import { installHistorySchema } from './history-schema.js'
 import { Database } from './sqlite.js'
 
 const WHITESPACE_REGEX = /\s+/u
@@ -21,6 +22,7 @@ export interface SessionIndexOptions {
 }
 
 export interface SessionIndexRow {
+  readonly sourceId?: string
   readonly sessionId: string
   readonly title: string
   readonly directory: string
@@ -43,6 +45,7 @@ export interface ReadOptions {
 }
 
 export interface SearchRow {
+  readonly sourceId?: string
   readonly sessionId: string
   readonly sessionTitle: string
   readonly directory: string
@@ -103,13 +106,26 @@ export interface WindowRows {
 
 export class HistoryDatabase {
   readonly #db: Database
+  readonly #legacyPath: string | undefined
 
-  public constructor(path = defaultOpenCodeDbPath()) {
-    this.#db = new Database(path, { readonly: true })
+  public constructor(path?: string, legacyPath?: string) {
+    const config = path === undefined ? loadConfig().database : undefined
+    this.#legacyPath = legacyPath ?? config?.legacyPath
+    this.#db = new Database(path ?? config?.path ?? defaultOpenCodeDbPath(), { readonly: true })
+    installHistorySchema(this.#db, this.#legacyPath)
   }
 
   public close(): void {
     this.#db.close()
+  }
+
+  public containsCursor(cursor: {
+    readonly messageId?: string
+    readonly sessionId?: string
+  }): boolean {
+    return cursor.messageId === undefined
+      ? this.#db.query('select id from session where id = ?').get(cursor.sessionId ?? '') !== null
+      : this.#db.query('select id from message where id = ?').get(cursor.messageId) !== null
   }
 
   public search(query: string, options: SearchOptions): SearchRow[] {
@@ -255,6 +271,10 @@ export class HistoryDatabase {
   }
 
   public sessionIndex(options: SessionIndexOptions): SessionIndexRow[] {
+    return this.#db.transaction(() => this.#sessionIndex(options))()
+  }
+
+  #sessionIndex(options: SessionIndexOptions): SessionIndexRow[] {
     const conditions = [
       ...(options.after === undefined ? [] : ['coalesce(s.time_updated, 0) >= ?']),
       ...(options.before === undefined ? [] : ['coalesce(s.time_updated, 0) <= ?']),
@@ -272,51 +292,50 @@ export class HistoryDatabase {
       options.limit,
     ]
 
-    return this.#db
-      .query<SessionIndexRow, (string | number)[]>(`
-        with message_stats as (
+    const sessions = this.#db
+      .query<
+        Pick<SessionIndexRow, 'sessionId' | 'title' | 'directory' | 'updatedAt'>,
+        (string | number)[]
+      >(`
+          select s.id as sessionId, coalesce(s.title, '') as title, coalesce(s.directory, '') as directory,
+            coalesce(s.time_updated,
+              (select max(m.time_created) from message m where m.session_id = s.id),
+              0) as updatedAt
+          from session s
+          ${where}
+          order by updatedAt desc, s.id desc
+          limit ?
+      `)
+      .all(...params)
+
+    // A join against a UNION view can materialize the entire history before
+    // filtering. Bind each selected ID so SQLite pushes it into both schemas.
+    const metrics = this.#db.query<
+      Omit<SessionIndexRow, 'sessionId' | 'title' | 'directory' | 'updatedAt'>,
+      [string, string]
+    >(`
+        select ms.*, ps.* from (
           select
-            m.session_id as sessionId,
             min(m.time_created) as firstMessageAt,
             max(m.time_created) as lastMessageAt,
             count(*) as messageCount,
-            sum(case when json_extract(m.data, '$.role') = 'user' then 1 else 0 end) as turns,
-            sum(case when json_extract(m.data, '$.role') = 'assistant' then 1 else 0 end) as assistantMessages,
-            sum(case when json_extract(m.data, '$.role') = 'tool' then 1 else 0 end) as toolMessages
+            coalesce(sum(case when json_extract(m.data, '$.role') = 'user' then 1 else 0 end), 0) as turns,
+            coalesce(sum(case when json_extract(m.data, '$.role') = 'assistant' then 1 else 0 end), 0) as assistantMessages,
+            coalesce(sum(case when json_extract(m.data, '$.role') = 'tool' then 1 else 0 end), 0) as toolMessages
           from message m
-          group by m.session_id
-        ),
-        part_stats as (
+          where m.session_id = ?
+        ) ms cross join (
           select
-            p.session_id as sessionId,
             count(*) as textPartCount,
-            sum(length(coalesce(json_extract(p.data, '$.text'), ''))) as approxContextChars
+            coalesce(sum(length(coalesce(json_extract(p.data, '$.text'), ''))), 0) as approxContextChars
           from part p
-          where json_extract(p.data, '$.type') = 'text'
+          where p.session_id = ? and json_extract(p.data, '$.type') = 'text'
             and json_extract(p.data, '$.text') is not null
-          group by p.session_id
-        )
-        select
-          s.id as sessionId,
-          coalesce(s.title, '') as title,
-          coalesce(s.directory, '') as directory,
-          coalesce(s.time_updated, ms.lastMessageAt, 0) as updatedAt,
-          ms.firstMessageAt as firstMessageAt,
-          ms.lastMessageAt as lastMessageAt,
-          coalesce(ms.messageCount, 0) as messageCount,
-          coalesce(ms.turns, 0) as turns,
-          coalesce(ms.assistantMessages, 0) as assistantMessages,
-          coalesce(ms.toolMessages, 0) as toolMessages,
-          coalesce(ps.textPartCount, 0) as textPartCount,
-          coalesce(ps.approxContextChars, 0) as approxContextChars
-        from session s
-        left join message_stats ms on ms.sessionId = s.id
-        left join part_stats ps on ps.sessionId = s.id
-        ${where}
-        order by updatedAt desc, s.id desc
-        limit ?
-      `)
-      .all(...params)
+        ) ps
+    `)
+    return sessions.flatMap((session) =>
+      metrics.all(session.sessionId, session.sessionId).map((stats) => ({ ...session, ...stats })),
+    )
   }
 
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
@@ -358,27 +377,15 @@ export class HistoryDatabase {
   }
 
   public readLatestEventCursor(): HistoryEventCursor | undefined {
-    if (!this.#hasTable('event')) {
-      return undefined
-    }
-
-    const row = this.#db
-      .query<{ readonly rowId: number; readonly eventId: string }, []>(`
-        select rowid as rowId, id as eventId
-        from event
-        order by rowid desc
-        limit 1
-      `)
-      .get()
-
-    return row ?? { rowId: 0, eventId: '' }
+    if (!this.#hasTable('event')) return undefined
+    return this.#readLatestEventCursor()
   }
 
   public readIndexChanges(cursor: HistoryEventCursor | undefined): HistoryIndexChanges {
-    if (!this.#hasTable('event')) {
+    // The V2 event log cannot describe changes in a separately running V1 database.
+    if (this.#legacyPath !== undefined || !this.#hasTable('event')) {
       return { mode: 'legacy', sessionIds: [], rows: [] }
     }
-
     return this.#db.transaction(() => {
       const latest = this.#readLatestEventCursor()
       if (cursor === undefined || !this.#eventCursorMatches(cursor, latest)) {
@@ -389,7 +396,6 @@ export class HistoryDatabase {
           rows: this.readTextPartsForIndex(undefined),
         }
       }
-
       const sessionIds = this.readChangedSessionIds(cursor.rowId, latest.rowId)
       return {
         mode: 'incremental' as const,
@@ -401,40 +407,23 @@ export class HistoryDatabase {
   }
 
   public eventCursorMatches(cursor: HistoryEventCursor): boolean {
-    if (!this.#hasTable('event')) {
-      return false
-    }
-
+    if (!this.#hasTable('event')) return false
     return this.#eventCursorMatches(cursor, this.#readLatestEventCursor())
   }
 
   #eventCursorMatches(cursor: HistoryEventCursor, latest: HistoryEventCursor): boolean {
-    if (cursor.rowId === 0) {
-      return cursor.eventId === ''
-    }
-
-    if (latest.rowId < cursor.rowId) {
-      return false
-    }
-
+    if (cursor.rowId === 0) return cursor.eventId === ''
+    if (latest.rowId < cursor.rowId) return false
     const row = this.#db
       .query<{ readonly eventId: string }, [number]>(
         'select id as eventId from event where rowid = ?',
       )
       .get(cursor.rowId)
-
-    if (row !== null) {
-      return row.eventId === cursor.eventId
-    }
-
-    return false
+    return row?.eventId === cursor.eventId
   }
 
   public readChangedSessionIds(afterRowId: number, throughRowId: number): string[] {
-    if (throughRowId <= afterRowId) {
-      return []
-    }
-
+    if (throughRowId <= afterRowId) return []
     return this.#db
       .query<{ readonly sessionId: string }, [number, number]>(`
         select distinct aggregate_id as sessionId
@@ -456,10 +445,6 @@ export class HistoryDatabase {
   }
 
   public readTextPartsForSessions(sessionIds: readonly string[]): IndexSourceRow[] {
-    if (sessionIds.length === 0) {
-      return []
-    }
-
     const rows: IndexSourceRow[] = []
     for (const batch of batches(sessionIds)) {
       const placeholders = batch.map(() => '?').join(',')
@@ -487,7 +472,6 @@ export class HistoryDatabase {
         .all(...batch)
       rows.push(...textRows, ...this.#readSessionTitleRowsForSessions(batch))
     }
-
     return rows
   }
 
@@ -510,11 +494,8 @@ export class HistoryDatabase {
           coalesce(s.time_updated, 0) as sourceUpdated
         from session s
         join message fm on fm.id = (
-          select m.id
-          from message m
-          where m.session_id = s.id
-          order by m.time_created, m.id
-          limit 1
+          select m.id from message m where m.session_id = s.id
+          order by m.history_order, m.id limit 1
         )
         ${changedCondition}
         order by sourceUpdated, s.id
@@ -567,7 +548,7 @@ export class HistoryDatabase {
           select m.id
           from message m
           where m.session_id = s.id
-          order by m.time_created, m.id
+          order by m.history_order, m.id
           limit 1
         )
         where s.id in (${placeholders})
@@ -607,7 +588,7 @@ export class HistoryDatabase {
         select id as messageId
         from message
         where session_id = ?
-        order by time_created, id
+        order by history_order, id
         limit 1
       `)
       .get(sessionId)
@@ -647,7 +628,7 @@ export class HistoryDatabase {
             s.directory as directory,
             json_extract(m.data, '$.role') as role,
             m.time_created as timeCreated,
-            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
+            row_number() over (partition by m.session_id order by m.history_order, m.id) as messageIndex
           from message m
           join session s on s.id = m.session_id
         )
@@ -668,7 +649,7 @@ export class HistoryDatabase {
             m.id as messageId,
             json_extract(m.data, '$.role') as role,
             m.time_created as timeCreated,
-            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
+            row_number() over (partition by m.session_id order by m.history_order, m.id) as messageIndex
           from message m
           where m.session_id = ?
         )
@@ -755,7 +736,7 @@ function hasMessageAfter(db: Database, sessionId: string, index: number): boolea
   const row = db
     .query<{ readonly count: number }, [string, number]>(`
       with ordered as (
-        select row_number() over (partition by session_id order by time_created, id) as messageIndex
+        select row_number() over (partition by session_id order by history_order, id) as messageIndex
         from message
         where session_id = ?
       )

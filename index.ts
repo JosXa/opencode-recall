@@ -100,7 +100,9 @@ export const RecallPlugin: Plugin = async () => {
         args: {
           cursor: tool.schema
             .string()
-            .describe('Cursor from search/read nav, msg_*, or ses_*. No :offset suffixes.')
+            .describe(
+              'Exact cursor from search/read nav, including source-qualified cursors; raw msg_* or ses_* also accepted. No :offset suffixes.',
+            )
             .optional(),
           mode: tool.schema
             .string()
@@ -148,7 +150,11 @@ export const RecallPlugin: Plugin = async () => {
       [SESSION_SAVE_COMMAND]: tool({
         description: 'Materialize session to file.',
         args: {
-          cursor: tool.schema.string().describe('Session cursor. ses_* only.'),
+          cursor: tool.schema
+            .string()
+            .describe(
+              'Exact session cursor from session_index, including source-qualified ses_* cursors.',
+            ),
           path: tool.schema.string().describe('Workspace-relative destination.'),
           format: tool.schema
             .enum(['chatml', 'markdown', 'jsonl'])

@@ -25,6 +25,12 @@ export class Database {
     this.#db.exec(sql)
   }
 
+  public function(name: string, callback: (type: string, data: string) => string): void {
+    this.#db.function(name, { deterministic: true }, (type, data) =>
+      callback(String(type), String(data)),
+    )
+  }
+
   public close(): void {
     this.#db.close()
   }

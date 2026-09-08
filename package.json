@@ -48,7 +48,8 @@
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
     "build": "pnpm run clean && tsc -p tsconfig.build.json",
-    "test": "vitest run",
+    "test": "vitest run && pnpm run test:federated-worker",
+    "test:federated-worker": "pnpm run build && node --test test/federated-worker.node-test.mjs",
     "benchmark:sync": "tsx scripts/benchmark-sync.ts",
     "eval:real-history": "tsx scripts/evaluate-real-history.ts",
     "eval:embeddings": "tsx scripts/evaluate-embedding-models.ts",

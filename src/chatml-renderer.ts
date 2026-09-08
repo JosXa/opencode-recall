@@ -1,3 +1,4 @@
+import { qualifyCursor } from './cursor.js'
 import type {
   HistoryRenderer,
   TranscriptMessage,
@@ -24,7 +25,7 @@ const CHATML_ROLES = new Set(['system', 'user', 'assistant', 'tool', 'developer'
 
 function renderWindowStart(window: TranscriptWindow): string {
   const attrs = [
-    attr('sid', window.sessionId),
+    attr('sid', qualifyCursor(window.sessionId, window.sourceId)),
     attr('dir', window.directory),
     attr('mode', window.mode),
     attr('range', `${window.startIndex}-${window.endIndex}`),
@@ -81,7 +82,7 @@ function chatmlRole(role: string): string {
 
 function messageAttrs(message: TranscriptMessage, role: string): string[] {
   const attrs = [
-    attr('id', message.id),
+    attr('id', qualifyCursor(message.id, message.sourceId)),
     attr('index', String(message.index)),
     attr('time', new Date(message.timeCreated).toISOString()),
   ]

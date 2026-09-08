@@ -178,7 +178,7 @@ describe('config file loading', () => {
       expect(existsSync(configPath)).toBe(true)
       expect(readFileSync(configPath, 'utf-8')).toContain('"database"')
       expect(config.database.path).toContain('/opencode/opencode.db')
-      expect(config.database.indexPath).toContain('/opencode/opencode-recall-index.db')
+      expect(config.database.indexPath).toMatch(/\/opencode\/opencode-recall-[a-f0-9]{20}\.db$/)
       expect(config.embeddings).toEqual({
         ollamaUrl: 'http://127.0.0.1:11434',
         model: 'all-minilm',
@@ -1452,6 +1452,7 @@ const CONFIG_ENV_KEYS = [
   'OPENCODE_CONFIG_DIR',
   'XDG_DATA_HOME',
   'OPENCODE_DB_PATH',
+  'OPENCODE_DB',
   'OPENCODE_RECALL_DB_PATH',
   'OPENCODE_RECALL_OLLAMA_URL',
   'OPENCODE_RECALL_EMBED_MODEL',
@@ -1498,6 +1499,7 @@ function applyRecallEnv(context: RecallEnvContext): void {
   process.env['OPENCODE_CONFIG_DIR'] = context.configDir
   process.env['XDG_DATA_HOME'] = context.dataHome
   delete process.env['OPENCODE_DB_PATH']
+  delete process.env['OPENCODE_DB']
   delete process.env['OPENCODE_RECALL_DB_PATH']
   delete process.env['OPENCODE_RECALL_OLLAMA_URL']
   delete process.env['OPENCODE_RECALL_EMBED_MODEL']
