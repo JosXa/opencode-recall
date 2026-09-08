@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 const DEFAULT_OPENCODE_DATA_DIR_RELATIVE = '.local/share/opencode'
 const DEFAULT_OPENCODE_DB_FILENAME = 'opencode.db'
@@ -56,9 +56,11 @@ export function getConfigFilePath(): string {
 
 function defaultConfig(): RecallConfig {
   const dataDir = openCodeDataDir()
+  const { OPENCODE_DB } = process.env
+  const hostDatabase = nonEmptyString(OPENCODE_DB) ?? DEFAULT_OPENCODE_DB_FILENAME
   return {
     database: {
-      path: join(dataDir, DEFAULT_OPENCODE_DB_FILENAME),
+      path: isAbsolute(hostDatabase) ? hostDatabase : join(dataDir, hostDatabase),
       indexPath: join(dataDir, DEFAULT_SIDECAR_DB_FILENAME),
     },
     embeddings: {

@@ -1,109 +1,53 @@
-name: Release and Publish
+name: Publish OpenCode V2 prerelease
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Exact package version to publish (must end in -opencode-v2)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 jobs:
-  release:
+  publish:
+    if: github.ref == 'refs/heads/opencode-v2'
     runs-on: ubuntu-latest
+    environment: npm
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11.9.0
 
-      - name: Setup Node.js
+      - name: Setup Node.js and npm registry
         uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with trusted-publishing support
+        run: npm install --global npm@11.9.0
+
+      - name: Guard branch, package name, and prerelease version
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: node scripts/verify-release.mjs
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run canonical agent check
-        run: pnpm run ai:check
+      - name: Verify package
+        run: pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build
 
-      - name: Build package
-        run: pnpm run build
+      - name: Pack release artifact
+        run: npm pack
 
-      - name: Generate Release Notes
-        id: release_notes
-        run: |
-          echo "Generating release notes..."
-
-          # Get previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s (%h)" ${{ github.ref_name }})
-          else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..${{ github.ref_name }})
-          fi
-
-          # Categorize commits
-          FEATURES=$(echo "$COMMITS" | grep -E "^- feat" || true)
-          FIXES=$(echo "$COMMITS" | grep -E "^- fix" || true)
-          DOCS=$(echo "$COMMITS" | grep -E "^- docs" || true)
-          CHORES=$(echo "$COMMITS" | grep -E "^- chore" || true)
-          OTHERS=$(echo "$COMMITS" | grep -Ev "^- (feat|fix|docs|chore)" || true)
-
-          # Build changelog
-          CHANGELOG="## What's Changed"$'\n'
-
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG+=$'\n'"### ✨ Features"$'\n'"$FEATURES"$'\n'
-          fi
-
-          if [ -n "$FIXES" ]; then
-            CHANGELOG+=$'\n'"### 🐛 Bug Fixes"$'\n'"$FIXES"$'\n'
-          fi
-
-          if [ -n "$DOCS" ]; then
-            CHANGELOG+=$'\n'"### 📚 Documentation"$'\n'"$DOCS"$'\n'
-          fi
-
-          if [ -n "$CHORES" ]; then
-            CHANGELOG+=$'\n'"### 🔧 Chores"$'\n'"$CHORES"$'\n'
-          fi
-
-          if [ -n "$OTHERS" ]; then
-            CHANGELOG+=$'\n'"### Other Changes"$'\n'"$OTHERS"$'\n'
-          fi
-
-          # Add full changelog link if there's a previous tag
-          if [ -n "$PREV_TAG" ]; then
-            CHANGELOG+=$'\n'"**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.ref_name }}"
-          fi
-
-          # Save to file for the release
-          echo "$CHANGELOG" > release_notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          body_path: release_notes.md
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Node.js for npm publishing
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Publish to npm
-        run: npm publish --provenance --access public
+      - name: Publish prerelease through npm OIDC
+        run: npm publish josxa-opencode-recall-*.tgz --tag opencode-v2 --access public --provenance

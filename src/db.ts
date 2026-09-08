@@ -1,4 +1,5 @@
 import { loadConfig } from './config.js'
+import { installHistorySchema } from './history-schema.js'
 import { Database } from './sqlite.js'
 
 const WHITESPACE_REGEX = /\s+/u
@@ -61,6 +62,18 @@ export interface IndexSourceRow extends SearchRow {
   readonly sourceUpdated: number
 }
 
+export interface HistoryEventCursor {
+  readonly rowId: number
+  readonly eventId: string
+}
+
+export interface HistoryIndexChanges {
+  readonly mode: 'full' | 'incremental' | 'legacy'
+  readonly cursor?: HistoryEventCursor
+  readonly sessionIds: readonly string[]
+  readonly rows: readonly IndexSourceRow[]
+}
+
 export interface MessageRow {
   readonly messageId: string
   readonly role: string
@@ -94,6 +107,7 @@ export class HistoryDatabase {
 
   public constructor(path = defaultOpenCodeDbPath()) {
     this.#db = new Database(path, { readonly: true })
+    installHistorySchema(this.#db)
   }
 
   public close(): void {
@@ -308,14 +322,20 @@ export class HistoryDatabase {
   }
 
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
-    const changedCondition =
-      since === undefined
-        ? ''
-        : 'and max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) >= ?'
+    // OpenCode advances session.time_updated when its messages or parts change.
+    // Starting incremental reads from those sessions lets SQLite use the
+    // session indexes instead of scanning every JSON part in the history DB.
+    const changedCondition = since === undefined ? '' : 'and coalesce(s.time_updated, 0) >= ?'
     const params = since === undefined ? [] : [since]
 
     const textRows = this.#db
       .query<IndexSourceRow, number[]>(`
+        with changed_sessions as materialized (
+          select s.id, s.title, s.directory, s.time_updated
+          from session s
+          where 1 = 1
+            ${changedCondition}
+        )
         select
           s.id as sessionId,
           s.title as sessionTitle,
@@ -327,17 +347,114 @@ export class HistoryDatabase {
           json_extract(p.data, '$.text') as text,
           'text' as source,
           max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
-        from part p
+        from changed_sessions s
+        cross join part p on p.session_id = s.id
         join message m on m.id = p.message_id
-        join session s on s.id = p.session_id
         where json_extract(p.data, '$.type') = 'text'
           and json_extract(p.data, '$.text') is not null
-          ${changedCondition}
         order by sourceUpdated, p.id
       `)
       .all(...params)
 
     return [...textRows, ...this.readSessionTitleRowsForIndex(since)]
+  }
+
+  public readLatestEventCursor(): HistoryEventCursor | undefined {
+    if (!this.#hasTable('event')) return undefined
+    return this.#readLatestEventCursor()
+  }
+
+  public readIndexChanges(cursor: HistoryEventCursor | undefined): HistoryIndexChanges {
+    if (!this.#hasTable('event')) {
+      return { mode: 'legacy', sessionIds: [], rows: [] }
+    }
+    return this.#db.transaction(() => {
+      const latest = this.#readLatestEventCursor()
+      if (cursor === undefined || !this.#eventCursorMatches(cursor, latest)) {
+        return {
+          mode: 'full' as const,
+          cursor: latest,
+          sessionIds: [],
+          rows: this.readTextPartsForIndex(undefined),
+        }
+      }
+      const sessionIds = this.readChangedSessionIds(cursor.rowId, latest.rowId)
+      return {
+        mode: 'incremental' as const,
+        cursor: latest,
+        sessionIds,
+        rows: this.readTextPartsForSessions(sessionIds),
+      }
+    })()
+  }
+
+  public eventCursorMatches(cursor: HistoryEventCursor): boolean {
+    if (!this.#hasTable('event')) return false
+    return this.#eventCursorMatches(cursor, this.#readLatestEventCursor())
+  }
+
+  #eventCursorMatches(cursor: HistoryEventCursor, latest: HistoryEventCursor): boolean {
+    if (cursor.rowId === 0) return cursor.eventId === ''
+    if (latest.rowId < cursor.rowId) return false
+    const row = this.#db
+      .query<{ readonly eventId: string }, [number]>(
+        'select id as eventId from event where rowid = ?',
+      )
+      .get(cursor.rowId)
+    return row?.eventId === cursor.eventId
+  }
+
+  public readChangedSessionIds(afterRowId: number, throughRowId: number): string[] {
+    if (throughRowId <= afterRowId) return []
+    return this.#db
+      .query<{ readonly sessionId: string }, [number, number]>(`
+        select distinct aggregate_id as sessionId
+        from event not indexed
+        where rowid > ? and rowid <= ?
+          and (type glob 'session.*' or type glob 'message.*')
+          and aggregate_id glob 'ses_*'
+        order by aggregate_id
+      `)
+      .all(afterRowId, throughRowId)
+      .map((row) => row.sessionId)
+  }
+
+  public readSessionIds(): string[] {
+    return this.#db
+      .query<{ readonly sessionId: string }, []>('select id as sessionId from session')
+      .all()
+      .map((row) => row.sessionId)
+  }
+
+  public readTextPartsForSessions(sessionIds: readonly string[]): IndexSourceRow[] {
+    const rows: IndexSourceRow[] = []
+    for (const batch of batches(sessionIds)) {
+      const placeholders = batch.map(() => '?').join(',')
+      const textRows = this.#db
+        .query<IndexSourceRow, string[]>(`
+          select
+            s.id as sessionId,
+            s.title as sessionTitle,
+            s.directory as directory,
+            m.id as messageId,
+            p.id as partId,
+            json_extract(m.data, '$.role') as role,
+            m.time_created as timeCreated,
+            json_extract(p.data, '$.text') as text,
+            'text' as source,
+            max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
+          from session s
+          cross join part p on p.session_id = s.id
+          join message m on m.id = p.message_id
+          where s.id in (${placeholders})
+            and json_extract(p.data, '$.type') = 'text'
+            and json_extract(p.data, '$.text') is not null
+          order by s.id, p.id
+        `)
+        .all(...batch)
+      rows.push(...textRows, ...this.#readSessionTitleRowsForSessions(batch))
+    }
+    return rows
   }
 
   public readSessionTitleRowsForIndex(since: number | undefined): IndexSourceRow[] {
@@ -346,28 +463,22 @@ export class HistoryDatabase {
 
     return this.#db
       .query<IndexSourceRow, number[]>(`
-        with first_message as (
-          select
-            m.session_id as sessionId,
-            m.id as messageId,
-            json_extract(m.data, '$.role') as role,
-            m.time_created as timeCreated,
-            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
-          from message m
-        )
         select
           s.id as sessionId,
           s.title as sessionTitle,
           s.directory as directory,
-          fm.messageId as messageId,
+          fm.id as messageId,
           'session-title:' || s.id as partId,
-          coalesce(fm.role, 'user') as role,
-          coalesce(fm.timeCreated, s.time_updated) as timeCreated,
+          coalesce(json_extract(fm.data, '$.role'), 'user') as role,
+          coalesce(fm.time_created, s.time_updated) as timeCreated,
           trim('Title: ' || coalesce(s.title, '') || char(10) || 'Directory: ' || coalesce(s.directory, '')) as text,
           'session-title' as source,
           coalesce(s.time_updated, 0) as sourceUpdated
         from session s
-        join first_message fm on fm.sessionId = s.id and fm.messageIndex = 1
+        join message fm on fm.id = (
+          select m.id from message m where m.session_id = s.id
+          order by m.history_order, m.id limit 1
+        )
         ${changedCondition}
         order by sourceUpdated, s.id
       `)
@@ -399,13 +510,67 @@ export class HistoryDatabase {
     return rows.map((row) => row.partId)
   }
 
+  #readSessionTitleRowsForSessions(sessionIds: readonly string[]): IndexSourceRow[] {
+    const placeholders = sessionIds.map(() => '?').join(',')
+    return this.#db
+      .query<IndexSourceRow, string[]>(`
+        select
+          s.id as sessionId,
+          s.title as sessionTitle,
+          s.directory as directory,
+          fm.id as messageId,
+          'session-title:' || s.id as partId,
+          coalesce(json_extract(fm.data, '$.role'), 'user') as role,
+          coalesce(fm.time_created, s.time_updated) as timeCreated,
+          trim('Title: ' || coalesce(s.title, '') || char(10) || 'Directory: ' || coalesce(s.directory, '')) as text,
+          'session-title' as source,
+          coalesce(s.time_updated, 0) as sourceUpdated
+        from session s
+        join message fm on fm.id = (
+          select m.id
+          from message m
+          where m.session_id = s.id
+          order by m.history_order, m.id
+          limit 1
+        )
+        where s.id in (${placeholders})
+        order by s.id
+      `)
+      .all(...sessionIds)
+  }
+
+  #hasTable(name: string): boolean {
+    return (
+      this.#db
+        .query<{ readonly present: number }, [string]>(`
+          select 1 as present
+          from sqlite_master
+          where type = 'table' and name = ?
+        `)
+        .get(name) !== null
+    )
+  }
+
+  #readLatestEventCursor(): HistoryEventCursor {
+    const row = this.#db
+      .query<{ readonly rowId: number; readonly eventId: string }, []>(`
+        select rowid as rowId, id as eventId
+        from event
+        order by rowid desc
+        limit 1
+      `)
+      .get()
+
+    return row ?? { rowId: 0, eventId: '' }
+  }
+
   public readWindowForSession(sessionId: string, options: ReadOptions): WindowRows {
     const anchor = this.#db
       .query<{ readonly messageId: string }, [string]>(`
         select id as messageId
         from message
         where session_id = ?
-        order by time_created, id
+        order by history_order, id
         limit 1
       `)
       .get(sessionId)
@@ -445,7 +610,7 @@ export class HistoryDatabase {
             s.directory as directory,
             json_extract(m.data, '$.role') as role,
             m.time_created as timeCreated,
-            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
+            row_number() over (partition by m.session_id order by m.history_order, m.id) as messageIndex
           from message m
           join session s on s.id = m.session_id
         )
@@ -466,7 +631,7 @@ export class HistoryDatabase {
             m.id as messageId,
             json_extract(m.data, '$.role') as role,
             m.time_created as timeCreated,
-            row_number() over (partition by m.session_id order by m.time_created, m.id) as messageIndex
+            row_number() over (partition by m.session_id order by m.history_order, m.id) as messageIndex
           from message m
           where m.session_id = ?
         )
@@ -495,6 +660,16 @@ export class HistoryDatabase {
       totalMessages,
     }
   }
+}
+
+const SQLITE_BATCH_SIZE = 500
+
+function batches(values: readonly string[]): readonly string[][] {
+  const output: string[][] = []
+  for (let index = 0; index < values.length; index += SQLITE_BATCH_SIZE) {
+    output.push(values.slice(index, index + SQLITE_BATCH_SIZE))
+  }
+  return output
 }
 
 function getReadRange(
@@ -543,7 +718,7 @@ function hasMessageAfter(db: Database, sessionId: string, index: number): boolea
   const row = db
     .query<{ readonly count: number }, [string, number]>(`
       with ordered as (
-        select row_number() over (partition by session_id order by time_created, id) as messageIndex
+        select row_number() over (partition by session_id order by history_order, id) as messageIndex
         from message
         where session_id = ?
       )

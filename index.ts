@@ -1,8 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Config, Plugin } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin'
+import { Plugin } from '@opencode-ai/plugin'
 
 import {
   HISTORY_READ_COMMAND,
@@ -12,160 +11,275 @@ import {
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
 } from './src/commands.js'
-import { executeNodeWorker } from './src/node-worker-client.js'
+import {
+  executeNodeWorker,
+  forwardSessionInterruptions,
+  SessionWorkerAbortRegistry,
+} from './src/node-worker-client.js'
 import {
   DEFAULT_READ_LIMIT,
   DEFAULT_SEARCH_LIMIT,
   DEFAULT_SESSION_INDEX_LIMIT,
 } from './src/tool-defaults.js'
+import type {
+  HistoryReadWorkerArgs,
+  HistorySearchWorkerArgs,
+  SessionIndexWorkerArgs,
+  SessionSaveWorkerArgs,
+} from './src/worker-protocol.js'
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
+const WORKER_DIR = join(PACKAGE_DIR, 'src')
 const RECALL_AGENT_PROMPT_PATHS = [
   join(PACKAGE_DIR, 'prompts/recall-agent-prompt.txt'),
   join(PACKAGE_DIR, '../prompts/recall-agent-prompt.txt'),
 ] as const
+const TOOL_NAMES = [
+  HISTORY_SEARCH_COMMAND,
+  HISTORY_READ_COMMAND,
+  SESSION_INDEX_COMMAND,
+  SESSION_SAVE_COMMAND,
+] as const
+const OBJECT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+} as const
 
-type PermissionAction = 'ask' | 'allow' | 'deny'
-type PermissionConfig = Record<string, PermissionAction | Record<string, PermissionAction>>
-type DynamicPermissionConfig = NonNullable<Config['permission']> & PermissionConfig
+export const RecallPlugin = Plugin.define({
+  id: 'josxa.opencode-recall',
+  async setup(context) {
+    const recallAgentPrompt = await loadRecallAgentPrompt()
+    const workers = new SessionWorkerAbortRegistry()
+    const eventSubscription = new AbortController()
+    let interruptionError: unknown
+    const interruptionForwarder = forwardSessionInterruptions(
+      context.event.subscribe({ signal: eventSubscription.signal }),
+      workers,
+    ).catch((error: unknown) => {
+      if (!eventSubscription.signal.aborted) interruptionError = error
+    })
 
-export const RecallPlugin: Plugin = async () => {
-  const recallAgentPrompt = await loadRecallAgentPrompt()
-
-  return {
-    config: async (config) => {
-      config.command ??= {}
-      config.command[HISTORY_SEARCH_COMMAND] = {
-        description: 'Search OpenCode history and return ranked cursor anchors',
-        template: '',
+    await context.tool.hook('execute.before', (call) => {
+      // V2 built-in transforms can append default permissions after third-party agent transforms.
+      // Enforce Recall's tool-only sandbox at execution time as the invariant safety boundary.
+      if (
+        String(call.agent) === RECALL_AGENT_NAME &&
+        call.tool !== 'execute' &&
+        !isRecallTool(call.tool)
+      ) {
+        throw new Error('The @recall subagent can only execute OpenCode history tools.')
       }
+    })
 
-      config.command[HISTORY_READ_COMMAND] = {
-        description: 'Read a cursor-paginated ChatML window from OpenCode history',
-        template: '',
-      }
+    await context.command.transform((commands) => {
+      registerCommand(
+        context,
+        commands,
+        HISTORY_SEARCH_COMMAND,
+        'Search OpenCode history and return ranked cursor anchors',
+      )
+      registerCommand(
+        context,
+        commands,
+        HISTORY_READ_COMMAND,
+        'Read a cursor-paginated ChatML window from OpenCode history',
+      )
+      registerCommand(
+        context,
+        commands,
+        SESSION_INDEX_COMMAND,
+        'Browse recallable OpenCode sessions by recency, title, and usefulness signals',
+      )
+      registerCommand(context, commands, SESSION_SAVE_COMMAND, 'Materialize session to file')
+    })
+    await context.agent.transform((agents) => {
+      agents.update(RECALL_AGENT_NAME, (agent) => {
+        // Keep user-selected model/request settings while owning Recall's safety boundary.
+        agent.description = RECALL_AGENT_DESCRIPTION
+        agent.mode = 'subagent'
+        agent.system = recallAgentPrompt
+        agent.permissions = [
+          { action: '*', resource: '*', effect: 'deny' },
+          { action: 'execute', resource: '*', effect: 'allow' },
+          ...toolPermissions('allow'),
+        ]
+      })
+    })
 
-      config.command[SESSION_INDEX_COMMAND] = {
-        description:
-          'Browse recallable OpenCode sessions by recency, title, and usefulness signals',
-        template: '',
-      }
-
-      config.command[SESSION_SAVE_COMMAND] = {
-        description: 'Materialize session to file',
-        template: '',
-      }
-
-      config.permission = recallToolDenyPermission(config.permission)
-
-      config.agent ??= {}
-      const recallAgent = {
-        ...config.agent[RECALL_AGENT_NAME],
-        description: RECALL_AGENT_DESCRIPTION,
-        mode: 'subagent',
-        prompt: recallAgentPrompt,
-        permission: recallAgentPermission(),
-      } as NonNullable<typeof config.agent>[string]
-      config.agent[RECALL_AGENT_NAME] = recallAgent
-    },
-
-    tool: {
-      [HISTORY_SEARCH_COMMAND]: tool({
+    await context.tool.transform((tools) => {
+      tools.add({
+        name: HISTORY_SEARCH_COMMAND,
         description: 'Recall OpenCode history.',
-        args: {
-          q: tool.schema.string().describe('Recall query. Empty=recent.').optional(),
-          n: tool.schema.number().describe(`Max hits. Default ${DEFAULT_SEARCH_LIMIT}.`).optional(),
-          directory: tool.schema.string().describe('Session directory.').optional(),
-          includeCurrentSession: tool.schema
-            .boolean()
-            .describe('Include current session. Default false.')
-            .optional(),
-          after: tool.schema.string().describe('Created after ISO date/time.').optional(),
-          before: tool.schema.string().describe('Created before ISO date/time.').optional(),
+        input: {
+          ...OBJECT_SCHEMA,
+          properties: {
+            q: { type: 'string', description: 'Recall query. Empty=recent.' },
+            n: { type: 'number', description: `Max hits. Default ${DEFAULT_SEARCH_LIMIT}.` },
+            directory: { type: 'string', description: 'Session directory.' },
+            includeCurrentSession: {
+              type: 'boolean',
+              description: 'Include current session. Default false.',
+            },
+            after: { type: 'string', description: 'Created after ISO date/time.' },
+            before: { type: 'string', description: 'Created before ISO date/time.' },
+          },
         },
-        async execute(args, context) {
-          assertRecallAgent(context.agent)
-
-          return executeNodeWorker(
-            PACKAGE_DIR,
-            { kind: 'search', args, context: { sessionID: context.sessionID } },
-            context.abort,
+        options: directToolOptions(HISTORY_SEARCH_COMMAND),
+        async execute(input, toolContext) {
+          const args = input as HistorySearchWorkerArgs
+          const content = await workers.run(toolContext.sessionID, (signal) =>
+            executeNodeWorker(
+              WORKER_DIR,
+              { kind: 'search', args, context: { sessionID: toolContext.sessionID } },
+              signal,
+            ),
           )
+          return { content }
         },
-      }),
+      })
 
-      [HISTORY_READ_COMMAND]: tool({
+      tools.add({
+        name: HISTORY_READ_COMMAND,
         description: 'Read OpenCode history.',
-        args: {
-          cursor: tool.schema
-            .string()
-            .describe('Cursor from search/read nav, msg_*, or ses_*. No :offset suffixes.')
-            .optional(),
-          mode: tool.schema
-            .string()
-            .describe('around (default), next, prev, tail, head. full is rejected; page instead.')
-            .optional(),
-          n: tool.schema
-            .number()
-            .describe(`Message limit (default ${DEFAULT_READ_LIMIT}).`)
-            .optional(),
+        input: {
+          ...OBJECT_SCHEMA,
+          properties: {
+            cursor: {
+              type: 'string',
+              description: 'Cursor from search/read nav, msg_*, or ses_*. No :offset suffixes.',
+            },
+            mode: {
+              type: 'string',
+              description:
+                'around (default), next, prev, tail, head. full is rejected; page instead.',
+            },
+            n: {
+              type: 'number',
+              description: `Message limit (default ${DEFAULT_READ_LIMIT}).`,
+            },
+          },
         },
-        async execute(args, context) {
-          assertRecallAgent(context.agent)
-
-          return executeNodeWorker(PACKAGE_DIR, { kind: 'read', args }, context.abort)
+        options: directToolOptions(HISTORY_READ_COMMAND),
+        async execute(input, toolContext) {
+          const content = await workers.run(toolContext.sessionID, (signal) =>
+            executeNodeWorker(
+              WORKER_DIR,
+              { kind: 'read', args: input as HistoryReadWorkerArgs },
+              signal,
+            ),
+          )
+          return { content }
         },
-      }),
+      })
 
-      [SESSION_INDEX_COMMAND]: tool({
+      tools.add({
+        name: SESSION_INDEX_COMMAND,
         description: 'Browse OpenCode history sessions.',
-        args: {
-          n: tool.schema
-            .number()
-            .describe(`Max sessions. Default ${DEFAULT_SESSION_INDEX_LIMIT}.`)
-            .optional(),
-          title: tool.schema.string().describe('Case-insensitive session title filter.').optional(),
-          directory: tool.schema.string().describe('Exact session directory.').optional(),
-          includeCurrentSession: tool.schema
-            .boolean()
-            .describe('Include current session. Default false.')
-            .optional(),
-          after: tool.schema.string().describe('Session updated after ISO date/time.').optional(),
-          before: tool.schema.string().describe('Session updated before ISO date/time.').optional(),
+        input: {
+          ...OBJECT_SCHEMA,
+          properties: {
+            n: {
+              type: 'number',
+              description: `Max sessions. Default ${DEFAULT_SESSION_INDEX_LIMIT}.`,
+            },
+            title: { type: 'string', description: 'Case-insensitive session title filter.' },
+            directory: { type: 'string', description: 'Exact session directory.' },
+            includeCurrentSession: {
+              type: 'boolean',
+              description: 'Include current session. Default false.',
+            },
+            after: { type: 'string', description: 'Session updated after ISO date/time.' },
+            before: { type: 'string', description: 'Session updated before ISO date/time.' },
+          },
         },
-        async execute(args, context) {
-          assertRecallAgent(context.agent)
-
-          return executeNodeWorker(
-            PACKAGE_DIR,
-            { kind: 'session-index', args, context: { sessionID: context.sessionID } },
-            context.abort,
+        options: directToolOptions(SESSION_INDEX_COMMAND),
+        async execute(input, toolContext) {
+          const content = await workers.run(toolContext.sessionID, (signal) =>
+            executeNodeWorker(
+              WORKER_DIR,
+              {
+                kind: 'session-index',
+                args: input as SessionIndexWorkerArgs,
+                context: { sessionID: toolContext.sessionID },
+              },
+              signal,
+            ),
           )
+          return { content }
         },
-      }),
+      })
 
-      [SESSION_SAVE_COMMAND]: tool({
+      tools.add({
+        name: SESSION_SAVE_COMMAND,
         description: 'Materialize session to file.',
-        args: {
-          cursor: tool.schema.string().describe('Session cursor. ses_* only.'),
-          path: tool.schema.string().describe('Workspace-relative destination.'),
-          format: tool.schema
-            .enum(['chatml', 'markdown', 'jsonl'])
-            .describe('Transcript encoding. Default chatml.')
-            .optional(),
+        input: {
+          ...OBJECT_SCHEMA,
+          properties: {
+            cursor: { type: 'string', description: 'Session cursor. ses_* only.' },
+            path: { type: 'string', description: 'Workspace-relative destination.' },
+            format: {
+              type: 'string',
+              enum: ['chatml', 'markdown', 'jsonl'],
+              description: 'Transcript encoding. Default chatml.',
+            },
+          },
+          required: ['cursor', 'path'],
         },
-        async execute(args, context) {
-          assertRecallAgent(context.agent)
-
-          return executeNodeWorker(
-            PACKAGE_DIR,
-            { kind: 'session-save', args, context: { directory: context.directory } },
-            context.abort,
+        options: directToolOptions(SESSION_SAVE_COMMAND),
+        async execute(input, toolContext) {
+          const session = await context.session.get({ sessionID: toolContext.sessionID })
+          const content = await workers.run(toolContext.sessionID, (signal) =>
+            executeNodeWorker(
+              WORKER_DIR,
+              {
+                kind: 'session-save',
+                args: input as SessionSaveWorkerArgs,
+                context: { directory: session.location.directory },
+              },
+              signal,
+            ),
           )
+          return { content }
         },
-      }),
+      })
+    })
+
+    return async () => {
+      eventSubscription.abort()
+      workers.dispose()
+      await interruptionForwarder
+      if (interruptionError !== undefined) throw interruptionError
+    }
+  },
+})
+
+type CommandDraft = Parameters<Parameters<Plugin.Context['command']['transform']>[0]>[0]
+
+function registerCommand(
+  context: Plugin.Context,
+  commands: CommandDraft,
+  name: string,
+  description: string,
+): void {
+  commands.add({
+    name,
+    description,
+    execute: async ({ sessionID, prompt, delivery }) => {
+      // The promise client omits undefined optionals on its wire input.
+      const input = JSON.parse(JSON.stringify({ sessionID, ...prompt, delivery })) as Parameters<
+        typeof context.session.prompt
+      >[0]
+      await context.session.prompt(input)
     },
-  }
+  })
+}
+
+function toolPermissions(effect: 'allow' | 'deny') {
+  return TOOL_NAMES.map((action) => ({ action, resource: '*', effect }))
+}
+
+function directToolOptions(permission: string) {
+  return { codemode: true as const, permission }
 }
 
 async function loadRecallAgentPrompt(): Promise<string> {
@@ -173,9 +287,7 @@ async function loadRecallAgentPrompt(): Promise<string> {
     try {
       return await readFile(path, 'utf-8')
     } catch (error) {
-      if (isMissingFileError(error)) {
-        continue
-      }
+      if (isMissingFileError(error)) continue
       throw error
     }
   }
@@ -187,36 +299,8 @@ function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
 
-function recallAgentPermission(): PermissionConfig {
-  return {
-    '*': 'deny',
-    [HISTORY_SEARCH_COMMAND]: 'allow',
-    [HISTORY_READ_COMMAND]: 'allow',
-    [SESSION_INDEX_COMMAND]: 'allow',
-    [SESSION_SAVE_COMMAND]: 'allow',
-  }
-}
-
-function recallToolDenyPermission(
-  permission: Config['permission'] | PermissionAction | undefined,
-): DynamicPermissionConfig {
-  const normalized = typeof permission === 'string' ? { '*': permission } : permission
-
-  return {
-    ...normalized,
-    [HISTORY_SEARCH_COMMAND]: 'deny',
-    [HISTORY_READ_COMMAND]: 'deny',
-    [SESSION_INDEX_COMMAND]: 'deny',
-    [SESSION_SAVE_COMMAND]: 'deny',
-  } as DynamicPermissionConfig
-}
-
-function assertRecallAgent(agent: string): void {
-  if (agent === RECALL_AGENT_NAME) {
-    return
-  }
-
-  throw new Error('OpenCode history tools are only available through the @recall subagent.')
+function isRecallTool(tool: string): tool is (typeof TOOL_NAMES)[number] {
+  return TOOL_NAMES.some((name) => name === tool)
 }
 
 export default RecallPlugin

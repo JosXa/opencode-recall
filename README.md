@@ -62,28 +62,20 @@ Recall fixes that:
 ## Install
 
 ```sh
-opencode plugin @josxa/opencode-recall -gf
+pnpm add -D @josxa/opencode-recall@opencode-v2
 ```
 
-This installs the package and wires it into your global OpenCode config.
-
-<details>
-<summary>Manual installation</summary>
-
-```sh
-pnpm add -D @josxa/opencode-recall
-```
-
-Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json`:
+Then register the OpenCode V2 plugin in `opencode.json` or `~/.config/opencode/opencode.json`:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["@josxa/opencode-recall"]
+  "plugins": ["@josxa/opencode-recall"],
+  "agents": {
+    "recall": {}
+  }
 }
 ```
-
-</details>
 
 ## Set up embeddings (Ollama)
 
@@ -165,7 +157,7 @@ Run `pnpm run eval:embeddings` to compare installed embedding models against the
 
 ### Choosing the `recall` subagent model
 
-Recall integrates with the native OpenCode `agent.recall` configuration instead of replacing it. The plugin always supplies Recall's description, subagent mode, prompt, and history-only tool permissions. Other agent settings, including `model`, `variant`, and `temperature`, stay under your control.
+Recall integrates with the native OpenCode V2 `agents.recall` configuration instead of replacing it. Keep the empty `agents.recall` entry from the installation example, or add your own settings there. The plugin supplies Recall's description, subagent mode, system prompt, and history-only ordered permission rules. Other agent settings, including `model` and `request`, stay under your control.
 
 For example, configure a small model for Recall independently of the parent agent:
 
@@ -173,20 +165,31 @@ For example, configure a small model for Recall independently of the parent agen
 // ~/.config/opencode/opencode.json
 {
   "$schema": "https://opencode.ai/config.json",
-  "agent": {
+  "agents": {
     "recall": {
-      "model": "example-provider/recall-mini",
-      "variant": "low"
+      "model": {
+        "providerID": "example-provider",
+        "modelID": "recall-mini"
+      },
+      "request": {
+        "body": {
+          "reasoningEffort": "low"
+        }
+      }
     }
   }
 }
 ```
 
-Recall keeps this model when a parent agent uses a different one, matching native OpenCode subagent behavior. Each machine can select a provider and model available in its own OpenCode configuration. When `agent.recall` is unset, Recall uses OpenCode's normal default model resolution.
+Recall keeps this model when a parent agent uses a different one, matching native OpenCode subagent behavior. Each machine can select a provider and model available in its own OpenCode configuration. When `agents.recall.model` is unset, Recall uses OpenCode's normal default model resolution.
 
 ## Tool reference
 
-Recall exposes four history tools. They are intended to be called by the `recall` subagent, not by the main agent directly.
+Recall exposes four history tools through Code Mode. The `recall` subagent provides a dedicated history context; the tools are also available to other agents.
+
+The history reader detects V1 tables and native V2 session projections. V2 transcripts follow the stored session sequence and retain user text, assistant text, tool inputs/results, attachment metadata, and conversation checkpoints. Recall opens the source database read-only and keeps its search index in a separate database. When both schemas exist, V2 sessions take precedence over older copies with the same session ID.
+
+Without an explicit Recall database path, the reader follows the host's `OPENCODE_DB` setting. Relative host paths resolve below the OpenCode data directory. `database.path` in `recall.jsonc` can select a historical V1 database, and `OPENCODE_DB_PATH` remains the highest-priority Recall override.
 
 <details>
 <summary><code>session_index</code>: browse sessions by recency and usefulness</summary>

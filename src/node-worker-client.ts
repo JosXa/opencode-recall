@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 import type { HistoryWorkerRequest, HistoryWorkerResponse } from './worker-protocol.js'
 
 const MAX_WORKER_OUTPUT_BYTES = 10 * 1024 * 1024
+const ABORT_KILL_GRACE_MS = 500
 
 interface WorkerCommand {
   readonly command: string
@@ -13,11 +15,11 @@ interface WorkerCommand {
 }
 
 export function executeNodeWorker(
-  packageDir: string,
+  workerDir: string,
   request: HistoryWorkerRequest,
   signal: AbortSignal,
 ): Promise<string> {
-  const worker = resolveWorkerCommand(packageDir)
+  const worker = resolveWorkerCommand(workerDir)
 
   return new Promise((resolve, reject) => {
     const child = spawn(worker.command, worker.args, {
@@ -29,6 +31,7 @@ export function executeNodeWorker(
     let stdoutBytes = 0
     let stderrBytes = 0
     let settled = false
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined
 
     const settle = (result: { readonly value: string } | { readonly error: Error }) => {
       if (settled) {
@@ -47,11 +50,22 @@ export function executeNodeWorker(
     }
 
     const abort = () => {
-      child.kill()
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGTERM')
+        // Cancellation must not leave a worker alive if it handles or ignores SIGTERM.
+        forceKillTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+        }, ABORT_KILL_GRACE_MS)
+        forceKillTimer.unref()
+      }
       settle({ error: new Error('opencode-recall Node worker was aborted') })
     }
 
     signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) {
+      abort()
+      return
+    }
     child.on('error', (error) => settle({ error }))
     child.stdout.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.length
@@ -70,14 +84,54 @@ export function executeNodeWorker(
       }
     })
     child.on('close', (code) => {
+      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer)
       settle(parseWorkerResult(code, stdout, stderr))
     })
     child.stdin.end(JSON.stringify(request))
   })
 }
 
-export function executeNodeWorkerSync(packageDir: string, request: HistoryWorkerRequest): string {
-  const worker = resolveWorkerCommand(packageDir)
+export class SessionWorkerAbortRegistry {
+  readonly #active = new Map<string, Set<AbortController>>()
+
+  run<T>(sessionID: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController()
+    const controllers = this.#active.get(sessionID) ?? new Set<AbortController>()
+    controllers.add(controller)
+    this.#active.set(sessionID, controllers)
+
+    return operation(controller.signal).finally(() => {
+      controllers.delete(controller)
+      if (controllers.size === 0) this.#active.delete(sessionID)
+    })
+  }
+
+  interrupt(sessionID: string): void {
+    for (const controller of this.#active.get(sessionID) ?? []) controller.abort()
+  }
+
+  dispose(): void {
+    for (const controllers of this.#active.values()) {
+      for (const controller of controllers) controller.abort()
+    }
+    this.#active.clear()
+  }
+}
+
+export async function forwardSessionInterruptions(
+  events: AsyncIterable<{ type: string; data?: unknown }>,
+  workers: SessionWorkerAbortRegistry,
+): Promise<void> {
+  for await (const event of events) {
+    if (event.type !== 'session.execution.interrupted') continue
+    const data = event.data
+    if (typeof data !== 'object' || data === null || !('sessionID' in data)) continue
+    if (typeof data.sessionID === 'string') workers.interrupt(data.sessionID)
+  }
+}
+
+export function executeNodeWorkerSync(workerDir: string, request: HistoryWorkerRequest): string {
+  const worker = resolveWorkerCommand(workerDir)
   const result = spawnSync(worker.command, worker.args, {
     env: process.env,
     input: JSON.stringify(request),
@@ -97,14 +151,21 @@ export function executeNodeWorkerSync(packageDir: string, request: HistoryWorker
   return parsed.value
 }
 
-function resolveWorkerCommand(packageDir: string): WorkerCommand {
-  const builtWorkerPath = join(packageDir, 'src/node-worker.js')
+function resolveWorkerCommand(workerDir: string): WorkerCommand {
+  const builtWorkerPath = join(workerDir, 'node-worker.js')
 
   if (existsSync(builtWorkerPath)) {
     return { command: 'node', args: [builtWorkerPath] }
   }
 
-  return { command: 'node', args: ['--import', 'tsx', join(packageDir, 'src/node-worker.ts')] }
+  const sourceWorkerPath = join(workerDir, 'node-worker.ts')
+  if (!existsSync(sourceWorkerPath)) {
+    throw new Error(`opencode-recall worker entry not found in ${workerDir}`)
+  }
+
+  // Source checkouts need tsx, but resolve it here so Node never searches from the consumer cwd.
+  const tsxLoaderPath = createRequire(import.meta.url).resolve('tsx')
+  return { command: 'node', args: ['--import', tsxLoaderPath, sourceWorkerPath] }
 }
 
 function parseWorkerResult(

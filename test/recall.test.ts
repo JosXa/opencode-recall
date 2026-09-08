@@ -1,6 +1,6 @@
-import type { Config, PluginInput, ToolContext } from '@opencode-ai/plugin'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { describe, expect, test } from 'vitest'
@@ -9,6 +9,7 @@ import { RecallPlugin } from '../index.js'
 import {
   HISTORY_READ_COMMAND,
   HISTORY_SEARCH_COMMAND,
+  RECALL_AGENT_DESCRIPTION,
   RECALL_AGENT_NAME,
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
@@ -18,11 +19,24 @@ import { decodeCursor } from '../src/cursor.js'
 import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db.js'
 import type { EmbeddingProvider } from '../src/embedding.js'
 import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import {
+  executeNodeWorker,
+  forwardSessionInterruptions,
+  SessionWorkerAbortRegistry,
+} from '../src/node-worker-client.js'
 import { FULL_MODE_RECOMMENDATION, parseReadMode } from '../src/read-mode.js'
 import { rankSearchRows } from '../src/search.js'
 import { OpenCodeRecall, searchHistory, sessionIndex } from '../src/sdk.js'
 import { RecallSidecarIndex } from '../src/sidecar.js'
 import { Database } from '../src/sqlite.js'
+
+const TOOL_NAMES_FOR_TEST = [
+  HISTORY_SEARCH_COMMAND,
+  HISTORY_READ_COMMAND,
+  SESSION_INDEX_COMMAND,
+  SESSION_SAVE_COMMAND,
+] as const
+const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 const BASE_ROW = {
   sessionId: 'ses_other',
@@ -35,73 +49,107 @@ const BASE_ROW = {
   text: 'generic mcp troubleshooting with no figma or azure registry context',
 } satisfies SearchRow
 
-describe('plugin recall subagent', () => {
-  test('registers a recall-only subagent with history tool permissions', async () => {
-    const plugin = await RecallPlugin(pluginInput())
-    const config: Config = {
-      agent: {
-        [RECALL_AGENT_NAME]: {
-          model: 'example/recall-mini',
-          variant: 'low',
-          temperature: 0.2,
-        },
-      },
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+describe('Node worker cancellation', () => {
+  test('terminates an active worker when V2 interrupts its session', async () => {
+    const packageDir = `/tmp/opencode-recall-cancel-${crypto.randomUUID()}`
+    const workerDir = `${packageDir}/src`
+    const pidPath = `${packageDir}/worker.pid`
+    mkdirSync(workerDir, { recursive: true })
+    writeFileSync(
+      `${workerDir}/node-worker.js`,
+      `import { writeFileSync } from 'node:fs'; process.on('SIGTERM', () => {}); writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000);`,
+    )
+    const workers = new SessionWorkerAbortRegistry()
+    let releaseEvent: (() => void) | undefined
+    const events = (async function* () {
+      await new Promise<void>((resolve) => {
+        releaseEvent = resolve
+      })
+      yield {
+        type: 'session.execution.interrupted',
+        data: { sessionID: 'ses_cancelled' },
+      }
+    })()
+    const forwarding = forwardSessionInterruptions(events, workers)
+
+    try {
+      const execution = workers.run('ses_cancelled', (signal) =>
+        executeNodeWorker(workerDir, { kind: 'read', args: { cursor: 'ses_test' } }, signal),
+      )
+      await expect.poll(() => existsSync(pidPath)).toBe(true)
+      const pid = Number(readFileSync(pidPath, 'utf-8'))
+
+      releaseEvent?.()
+      await expect(execution).rejects.toThrow('Node worker was aborted')
+      await forwarding
+      await expect.poll(() => isProcessRunning(pid)).toBe(false)
+    } finally {
+      workers.dispose()
+      rmSync(packageDir, { recursive: true, force: true })
     }
+  })
+})
 
-    await plugin.config?.(config)
+describe('plugin recall subagent', () => {
+  test('creates its agent and all slash commands on a clean installation', async () => {
+    const harness = pluginHarness({ preseedCommands: false, preseedRecallAgent: false })
+    await RecallPlugin.setup(harness.context)
 
-    const recall = config.agent?.[RECALL_AGENT_NAME]
-    const permission = recall?.permission as unknown as Record<string, unknown>
-    const topPermission = config.permission as unknown as Record<string, unknown>
+    expect(harness.agents.get(RECALL_AGENT_NAME)).toMatchObject({
+      id: RECALL_AGENT_NAME,
+      mode: 'subagent',
+      description: RECALL_AGENT_DESCRIPTION,
+    })
+    expect([...harness.commands.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
+    expect([...harness.tools.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
+  })
+
+  test('keeps the recall subagent sandboxed without hiding history tools from other agents', async () => {
+    const harness = pluginHarness({ preseedCommands: false })
+    await RecallPlugin.setup(harness.context)
+
+    const recall = harness.agents.get(RECALL_AGENT_NAME)
+    const build = harness.agents.get('build')
 
     expect(recall?.mode).toBe('subagent')
-    expect(recall?.['model']).toBe('example/recall-mini')
-    expect(recall?.['variant']).toBe('low')
-    expect(recall?.['temperature']).toBe(0.2)
+    expect(recall?.model).toEqual({ providerID: 'example', modelID: 'recall-mini' })
+    expect(recall?.request).toEqual({ body: { reasoningEffort: 'low', temperature: 0.2 } })
     expect(recall?.description).toContain('Source-grounded')
     expect(recall?.description).toContain('**Reinvoke** subagent for follow-ups/detail')
     expect(recall?.description).toContain('starts out with fresh context window')
     expect(recall?.description).not.toContain('source cursors')
-    expect(recall?.prompt).toContain('You do not inspect the live filesystem')
-    expect(recall?.prompt).toContain('did not verify current files')
-    expect(recall?.prompt).toContain('Do not report `msg_...` message ids')
-    expect(permission).toEqual({
-      '*': 'deny',
-      [HISTORY_SEARCH_COMMAND]: 'allow',
-      [HISTORY_READ_COMMAND]: 'allow',
-      [SESSION_INDEX_COMMAND]: 'allow',
-      [SESSION_SAVE_COMMAND]: 'allow',
-    })
-    expect(topPermission).toMatchObject({
-      [HISTORY_SEARCH_COMMAND]: 'deny',
-      [HISTORY_READ_COMMAND]: 'deny',
-      [SESSION_INDEX_COMMAND]: 'deny',
-      [SESSION_SAVE_COMMAND]: 'deny',
-    })
-    expect(permission).not.toHaveProperty('read')
+    expect(recall?.system).toContain('You do not inspect the live filesystem')
+    expect(recall?.system).toContain('did not verify current files')
+    expect(recall?.system).toContain('Do not report `msg_...` message ids')
+    expect(recall?.permissions).toEqual([
+      { action: '*', resource: '*', effect: 'deny' },
+      { action: 'execute', resource: '*', effect: 'allow' },
+      { action: HISTORY_SEARCH_COMMAND, resource: '*', effect: 'allow' },
+      { action: HISTORY_READ_COMMAND, resource: '*', effect: 'allow' },
+      { action: SESSION_INDEX_COMMAND, resource: '*', effect: 'allow' },
+      { action: SESSION_SAVE_COMMAND, resource: '*', effect: 'allow' },
+    ])
+    expect(build?.permissions).toEqual([{ action: 'read', resource: '*', effect: 'allow' }])
+    expect([...harness.commands.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
+    expect(() => harness.beforeToolExecute?.({ agent: RECALL_AGENT_NAME, tool: 'read' })).toThrow(
+      'The @recall subagent can only execute OpenCode history tools.',
+    )
+    expect(() =>
+      harness.beforeToolExecute?.({ agent: RECALL_AGENT_NAME, tool: HISTORY_SEARCH_COMMAND }),
+    ).not.toThrow()
+    expect(() => harness.beforeToolExecute?.({ agent: RECALL_AGENT_NAME, tool: 'execute' })).not.toThrow()
   })
 
-  test('keeps history tools behind the recall subagent', async () => {
-    const plugin = await RecallPlugin(pluginInput())
-
-    await expect(
-      plugin.tool?.[HISTORY_SEARCH_COMMAND]?.execute({}, toolContext('build')),
-    ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
-    await expect(
-      plugin.tool?.[HISTORY_READ_COMMAND]?.execute({ cursor: 'ses_example' }, toolContext('build')),
-    ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
-    await expect(
-      plugin.tool?.[SESSION_INDEX_COMMAND]?.execute({}, toolContext('build')),
-    ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
-    await expect(
-      plugin.tool?.[SESSION_SAVE_COMMAND]?.execute(
-        { cursor: 'ses_example', path: 'recall/ses_example.chatml' },
-        toolContext('build'),
-      ),
-    ).rejects.toThrow('OpenCode history tools are only available through the @recall subagent.')
-  })
-
-  test('executes history tools through the Node worker', async () => {
+  test('executes all public history tools directly through the Node worker from a regular agent', async () => {
     await withRecallEnvAsync(async ({ configDir, root }) => {
       const historyPath = `/tmp/opencode-recall-worker-history-${crypto.randomUUID()}.db`
       const sidecarPath = `/tmp/opencode-recall-worker-sidecar-${crypto.randomUUID()}.db`
@@ -122,32 +170,33 @@ describe('plugin recall subagent', () => {
           }),
         )
 
-        const plugin = await RecallPlugin(pluginInput())
-        const search = await plugin.tool?.[HISTORY_SEARCH_COMMAND]?.execute(
+        const harness = pluginHarness(root)
+        await RecallPlugin.setup(harness.context)
+        const search = await harness.tools.get(HISTORY_SEARCH_COMMAND)?.execute(
           { q: '', includeCurrentSession: true, n: 5 },
-          toolContext(RECALL_AGENT_NAME),
+          toolContext('build'),
         )
-        const read = await plugin.tool?.[HISTORY_READ_COMMAND]?.execute(
+        const read = await harness.tools.get(HISTORY_READ_COMMAND)?.execute(
           { cursor: 'ses_worker', n: 5 },
-          toolContext(RECALL_AGENT_NAME),
+          toolContext('build'),
         )
-        const sessions = await plugin.tool?.[SESSION_INDEX_COMMAND]?.execute(
+        const sessions = await harness.tools.get(SESSION_INDEX_COMMAND)?.execute(
           { title: 'Worker', includeCurrentSession: true, n: 5 },
-          toolContext(RECALL_AGENT_NAME),
+          toolContext('build'),
         )
-        const saved = await plugin.tool?.[SESSION_SAVE_COMMAND]?.execute(
+        const saved = await harness.tools.get(SESSION_SAVE_COMMAND)?.execute(
           { cursor: 'ses_worker', path: 'exports/ses_worker.chatml' },
-          toolContext(RECALL_AGENT_NAME, root),
+          toolContext('build'),
         )
 
-        expect(search).toContain('"sid": "ses_worker"')
-        expect(search).toContain('"title": "Worker DB"')
-        expect(read).toContain('<hist sid="ses_worker"')
-        expect(read).toContain('invoices cli location notes')
-        expect(sessions).toContain('"sid": "ses_worker"')
-        expect(sessions).toContain('"messages": 1')
-        expect(sessions).toContain('"approxContextChars"')
-        const savedText = String(saved)
+        expect(search?.content).toContain('"sid": "ses_worker"')
+        expect(search?.content).toContain('"title": "Worker DB"')
+        expect(read?.content).toContain('<hist sid="ses_worker"')
+        expect(read?.content).toContain('invoices cli location notes')
+        expect(sessions?.content).toContain('"sid": "ses_worker"')
+        expect(sessions?.content).toContain('"messages": 1')
+        expect(sessions?.content).toContain('"approxContextChars"')
+        const savedText = String(saved?.content)
         expect(JSON.parse(savedText)).toMatchObject({
           path: 'exports/ses_worker.chatml',
           messages: 1,
@@ -161,10 +210,23 @@ describe('plugin recall subagent', () => {
         removeSqliteFiles(sidecarPath)
       }
     })
-  })
+  }, 15_000)
 })
 
 describe('config file loading', () => {
+  test('follows native host database selection while preserving explicit historical overrides', () => {
+    withRecallEnv(({ configDir, dataHome }) => {
+      process.env['OPENCODE_DB'] = 'opencode-v2.db'
+      expect(loadConfig().database.path).toBe(`${dataHome}/opencode/opencode-v2.db`)
+      process.env['OPENCODE_DB'] = '/private/native.db'
+      expect(loadConfig().database.path).toBe('/private/native.db')
+      writeFileSync(`${configDir}/recall.jsonc`, JSON.stringify({ database: { path: '/historical/v1.db' } }))
+      expect(loadConfig().database.path).toBe('/historical/v1.db')
+      process.env['OPENCODE_DB_PATH'] = '/override/history.db'
+      expect(loadConfig().database.path).toBe('/override/history.db')
+    })
+  })
+
   test('auto-creates recall.jsonc at the OpenCode config base path', () => {
     withRecallEnv(() => {
       const configPath = getConfigFilePath()
@@ -754,6 +816,50 @@ describe('current session exclusion', () => {
       removeSqliteFiles(path)
     }
   })
+
+  test('semantic sync checkpoints completed batches before a later batch fails', async () => {
+    const path = `/tmp/opencode-recall-checkpoint-${crypto.randomUUID()}.db`
+    const index = new RecallSidecarIndex(path)
+    const interval = 31 * 60 * 1000
+    const rows = Array.from({ length: 65 }, (_, rowIndex) =>
+      indexRow(
+        'ses_checkpoint',
+        `msg_${rowIndex}`,
+        `part_${rowIndex}`,
+        (rowIndex + 1) * interval,
+      ),
+    )
+    let embedCalls = 0
+    const interruptedProvider: EmbeddingProvider = {
+      model: 'checkpoint-test-model',
+      embed(texts) {
+        embedCalls += 1
+        if (embedCalls === 2) {
+          throw new Error('simulated worker interruption')
+        }
+        return Promise.resolve(texts.map(() => new Float32Array([1, 0, 0])))
+      },
+    }
+
+    try {
+      index.syncLexicalOnly(() => rows.slice(0, 1))
+      await expect(index.sync(() => rows, interruptedProvider)).rejects.toThrow(
+        'simulated worker interruption',
+      )
+
+      let resumedSince: number | undefined
+      await index.sync((since) => {
+        resumedSince = since
+        return rows.filter((row) => since === undefined || row.sourceUpdated >= since)
+      }, interruptedProvider)
+
+      expect(resumedSince).toBeGreaterThan(rows[62]?.sourceUpdated ?? 0)
+      expect(embedCalls).toBe(3)
+    } finally {
+      index.close()
+      removeSqliteFiles(path)
+    }
+  })
 })
 
 describe('library sdk', () => {
@@ -965,6 +1071,51 @@ describe('library sdk', () => {
       // Callers use sync metadata to tell whether first-run indexing actually happened.
       expect(result.sync?.lockAcquired).toBe(true)
       expect(result.sync?.indexedRows).toBeGreaterThan(0)
+    } finally {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
+    }
+  })
+
+  test('worker search removes stale rows from eventless history databases', async () => {
+    const historyPath = `/tmp/opencode-recall-worker-stale-${crypto.randomUUID()}.db`
+    const sidecarPath = `/tmp/opencode-recall-worker-stale-sidecar-${crypto.randomUUID()}.db`
+    const db = new Database(historyPath)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(
+        db,
+        'ses_stale',
+        'Deleted worker history',
+        'msg_stale',
+        'part_stale',
+        1,
+        'uniquely deleted worker history',
+      )
+
+      await searchHistory('uniquely deleted worker history', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        semantic: false,
+        lexical: true,
+        includeCurrentSession: true,
+      })
+      db.query('delete from part where id = ?').run('part_stale')
+
+      const ordinarySearch = await searchHistory('uniquely deleted worker history', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        semantic: false,
+        lexical: true,
+        includeCurrentSession: true,
+      })
+      expect(ordinarySearch.hits.map((hit) => hit.partId)).not.toContain('part_stale')
     } finally {
       db.close()
       removeSqliteFiles(historyPath)
@@ -1264,7 +1415,7 @@ function readCountInChild(path: string): {
   readonly ready: Promise<void>
 } {
   const child = spawn(
-    process.execPath,
+    'node',
     [
       '--import',
       'tsx',
@@ -1282,7 +1433,7 @@ function readCountInChild(path: string): {
         }
       `,
     ],
-    { cwd: '/projects/opencode-recall', env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
+    { cwd: PROJECT_ROOT, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
   )
   if (!child.stdout || !child.stderr) {
     throw new Error('child process stdio was not piped')
@@ -1323,31 +1474,143 @@ function removeSqliteFiles(path: string): void {
   rmSync(`${path}-wal`, { force: true })
 }
 
-function pluginInput(): PluginInput {
-  return {
-    client: {},
-    project: {},
-    directory: '/projects/opencode-recall',
-    worktree: '/projects/opencode-recall',
-    experimental_workspace: { register() {} },
-    serverUrl: new URL('http://127.0.0.1:4096'),
-    $: {},
-  } as unknown as PluginInput
+interface TestPermission {
+  action: string
+  resource: string
+  effect: 'allow' | 'deny'
 }
 
-function toolContext(agent: string, directory = '/projects/opencode-recall'): ToolContext {
+interface TestAgent {
+  id: string
+  model?: { providerID: string; modelID: string }
+  request?: { body: Record<string, unknown> }
+  description?: string
+  mode?: string
+  system?: string
+  permissions: TestPermission[]
+}
+
+interface TestToolContext {
+  sessionID: string
+  messageID: string
+  callID: string
+  agent: string
+  progress(): Promise<void>
+}
+
+interface TestTool {
+  name: string
+  execute(input: unknown, context: TestToolContext): Promise<{ content?: string }>
+}
+
+function pluginHarness(
+  input:
+    | string
+    | { directory?: string; preseedCommands?: boolean; preseedRecallAgent?: boolean } = {},
+) {
+  const options = typeof input === 'string' ? { directory: input } : input
+  const directory = options.directory ?? '/projects/opencode-recall'
+  const agents = new Map<string, TestAgent>([
+    [
+      'build',
+      {
+        id: 'build',
+        permissions: [{ action: 'read', resource: '*', effect: 'allow' }],
+      },
+    ],
+  ])
+  if (options.preseedRecallAgent !== false) {
+    agents.set(RECALL_AGENT_NAME, {
+      id: RECALL_AGENT_NAME,
+      model: { providerID: 'example', modelID: 'recall-mini' },
+      request: { body: { reasoningEffort: 'low', temperature: 0.2 } },
+      permissions: [],
+    })
+  }
+  const tools = new Map<string, TestTool>()
+  const commands = new Map<string, { description?: string; template: string }>()
+  if (options.preseedCommands !== false) {
+    for (const name of TOOL_NAMES_FOR_TEST) commands.set(name, { template: '' })
+  }
+  let beforeToolExecute:
+    | ((call: { agent: string; tool: string }) => Promise<void> | void)
+    | undefined
+  const context = {
+    app: { name: 'opencode', version: 'test', channel: 'test' },
+    event: {
+      subscribe() {
+        return (async function* () {})()
+      },
+    },
+    command: {
+      async transform(callback: (draft: unknown) => void) {
+        callback({
+          get(name: string) {
+            return commands.get(name)
+          },
+          add(command: { name: string; description?: string; execute: unknown }) {
+            commands.set(command.name, command as never)
+          },
+        })
+        return { dispose() {} }
+      },
+    },
+    agent: {
+      async transform(callback: (draft: unknown) => void) {
+        callback({
+          list: () => [...agents.values()],
+          get: (name: string) => agents.get(name),
+          update(name: string, update: (agent: TestAgent) => void) {
+            const agent = agents.get(name) ?? { id: name, permissions: [] }
+            update(agent)
+            agents.set(name, agent)
+          },
+        })
+        return { dispose() {} }
+      },
+    },
+    tool: {
+      async hook(
+        name: string,
+        callback: (call: { agent: string; tool: string }) => Promise<void> | void,
+      ) {
+        if (name === 'execute.before') beforeToolExecute = callback
+        return { dispose() {} }
+      },
+      async transform(callback: (draft: unknown) => void) {
+        callback({ add(tool: TestTool) { tools.set(tool.name, tool) } })
+        return { dispose() {} }
+      },
+    },
+    session: {
+      async get() {
+        return { location: { directory } }
+      },
+    },
+  }
+
+  return {
+    agents,
+    commands,
+    tools,
+    get beforeToolExecute() {
+      return beforeToolExecute
+    },
+    // The fake implements only the V2 domains exercised by this plugin.
+    context: context as unknown as Parameters<typeof RecallPlugin.setup>[0],
+  }
+}
+
+function toolContext(agent: string): TestToolContext {
   return {
     sessionID: 'ses_current',
     messageID: 'msg_current',
+    callID: 'call_current',
     agent,
-    directory,
-    worktree: directory,
-    abort: new AbortController().signal,
-    metadata() {},
-    ask() {
-      throw new Error('test tool context does not support permission prompts')
+    async progress() {
+      return undefined
     },
-  } as unknown as ToolContext
+  }
 }
 
 interface RecallEnvContext {
@@ -1360,6 +1623,7 @@ const CONFIG_ENV_KEYS = [
   'OPENCODE_CONFIG_DIR',
   'XDG_DATA_HOME',
   'OPENCODE_DB_PATH',
+  'OPENCODE_DB',
   'OPENCODE_RECALL_DB_PATH',
   'OPENCODE_RECALL_OLLAMA_URL',
   'OPENCODE_RECALL_EMBED_MODEL',
@@ -1406,6 +1670,7 @@ function applyRecallEnv(context: RecallEnvContext): void {
   process.env['OPENCODE_CONFIG_DIR'] = context.configDir
   process.env['XDG_DATA_HOME'] = context.dataHome
   delete process.env['OPENCODE_DB_PATH']
+  delete process.env['OPENCODE_DB']
   delete process.env['OPENCODE_RECALL_DB_PATH']
   delete process.env['OPENCODE_RECALL_OLLAMA_URL']
   delete process.env['OPENCODE_RECALL_EMBED_MODEL']

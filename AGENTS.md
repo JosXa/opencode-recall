@@ -18,16 +18,16 @@ Use `node:*` imports for Node built-ins. Do not introduce `bun:*` imports or glo
 # Release Workflow
 
 - Version bump should be determined from conventional commits.
-- No Changesets setup: bump `package.json`, commit, then publish by pushing a `vX.Y.Z` tag (see `.github/workflows/release.yml`).
-- Package is published as `@josxa/opencode-recall` (scoped, public, with provenance). The unscoped `opencode-recall` name on npm belongs to another publisher.
+- No Changesets setup: bump `package.json`, then explicitly dispatch `.github/workflows/release.yml` for that version.
+- Keep the package name `@josxa/opencode-recall`; OpenCode V2 prereleases use the main-line version suffixed exactly `-opencode-v2`.
 - Trusted publishing must stay tokenless: `.github/workflows/release.yml` uses `permissions.id-token: write` and `npm publish --provenance --access public`. Do not add an `NPM_TOKEN` secret for normal releases.
-- npm trusted publishing must point at owner `JosXa`, repository `opencode-recall`, workflow filename `release.yml` (file `.github/workflows/release.yml`), and package `@josxa/opencode-recall`.
+- npm trusted publishing must point at owner `JosXa`, repository `opencode-recall`, workflow filename `release.yml` (file `.github/workflows/release.yml`), environment `npm`, and package `@josxa/opencode-recall`.
 
 NEVER ask user for release notes content. Generate release notes from commits when releasing.
 
 ## CI Pipeline Quirks
 
-**CI auto-generates release notes from conventional commits** (categorized: features, fixes, docs, chores). Tag push triggers `release.yml`, which builds notes and creates or updates a GitHub release. Do NOT write manual release notes unless adding extra context. If you do need to edit, use `gh release edit vX.Y.Z` (not `create`, which 422s because the release already exists).
+OpenCode V2 prereleases are published only by explicitly dispatching `release.yml` from the `opencode-v2` branch with the exact package version. The workflow does not create tags or GitHub releases.
 
 **Dirty worktrees on explicit git/release requests.** If user explicitly asks to commit, push, or release, proceed with relevant changes. Do NOT refuse only because the worktree is dirty. Leave unrelated dirty files from other authors/sessions untouched unless user explicitly asks. For explicit release requests, create needed commit(s) first, then continue the release flow.
 

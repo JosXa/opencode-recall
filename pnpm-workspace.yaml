@@ -23,3 +23,9 @@ minimumReleaseAgeExclude:
   - '@typescript/typescript-win32-arm64@7.0.2'
   - '@typescript/typescript-win32-x64@7.0.2'
   - typescript@7.0.2
+  - '@opencode-ai/ai@0.0.0-beta-19157 || 0.0.0-next-16680'
+  - '@opencode-ai/client@0.0.0-beta-19157 || 0.0.0-next-16680'
+  - '@opencode-ai/plugin@0.0.0-beta-19157 || 0.0.0-next-16680'
+  - '@opencode-ai/protocol@0.0.0-beta-19157 || 0.0.0-next-16680'
+  - '@opencode-ai/schema@0.0.0-beta-19157 || 0.0.0-next-16680'
+  - '@opencode-ai/util@0.0.0-beta-19157'

@@ -132,28 +132,13 @@ export class DirectOpenCodeRecall {
   }
 
   public async sync(options: SyncOptions = {}): Promise<SyncResult> {
-    return this.#sidecar.sync(
-      (since) => this.#history.readTextPartsForIndex(since),
-      this.#provider,
-      () => this.#history.readTextPartIds(),
-      options,
-    )
+    return this.#sidecar.syncHistory(this.#history, this.#provider, options)
   }
 
   // Build/refresh just the FTS5 lexical index, skipping embeddings.
   // Used when callers opt out of semantic but still want lexical recall.
   public syncLexical(): SyncResult {
-    const start = performance.now()
-    const result = this.#sidecar.syncLexicalOnly(
-      (since) => this.#history.readTextPartsForIndex(since),
-      () => this.#history.readTextPartIds(),
-    )
-    return {
-      elapsedMs: performance.now() - start,
-      indexedRows: result.indexedRows,
-      deletedRows: result.deletedRows,
-      lockAcquired: result.lockAcquired,
-    }
+    return this.#sidecar.syncLexicalHistory(this.#history)
   }
 
   public async search(
