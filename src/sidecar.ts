@@ -359,6 +359,15 @@ export class RecallSidecarIndex {
   ): Promise<SearchRow[]> {
     const [queryEmbedding] = await provider.embed([query])
 
+    return this.searchWithEmbedding(query, options, provider.model, queryEmbedding)
+  }
+
+  public searchWithEmbedding(
+    query: string,
+    options: SearchOptions,
+    model: string,
+    queryEmbedding: Float32Array | undefined,
+  ): SearchRow[] {
     if (queryEmbedding === undefined) {
       return []
     }
@@ -402,7 +411,7 @@ export class RecallSidecarIndex {
           and (? is null or session_id != ?)
       `)
       .all(
-        provider.model,
+        model,
         options.after ?? null,
         options.after ?? null,
         options.before ?? null,

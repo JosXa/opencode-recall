@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { canonicalPath, defaultIndexPath, loadConfig } from '../src/config.js'
 import { decodeCursor } from '../src/cursor.js'
+import { HistoryDatabase } from '../src/db.js'
 import { DirectOpenCodeRecall } from '../src/sdk-direct.js'
 import { OpenCodeRecall } from '../src/sdk.js'
 import { resolveSources } from '../src/sources.js'
@@ -77,6 +78,15 @@ describe('federated history', () => {
       expect(newest.sessions).toMatchObject([{ cursor: 'v2::ses_shared', messages: 2, textParts: 2 }])
       const filtered = await recall.sessionIndex({ limit: 1, directory: '/legacy', includeCurrentSession: true })
       expect(filtered.sessions).toMatchObject([{ cursor: 'v1::ses_shared', messages: 1, textParts: 1 }])
+      // Eventless timestamp sync must not expand unrelated mixed-schema rows either.
+      for (const source of f.sources) {
+        const history = new HistoryDatabase(source.path)
+        try {
+          expect(history.readTextPartsForIndex(100).every(row => row.sessionId === 'ses_shared')).toBe(true)
+          expect(history.readSessionTitleRowsForIndex(100)).toHaveLength(1)
+          expect(history.readTextPartsForSessions(['ses_shared']).length).toBe(source.id === 'v1' ? 2 : 3)
+        } finally { history.close() }
+      }
     } finally { recall.close(); f.cleanup() }
   })
 
@@ -86,6 +96,10 @@ describe('federated history', () => {
     try {
       const result = await recall.search('cobalt', { lexical: true, semantic: true })
       expect(result.hits.map(hit => hit.sourceId).sort()).toEqual(['v1', 'v2', 'v2'])
+      expect(f.embedded.filter(text => text === 'cobalt')).toHaveLength(1)
+      f.embedded.length = 0
+      await recall.search('cobalt', { lexical: true, semantic: true, sync: false })
+      expect(f.embedded).toEqual(['cobalt'])
       expect(result.hits.filter(hit => hit.messageId === 'msg_shared').map(hit => hit.cursor).sort()).toEqual(['v1::msg_shared', 'v2::msg_shared'])
       expect((await recall.search('cobalt', { semantic: false, limit: 1 })).hits).toHaveLength(1)
       expect((await recall.search('', { limit: 1 })).hits[0]?.sourceId).toBe('v2')

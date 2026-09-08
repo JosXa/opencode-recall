@@ -339,41 +339,22 @@ export class HistoryDatabase {
   }
 
   public readTextPartsForIndex(since: number | undefined): IndexSourceRow[] {
-    // OpenCode advances session.time_updated when its messages or parts change.
-    // Starting incremental reads from those sessions lets SQLite use the
-    // session indexes instead of scanning every JSON part in the history DB.
-    const changedCondition = since === undefined ? '' : 'and coalesce(s.time_updated, 0) >= ?'
-    const params = since === undefined ? [] : [since]
+    // Timestamp fallback and cold backfill need the same bounded UNION inputs
+    // as event sync. Joining the whole message view materializes every transcript.
+    return this.readTextPartsForSessions(this.#sessionIdsSince(since)).sort(
+      (left, right) =>
+        left.sourceUpdated - right.sourceUpdated || left.partId.localeCompare(right.partId),
+    )
+  }
 
-    const textRows = this.#db
-      .query<IndexSourceRow, number[]>(`
-        with changed_sessions as materialized (
-          select s.id, s.title, s.directory, s.time_updated
-          from session s
-          where 1 = 1
-            ${changedCondition}
-        )
-        select
-          s.id as sessionId,
-          s.title as sessionTitle,
-          s.directory as directory,
-          m.id as messageId,
-          p.id as partId,
-          json_extract(m.data, '$.role') as role,
-          m.time_created as timeCreated,
-          json_extract(p.data, '$.text') as text,
-          'text' as source,
-          max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
-        from changed_sessions s
-        cross join part p on p.session_id = s.id
-        join message m on m.id = p.message_id
-        where json_extract(p.data, '$.type') = 'text'
-          and json_extract(p.data, '$.text') is not null
-        order by sourceUpdated, p.id
+  #sessionIdsSince(since: number | undefined): string[] {
+    return this.#db
+      .query<{ readonly sessionId: string }, number[]>(`
+        select id as sessionId from session
+        ${since === undefined ? '' : 'where coalesce(time_updated, 0) >= ?'}
       `)
-      .all(...params)
-
-    return [...textRows, ...this.readSessionTitleRowsForIndex(since)]
+      .all(...(since === undefined ? [] : [since]))
+      .map((row) => row.sessionId)
   }
 
   public readLatestEventCursor(): HistoryEventCursor | undefined {
@@ -448,8 +429,13 @@ export class HistoryDatabase {
     const rows: IndexSourceRow[] = []
     for (const batch of batches(sessionIds)) {
       const placeholders = batch.map(() => '?').join(',')
+      // Mixed V1/V2 views can be materialized before join filters. Bound each
+      // transcript input explicitly so incremental sync never scans all history.
       const textRows = this.#db
         .query<IndexSourceRow, string[]>(`
+          with changed_messages as materialized (
+            select * from message where session_id in (${placeholders})
+          )
           select
             s.id as sessionId,
             s.title as sessionTitle,
@@ -463,44 +449,26 @@ export class HistoryDatabase {
             max(coalesce(p.time_updated, 0), coalesce(m.time_updated, 0), coalesce(s.time_updated, 0)) as sourceUpdated
           from session s
           cross join part p on p.session_id = s.id
-          join message m on m.id = p.message_id
+          join changed_messages m on m.id = p.message_id
           where s.id in (${placeholders})
+            and p.session_id in (${placeholders})
             and json_extract(p.data, '$.type') = 'text'
             and json_extract(p.data, '$.text') is not null
           order by s.id, p.id
         `)
-        .all(...batch)
+        .all(...batch, ...batch, ...batch)
       rows.push(...textRows, ...this.#readSessionTitleRowsForSessions(batch))
     }
     return rows
   }
 
   public readSessionTitleRowsForIndex(since: number | undefined): IndexSourceRow[] {
-    const changedCondition = since === undefined ? '' : 'where coalesce(s.time_updated, 0) >= ?'
-    const params = since === undefined ? [] : [since]
-
-    return this.#db
-      .query<IndexSourceRow, number[]>(`
-        select
-          s.id as sessionId,
-          s.title as sessionTitle,
-          s.directory as directory,
-          fm.id as messageId,
-          'session-title:' || s.id as partId,
-          coalesce(json_extract(fm.data, '$.role'), 'user') as role,
-          coalesce(fm.time_created, s.time_updated) as timeCreated,
-          trim('Title: ' || coalesce(s.title, '') || char(10) || 'Directory: ' || coalesce(s.directory, '')) as text,
-          'session-title' as source,
-          coalesce(s.time_updated, 0) as sourceUpdated
-        from session s
-        join message fm on fm.id = (
-          select m.id from message m where m.session_id = s.id
-          order by m.history_order, m.id limit 1
-        )
-        ${changedCondition}
-        order by sourceUpdated, s.id
-      `)
-      .all(...params)
+    return batches(this.#sessionIdsSince(since))
+      .flatMap((batch) => this.#readSessionTitleRowsForSessions(batch))
+      .sort(
+        (left, right) =>
+          left.sourceUpdated - right.sourceUpdated || left.sessionId.localeCompare(right.sessionId),
+      )
   }
 
   public readTextPartIds(): string[] {
@@ -532,6 +500,9 @@ export class HistoryDatabase {
     const placeholders = sessionIds.map(() => '?').join(',')
     return this.#db
       .query<IndexSourceRow, string[]>(`
+        with changed_messages as materialized (
+          select * from message where session_id in (${placeholders})
+        )
         select
           s.id as sessionId,
           s.title as sessionTitle,
@@ -544,9 +515,9 @@ export class HistoryDatabase {
           'session-title' as source,
           coalesce(s.time_updated, 0) as sourceUpdated
         from session s
-        join message fm on fm.id = (
+        join changed_messages fm on fm.id = (
           select m.id
-          from message m
+          from changed_messages m
           where m.session_id = s.id
           order by m.history_order, m.id
           limit 1
@@ -554,7 +525,7 @@ export class HistoryDatabase {
         where s.id in (${placeholders})
         order by s.id
       `)
-      .all(...sessionIds)
+      .all(...sessionIds, ...sessionIds)
   }
 
   #hasTable(name: string): boolean {

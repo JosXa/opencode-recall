@@ -42,7 +42,6 @@ export type { TranscriptWindow } from './transcript.js'
 const DEFAULT_SEARCH_LIMIT = 50
 const DEFAULT_SESSION_INDEX_LIMIT = 20
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
-const DEFAULT_WORKER_TIMEOUT_MS = 120_000
 const WORKER_DIR = dirname(fileURLToPath(import.meta.url))
 
 export class OpenCodeRecall {
@@ -166,7 +165,8 @@ export async function searchHistory(
       args: searchWorkerArgs(query, options),
       context: { sessionID: options.currentSessionId ?? '' },
     },
-    workerSignal(options.workerTimeoutMs),
+    new AbortController().signal,
+    options.workerTimeoutMs,
   )
 
   return parseWorkerSearchResult(raw)
@@ -187,7 +187,8 @@ export async function sessionIndex(
       args: sessionIndexWorkerArgs(options),
       context: { sessionID: options.currentSessionId ?? '' },
     },
-    workerSignal(options.workerTimeoutMs),
+    new AbortController().signal,
+    options.workerTimeoutMs,
   )
 
   return parseWorkerSessionIndexResult(raw)
@@ -423,14 +424,6 @@ function optionalParsedTime(value: string | undefined): number | undefined {
 
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : undefined
-}
-
-function workerSignal(workerTimeoutMs: number | false | undefined): AbortSignal {
-  if (workerTimeoutMs === false) {
-    return new AbortController().signal
-  }
-
-  return AbortSignal.timeout(workerTimeoutMs ?? DEFAULT_WORKER_TIMEOUT_MS)
 }
 
 function isWorkerSearchResult(value: unknown): value is {

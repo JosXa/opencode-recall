@@ -72,7 +72,10 @@ export class HistorySources {
     if (query.trim() === '') return { rows: this.recent(options) }
     const rows: SearchRow[] = []
     const syncResults: SyncResult[] = []
-    for (const entry of this.#available()) {
+    const available = this.#available()
+    // Every source uses the same provider model, so embed the query only once.
+    const queryEmbedding = await embedQuery(query, features.semantic, provider, available.length)
+    for (const entry of available) {
       if (!(features.lexical || features.semantic)) continue
       const index = this.#index(entry)
       if (features.sync) {
@@ -82,7 +85,7 @@ export class HistorySources {
             : index.syncLexicalHistory(entry.history),
         )
       }
-      rows.push(...(await this.#searchSource(entry, query, options, features, provider)))
+      rows.push(...this.#searchSource(entry, query, options, features, provider, queryEmbedding))
     }
     return {
       rows: rankSearchRows(query, rows, options.limit),
@@ -103,18 +106,21 @@ export class HistorySources {
       .slice(0, options.limit)
   }
 
-  async #searchSource(
+  #searchSource(
     entry: OpenSource,
     query: string,
     options: SearchOptions,
     features: SearchFeatures,
     provider: EmbeddingProvider | undefined,
-  ): Promise<SearchRow[]> {
+    queryEmbedding: Float32Array | undefined,
+  ): SearchRow[] {
     const index = this.#index(entry)
     const scoped = scopedOptions(options, entry.source.id)
     const lexical = features.lexical ? index.lexicalSearch(query, scoped) : []
     const semantic =
-      features.semantic && provider !== undefined ? await index.search(query, scoped, provider) : []
+      features.semantic && provider !== undefined
+        ? index.searchWithEmbedding(query, scoped, provider.model, queryEmbedding)
+        : []
     return [...lexical, ...semantic].map((row) => this.#provenance(row, entry.source))
   }
 
@@ -210,6 +216,17 @@ export class HistorySources {
       messages: window.messages.map((message) => ({ ...message, sourceId: source.id })),
     }
   }
+}
+
+async function embedQuery(
+  query: string,
+  semantic: boolean,
+  provider: EmbeddingProvider | undefined,
+  sourceCount: number,
+): Promise<Float32Array | undefined> {
+  if (!semantic || provider === undefined || sourceCount === 0) return undefined
+  const [embedding] = await provider.embed([query])
+  return embedding
 }
 
 function scopedOptions<T extends SearchOptions>(options: T, sourceId: string): T {
