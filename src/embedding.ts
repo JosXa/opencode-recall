@@ -106,6 +106,10 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       this.#serverProcess = spawn('ollama', ['serve'], {
         env: { ...process.env, OLLAMA_HOST: ollamaHost(this.#baseUrl) },
         stdio: 'ignore',
+        // Ollama can serve other clients after this worker ends. Give it its own
+        // process group on POSIX and an independent, hidden process on Windows.
+        detached: true,
+        windowsHide: true,
       })
       this.#serverProcess.unref()
     } catch (error) {

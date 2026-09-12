@@ -1,20 +1,21 @@
 import { ChatmlRenderer } from './chatml-renderer.js'
-import { decodeCursor } from './cursor.js'
-import {
-  HistoryDatabase,
-  type ReadMode,
-  type SearchOptions,
-  type SearchRow,
-  type SessionIndexOptions,
-  type SessionIndexRow,
+import { qualifyCursor } from './cursor.js'
+import type {
+  ReadMode,
+  SearchOptions,
+  SearchRow,
+  SessionIndexOptions,
+  SessionIndexRow,
 } from './db.js'
 import { type EmbeddingProvider, OllamaEmbeddingProvider } from './embedding.js'
-import { normalizeWindow } from './normalizer.js'
+import { HistorySources } from './history-sources.js'
 import { parseReadMode } from './read-mode.js'
-import { makeSearchSnippet, rankSearchRows } from './search.js'
-import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar.js'
+import { makeSearchSnippet } from './search.js'
+import type { SyncOptions, SyncResult } from './sidecar.js'
+import { currentSessionCursor, type SourceOptions } from './sources.js'
 import type { TranscriptWindow } from './transcript.js'
 
+export type { RecallSource } from './config.js'
 export type { EmbeddingProvider, OllamaEmbeddingProviderOptions } from './embedding.js'
 export { OllamaEmbeddingProvider } from './embedding.js'
 export type { SyncOptions, SyncResult } from './sidecar.js'
@@ -25,7 +26,7 @@ const DEFAULT_SESSION_INDEX_LIMIT = 20
 const DEFAULT_READ_LIMIT = 12
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
 
-export interface OpenCodeRecallOptions {
+export interface OpenCodeRecallOptions extends SourceOptions {
   readonly historyDbPath?: string
   readonly sidecarDbPath?: string
   readonly embeddingProvider?: EmbeddingProvider
@@ -47,6 +48,7 @@ export interface RecallSearchOptions {
 }
 
 export interface RecallSearchHit {
+  readonly sourceId?: string
   readonly cursor: string
   readonly sessionId: string
   readonly sessionTitle: string
@@ -74,6 +76,7 @@ export interface RecallSessionIndexOptions {
 }
 
 export interface RecallSessionIndexEntry {
+  readonly sourceId?: string
   readonly cursor: string
   readonly sessionId: string
   readonly title: string
@@ -107,20 +110,19 @@ export interface RecallSearchResult {
 }
 
 export class DirectOpenCodeRecall {
-  readonly #history: HistoryDatabase
-  readonly #sidecar: RecallSidecarIndex
+  readonly #history: HistorySources
   readonly #provider: EmbeddingProvider
   readonly #ownsProvider: boolean
+  readonly #options: SourceOptions
 
   public constructor(options: OpenCodeRecallOptions = {}) {
-    this.#history = new HistoryDatabase(options.historyDbPath)
-    this.#sidecar = new RecallSidecarIndex(options.sidecarDbPath)
+    this.#options = options
+    this.#history = new HistorySources(options)
     this.#provider = options.embeddingProvider ?? new OllamaEmbeddingProvider()
     this.#ownsProvider = options.embeddingProvider === undefined
   }
 
   public close(): void {
-    this.#sidecar.close()
     this.#history.close()
 
     if (this.#ownsProvider && 'close' in this.#provider) {
@@ -132,20 +134,20 @@ export class DirectOpenCodeRecall {
   }
 
   public async sync(options: SyncOptions = {}): Promise<SyncResult> {
-    return this.#sidecar.syncHistory(this.#history, this.#provider, options)
+    return this.#history.sync(this.#provider, options)
   }
 
   // Build/refresh just the FTS5 lexical index, skipping embeddings.
   // Used when callers opt out of semantic but still want lexical recall.
   public syncLexical(): SyncResult {
-    return this.#sidecar.syncLexicalHistory(this.#history)
+    return this.#history.syncLexical()
   }
 
   public async search(
     query: string,
     options: RecallSearchOptions = {},
   ): Promise<RecallSearchResult> {
-    const searchOptions = normalizeSearchOptions(options)
+    const searchOptions = normalizeSearchOptions(this.#scopeCurrent(options))
 
     if (isBlankQuery(query)) {
       return { hits: this.#history.recent(searchOptions).map(toSearchHit) }
@@ -154,47 +156,52 @@ export class DirectOpenCodeRecall {
     const lexicalEnabled = options.lexical !== false
     const semanticEnabled = options.semantic !== false
     const shouldSync = (semanticEnabled || lexicalEnabled) && options.sync !== false
-    const syncResult = shouldSync
-      ? semanticEnabled
-        ? await this.sync(options.syncOptions)
-        : this.syncLexical()
-      : undefined
-    const lexicalRows = lexicalEnabled ? this.#sidecar.lexicalSearch(query, searchOptions) : []
-    const semanticRows = semanticEnabled
-      ? await this.#sidecar.search(query, searchOptions, this.#provider)
-      : []
-    const rows = rankSearchRows(query, [...lexicalRows, ...semanticRows], searchOptions.limit)
+    const result = await this.#history.search(
+      query,
+      searchOptions,
+      {
+        lexical: lexicalEnabled,
+        semantic: semanticEnabled,
+        sync: shouldSync,
+        syncOptions: options.syncOptions,
+      },
+      this.#provider,
+    )
 
     return {
-      hits: rows.map(toSearchHit),
-      ...(syncResult === undefined ? {} : { sync: syncResult }),
+      hits: result.rows.map(toSearchHit),
+      ...(result.sync === undefined ? {} : { sync: result.sync }),
     }
   }
 
   public sessionIndex(options: RecallSessionIndexOptions = {}): RecallSessionIndexResult {
     return {
       sessions: this.#history
-        .sessionIndex(normalizeSessionIndexOptions(options))
+        .sessionIndex(normalizeSessionIndexOptions(this.#scopeCurrent(options)))
         .map(toSessionIndexEntry),
     }
   }
 
   public read(cursorValue: string, options: RecallReadOptions = {}): TranscriptWindow {
-    const cursor = decodeCursor(cursorValue)
     const readOptions = {
       mode: parseReadMode(options.mode),
       limit: options.limit ?? DEFAULT_READ_LIMIT,
     }
 
-    return normalizeWindow(
-      cursor.messageId === undefined
-        ? this.#history.readWindowForSession(requiredSessionId(cursor.sessionId), readOptions)
-        : this.#history.readWindow(cursor.messageId, readOptions),
-    )
+    return this.#history.read(cursorValue, readOptions)
   }
 
   public render(cursorValue: string, options: RecallReadOptions = {}): string {
     return new ChatmlRenderer().render(this.read(cursorValue, options))
+  }
+
+  #scopeCurrent<T extends RecallSearchOptions | RecallSessionIndexOptions>(options: T): T {
+    return options.currentSessionId === undefined
+      ? options
+      : {
+          ...options,
+          currentSessionId: currentSessionCursor(options.currentSessionId, this.#options),
+        }
   }
 }
 
@@ -333,9 +340,10 @@ function optionalTimestamp(value: Date | number | string | undefined): number | 
 }
 
 function toSearchHit(row: SearchRow): RecallSearchHit {
-  const cursor = row.messageId
+  const cursor = qualifyCursor(row.messageId, row.sourceId)
   return {
     cursor,
+    ...(row.sourceId === undefined ? {} : { sourceId: row.sourceId }),
     sessionId: row.sessionId,
     sessionTitle: row.sessionTitle,
     directory: row.directory,
@@ -352,7 +360,8 @@ function toSearchHit(row: SearchRow): RecallSearchHit {
 
 function toSessionIndexEntry(row: SessionIndexRow): RecallSessionIndexEntry {
   return {
-    cursor: row.sessionId,
+    cursor: qualifyCursor(row.sessionId, row.sourceId),
+    ...(row.sourceId === undefined ? {} : { sourceId: row.sourceId }),
     sessionId: row.sessionId,
     title: row.title,
     directory: row.directory,
@@ -377,12 +386,4 @@ function toSessionIndexEntry(row: SessionIndexRow): RecallSessionIndexEntry {
     textParts: row.textPartCount,
     approxContextChars: row.approxContextChars,
   }
-}
-
-function requiredSessionId(value: string | undefined): string {
-  if (value !== undefined) {
-    return value
-  }
-
-  throw new Error('History cursor does not contain a message or session id')
 }

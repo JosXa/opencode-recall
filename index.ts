@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Plugin } from '@opencode-ai/plugin'
+import { Plugin } from '@opencode/plugin'
 
 import {
   HISTORY_READ_COMMAND,
@@ -146,7 +146,8 @@ export const RecallPlugin = Plugin.define({
           properties: {
             cursor: {
               type: 'string',
-              description: 'Cursor from search/read nav, msg_*, or ses_*. No :offset suffixes.',
+              description:
+                'Exact cursor from search/read nav, including source-qualified msg_* or ses_* cursors. No :offset suffixes.',
             },
             mode: {
               type: 'string',
@@ -215,7 +216,11 @@ export const RecallPlugin = Plugin.define({
         input: {
           ...OBJECT_SCHEMA,
           properties: {
-            cursor: { type: 'string', description: 'Session cursor. ses_* only.' },
+            cursor: {
+              type: 'string',
+              description:
+                'Exact session cursor from session_index, including source-qualified ses_* cursors.',
+            },
             path: { type: 'string', description: 'Workspace-relative destination.' },
             format: {
               type: 'string',
@@ -266,9 +271,16 @@ function registerCommand(
     description,
     execute: async ({ sessionID, prompt, delivery }) => {
       // The promise client omits undefined optionals on its wire input.
-      const input = JSON.parse(JSON.stringify({ sessionID, ...prompt, delivery })) as Parameters<
-        typeof context.session.prompt
-      >[0]
+      // Native command invocations contain only the arguments, not the slash command name.
+      // Append the instruction so existing attachment mention offsets still match the text.
+      const input = JSON.parse(
+        JSON.stringify({
+          sessionID,
+          ...prompt,
+          text: `${prompt.text}\n\nUse ${name} to fulfill this request.`,
+          delivery,
+        }),
+      ) as Parameters<typeof context.session.prompt>[0]
       await context.session.prompt(input)
     },
   })

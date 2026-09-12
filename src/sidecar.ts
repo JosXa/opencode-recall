@@ -99,6 +99,31 @@ export class RecallSidecarIndex {
     this.#db.close()
   }
 
+  /** One physical sidecar belongs to one source, including across independent host processes. */
+  public bindSource(identity: string): void {
+    this.#db.transaction(() => {
+      const existing = this.#getMetadata('source_identity')
+      if (existing !== undefined && existing !== identity) {
+        throw new Error(
+          `Recall sidecar belongs to a different source: ${existing}; requested ${identity}`,
+        )
+      }
+      if (existing === undefined) {
+        const active = this.#db
+          .query('select owner from sync_lock where expires_at > ?')
+          .get(Date.now())
+        if (active !== null)
+          throw new Error(
+            'Recall sidecar is being synced by an older unbound worker; retry after it finishes',
+          )
+        // Old indexes have no trustworthy source identity and may contain mixed history.
+        this.#lexical.sync([], [])
+        this.#db.exec("delete from chunk; delete from metadata where key != 'schema_version'")
+        this.#setMetadata('source_identity', identity)
+      }
+    }, true)()
+  }
+
   public async sync(
     sourceRows: (since: number | undefined) => readonly IndexSourceRow[],
     provider: EmbeddingProvider,
@@ -334,6 +359,15 @@ export class RecallSidecarIndex {
   ): Promise<SearchRow[]> {
     const [queryEmbedding] = await provider.embed([query])
 
+    return this.searchWithEmbedding(query, options, provider.model, queryEmbedding)
+  }
+
+  public searchWithEmbedding(
+    query: string,
+    options: SearchOptions,
+    model: string,
+    queryEmbedding: Float32Array | undefined,
+  ): SearchRow[] {
     if (queryEmbedding === undefined) {
       return []
     }
@@ -377,7 +411,7 @@ export class RecallSidecarIndex {
           and (? is null or session_id != ?)
       `)
       .all(
-        provider.model,
+        model,
         options.after ?? null,
         options.after ?? null,
         options.before ?? null,

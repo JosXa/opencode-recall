@@ -1,19 +1,27 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 const DEFAULT_OPENCODE_DATA_DIR_RELATIVE = '.local/share/opencode'
 const DEFAULT_OPENCODE_DB_FILENAME = 'opencode.db'
-const DEFAULT_SIDECAR_DB_FILENAME = 'opencode-recall-index.db'
 const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434'
 const DEFAULT_EMBED_MODEL = 'all-minilm'
 const CONFIG_FILENAME_PRIMARY = 'recall.jsonc'
 const CONFIG_FILENAME_FALLBACK = 'recall.json'
 
+export interface RecallSource {
+  readonly id: string
+  readonly path: string
+  readonly indexPath?: string | undefined
+}
+
 export interface RecallConfig {
   readonly database: {
     readonly path: string
     readonly indexPath: string
+    readonly legacyPath?: string | undefined
+    readonly sources?: readonly RecallSource[] | undefined
   }
   readonly embeddings: {
     readonly ollamaUrl: string
@@ -25,6 +33,8 @@ interface RawConfig {
   readonly database?: {
     readonly path?: string
     readonly indexPath?: string
+    readonly legacyPath?: string
+    readonly sources?: readonly RecallSource[]
   }
   readonly embeddings?: {
     readonly ollamaUrl?: string
@@ -61,13 +71,21 @@ function defaultConfig(): RecallConfig {
   return {
     database: {
       path: isAbsolute(hostDatabase) ? hostDatabase : join(dataDir, hostDatabase),
-      indexPath: join(dataDir, DEFAULT_SIDECAR_DB_FILENAME),
+      indexPath: defaultIndexPath(
+        isAbsolute(hostDatabase) ? hostDatabase : join(dataDir, hostDatabase),
+      ),
     },
     embeddings: {
       ollamaUrl: DEFAULT_OLLAMA_URL,
       model: DEFAULT_EMBED_MODEL,
     },
   }
+}
+
+export function hostDatabasePath(): string {
+  const { OPENCODE_DB } = process.env
+  const value = nonEmptyString(OPENCODE_DB) ?? DEFAULT_OPENCODE_DB_FILENAME
+  return canonicalPath(isAbsolute(value) ? value : join(openCodeDataDir(), value))
 }
 
 function readConfigFile(): RawConfig {
@@ -103,10 +121,14 @@ function ensureGlobalConfigExists(): void {
 }
 
 function mergeConfig(base: RecallConfig, raw: RawConfig): RecallConfig {
+  const legacyPath = expandPath(raw.database?.legacyPath)
+  const path = expandPath(raw.database?.path) ?? base.database.path
   return {
     database: {
-      path: expandPath(raw.database?.path) ?? base.database.path,
-      indexPath: expandPath(raw.database?.indexPath) ?? base.database.indexPath,
+      path,
+      indexPath: expandPath(raw.database?.indexPath) ?? defaultIndexPath(path),
+      ...(raw.database?.sources === undefined ? {} : { sources: raw.database.sources }),
+      ...(legacyPath === undefined ? {} : { legacyPath }),
     },
     embeddings: {
       ollamaUrl: nonEmptyString(raw.embeddings?.ollamaUrl) ?? base.embeddings.ollamaUrl,
@@ -122,10 +144,18 @@ function applyEnvOverrides(config: RecallConfig): RecallConfig {
     OPENCODE_RECALL_EMBED_MODEL,
     OPENCODE_RECALL_OLLAMA_URL,
   } = process.env
+  const sourcePath = expandPath(OPENCODE_DB_PATH)
   return {
     database: {
-      path: expandPath(OPENCODE_DB_PATH) ?? config.database.path,
-      indexPath: expandPath(OPENCODE_RECALL_DB_PATH) ?? config.database.indexPath,
+      ...config.database,
+      path: sourcePath ?? config.database.path,
+      indexPath:
+        expandPath(OPENCODE_RECALL_DB_PATH) ??
+        (sourcePath === undefined ? config.database.indexPath : defaultIndexPath(sourcePath)),
+      ...((nonEmptyString(OPENCODE_DB_PATH) ?? nonEmptyString(OPENCODE_RECALL_DB_PATH)) ===
+      undefined
+        ? {}
+        : { sources: undefined, legacyPath: undefined }),
     },
     embeddings: {
       ollamaUrl: nonEmptyString(OPENCODE_RECALL_OLLAMA_URL) ?? config.embeddings.ollamaUrl,
@@ -166,7 +196,7 @@ function homedirOrThrow(): string {
   return home
 }
 
-function expandPath(value: string | undefined): string | undefined {
+export function expandPath(value: string | undefined): string | undefined {
   const trimmed = nonEmptyString(value)
   if (trimmed === undefined) {
     return undefined
@@ -181,6 +211,18 @@ function expandPath(value: string | undefined): string | undefined {
   }
 
   return trimmed
+}
+
+/** Resolve existing ancestors too, so a not-yet-created index behind a symlink has one identity. */
+export function canonicalPath(path: string): string {
+  const absolute = resolve(expandPath(path) ?? path)
+  if (existsSync(absolute)) return realpathSync(absolute)
+  return join(canonicalPath(dirname(absolute)), basename(absolute))
+}
+
+export function defaultIndexPath(sourcePath: string): string {
+  const identity = createHash('sha256').update(canonicalPath(sourcePath)).digest('hex').slice(0, 20)
+  return join(openCodeDataDir(), `opencode-recall-${identity}.db`)
 }
 
 function nonEmptyString(value: string | undefined): string | undefined {
@@ -228,7 +270,7 @@ const DEFAULT_CONFIG_CONTENT = `{
     // "path": "~/.local/share/opencode/opencode.db",
 
     // Sidecar embedding index. Safe to delete; rebuilt on next search.
-    // Default: ~/.local/share/opencode/opencode-recall-index.db
+    // Default: opencode-recall-<source-path-hash>.db in the OpenCode data directory.
     // "indexPath": "~/.local/share/opencode/opencode-recall-index.db"
   },
 

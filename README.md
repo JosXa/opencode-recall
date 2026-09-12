@@ -57,23 +57,25 @@ Recall fixes that:
 
 **Iterative recall: agent reformulates the search when the first pass is thin.**
 
-![Recall asking about match marker file names, agent runs an initial broad search, then a narrower one with stronger terms and a directory filter, then returns a precise file list](./assets/screenshot-02.png)
+![Recall asking about filenames for match markers, agent runs an initial broad search, then a narrower one with stronger terms and a directory filter, then returns a precise file list](./assets/screenshot-02.png)
 
 ## Install
 
+Build the `opencode-v2` branch with Node.js and pnpm:
+
 ```sh
-pnpm add -D @josxa/opencode-recall@opencode-v2
+git clone --branch opencode-v2 git@github.com:JosXa/opencode-recall.git
+cd opencode-recall
+pnpm install --frozen-lockfile
+pnpm run build
 ```
 
-Then register the OpenCode V2 plugin in `opencode.json` or `~/.config/opencode/opencode.json`:
+Register the built directory in your V2 config. Replace the example path with the absolute path to your checkout:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["@josxa/opencode-recall"],
-  "agents": {
-    "recall": {}
-  }
+  "plugins": ["file:///path/to/opencode-recall/dist"]
 }
 ```
 
@@ -85,7 +87,7 @@ Semantic search uses [Ollama](https://ollama.com) running locally. Install it, t
 ollama --version  # should print a version. install from https://ollama.com/download if not.
 ```
 
-Everything else is handled for you. The first `history_search` call will start `ollama serve` if it isn't running, pull the default embedding model (`all-minilm`, small and fast) if it isn't installed, and build the sidecar index incrementally. Subsequent calls reuse and sync it.
+Everything else is handled for you. The first `history_search` call will start `ollama serve` if it isn't running, pull the default embedding model (`all-minilm`, small and fast) if it isn't installed, and build the sidecar index. Subsequent calls reuse it and synchronize only sessions changed since the previous search.
 
 Lexical search still works without Ollama, but you lose paraphrase recall, which is half the value.
 
@@ -135,7 +137,7 @@ Most users never need to edit it. Open it when your OpenCode database lives some
     "path": "~/.local/share/opencode/opencode.db",
 
     // Sidecar embedding index. Safe to delete; rebuilt on next search.
-    // Default: ~/.local/share/opencode/opencode-recall-index.db
+    // Default: a filename derived from the canonical source path.
     "indexPath": "~/.local/share/opencode/opencode-recall-index.db"
   },
 
@@ -153,11 +155,36 @@ Most users never need to edit it. Open it when your OpenCode database lives some
 
 Environment variables still work as overrides for CI, MCP, and temporary experiments: `OPENCODE_DB_PATH`, `OPENCODE_RECALL_DB_PATH`, `OPENCODE_RECALL_OLLAMA_URL`, and `OPENCODE_RECALL_EMBED_MODEL`.
 
+### Read V1 and V2 history from either runtime
+
+Set the same named sources in both runtimes' `recall.jsonc` files:
+
+```jsonc
+{
+  "database": {
+    "sources": [
+      { "id": "v1", "path": "~/.local/share/opencode/opencode.db", "indexPath": "~/.local/share/opencode/recall-v1.db" },
+      { "id": "v2", "path": "~/.local/share/opencode/opencode-v2.db", "indexPath": "~/.local/share/opencode/recall-v2.db" }
+    ]
+  }
+}
+```
+
+Each source has one sidecar shared by all Recall hosts. Event cursors, embeddings, sync locks and stale-row cleanup remain local to that source. Source databases remain read-only, and the hosts keep their own session databases. Missing sources are skipped without opening or pruning their sidecars. A cursor naming an unavailable source reports an error.
+
+Source IDs must be unique and contain only letters, digits, `_` or `-`. Keep them stable across configs so saved cursors remain usable. Each canonical source path must be unique, each sidecar must be unique, and a sidecar cannot alias any source. Existing symlinks are resolved. A sidecar records its source identity atomically; conflicting configurations fail instead of reconciling the wrong database. Existing unbound indexes are rebuilt when first bound because their source cannot be established reliably. Use fresh per-source sidecars when migrating a previously shared index.
+
+With multiple sources, results include `sourceId`, and cursors are qualified, for example `v1::msg_example` or `v2::ses_example`. Copy these exact values into read and save calls, including navigation cursors. Do not append offsets. Raw `msg_...` and `ses_...` inputs still work when only one available source contains the ID; ambiguous IDs produce an error listing qualified choices. Copies in different sources remain distinct results, and ranking, result limits, recent entries and session lists merge globally. A qualified `excludeSessionId` filters only that source; a raw exclusion applies to every source. Current-session exclusion is scoped to the host database when it matches a configured source.
+
+The SDK accepts the same list as `new OpenCodeRecall({ sources: [...] })` or `searchHistory(query, { sources: [...] })`. Hits and transcript windows retain raw IDs plus `sourceId`; use the `cursor` and navigation fields to read. The worker SDK and direct SDK with a custom embedding provider share the same federation coordinator.
+
+`database.path` / `database.indexPath` and SDK `historyDbPath` / `sidecarDbPath` remain supported for one source, with unchanged cursor output. The default source follows `OPENCODE_DB`, or `opencode.db` in the OpenCode data directory. Default sidecars use `opencode-recall-<source-path-hash>.db` so V1 and V2 cannot accidentally share an index. `OPENCODE_DB_PATH` or `OPENCODE_RECALL_DB_PATH` suppresses the configured source list for isolated runs; explicit SDK source lists take precedence. The former `legacyPath` option resolves to a separate `legacy` source; new configurations should use `sources`.
+
 Run `pnpm run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
 
 ### Choosing the `recall` subagent model
 
-Recall integrates with the native OpenCode V2 `agents.recall` configuration instead of replacing it. Keep the empty `agents.recall` entry from the installation example, or add your own settings there. The plugin supplies Recall's description, subagent mode, system prompt, and history-only ordered permission rules. Other agent settings, including `model` and `request`, stay under your control.
+Recall creates the native OpenCode V2 `recall` agent and preserves settings in `agents.recall`. The plugin supplies its description, subagent mode, system prompt, and history permissions. Other agent settings, including `model` and `request`, stay under your control.
 
 For example, configure a small model for Recall independently of the parent agent:
 
@@ -167,10 +194,7 @@ For example, configure a small model for Recall independently of the parent agen
   "$schema": "https://opencode.ai/config.json",
   "agents": {
     "recall": {
-      "model": {
-        "providerID": "example-provider",
-        "modelID": "recall-mini"
-      },
+      "model": "example-provider/recall-mini",
       "request": {
         "body": {
           "reasoningEffort": "low"
@@ -231,7 +255,7 @@ Use this when you do not have a search term yet and want to spot substantial pas
 
 | Arg      | Type                             | Notes                                           |
 | -------- | -------------------------------- | ----------------------------------------------- |
-| `cursor` | string                           | **Required.** A `ses_...` session cursor only.  |
+| `cursor` | string                           | **Required.** An exact session cursor, including source-qualified `ses_...` cursors. |
 | `path`   | string                           | **Required.** Workspace-relative destination.   |
 | `format` | `chatml` \| `markdown` \| `jsonl` | Transcript encoding. Default `chatml`.          |
 
@@ -284,7 +308,7 @@ Returns a JSON array of compact hits:
 
 | Arg      | Type   | Notes                                                                                          |
 | -------- | ------ | ---------------------------------------------------------------------------------------------- |
-| `cursor` | string | **Required.** A `msg_…`, a `ses_…`, or an encoded cursor from `history_search`.                |
+| `cursor` | string | **Required.** An exact cursor from search or navigation, including source-qualified cursors; raw `msg_…` and `ses_…` inputs also work when unambiguous. |
 | `mode`   | string | `around` (default), `next`, `prev`, `head`, or `tail`. `full` is rejected; page instead.        |
 | `n`      | number | Message count. Default `12`, max `50`.                                                         |
 
@@ -326,7 +350,7 @@ Tool calls, patches, and file attachments render as structured tags with explici
 
 - **Source of truth.** `opencode.db` is opened read-only. The plugin never writes to it.
 - **Sidecar index.** A separate SQLite database (`opencode-recall-index.db`) stores text chunks, content hashes, and `Float32` embedding blobs. Synthetic `session-title:<id>` rows are indexed so proper-noun title queries beat noisy snippet matches.
-- **Sync.** Each `history_search` call performs an incremental sync with a 30-minute overlap window and a lock so concurrent agents don't fight. Stale rows are pruned by comparing part ids.
+- **Sync.** Searches use OpenCode's persisted event log to reconcile only changed sessions, including deletions. There is no watcher or background process. Existing sidecars upgrade automatically; custom eventless databases retain the timestamp fallback.
 - **Ranking.** Lexical and semantic candidates are merged, scored with title/text/directory term ratios plus phrase boosts, filtered to require enough query-term overlap, and diversified to at most two hits per session. A small semantic-rescue lane admits paraphrase matches that miss lexical filters but have high embedding similarity.
 - **Reads.** Windows are computed by `row_number()` over `(session_id, time_created, id)`, then parts are normalized into `text | tool | patch | file` and capped (tool input 2 000 chars, output 6 000 chars).
 

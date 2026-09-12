@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, opencode-v2]
+    branches: [main, opencode-v2, v2]
   pull_request:
-    branches: [main, opencode-v2]
+    branches: [main, opencode-v2, v2]
 
 permissions:
   contents: read

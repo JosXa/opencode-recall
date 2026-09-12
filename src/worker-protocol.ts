@@ -1,4 +1,6 @@
-export interface HistorySearchWorkerArgs {
+import type { SourceOptions } from './sources.js'
+
+export interface HistorySearchWorkerArgs extends SourceOptions {
   readonly q?: string | undefined
   readonly n?: number | undefined
   readonly maxSearchLimit?: number | undefined
@@ -15,14 +17,14 @@ export interface HistorySearchWorkerArgs {
   readonly format?: 'text' | 'json' | undefined
 }
 
-export interface HistoryReadWorkerArgs {
+export interface HistoryReadWorkerArgs extends SourceOptions {
   readonly cursor?: string | undefined
   readonly mode?: string | undefined
   readonly n?: number | undefined
   readonly historyDbPath?: string | undefined
 }
 
-export interface SessionIndexWorkerArgs {
+export interface SessionIndexWorkerArgs extends SourceOptions {
   readonly n?: number | undefined
   readonly title?: string | undefined
   readonly directory?: string | undefined
@@ -34,7 +36,7 @@ export interface SessionIndexWorkerArgs {
   readonly format?: 'text' | 'json' | undefined
 }
 
-export interface SessionSaveWorkerArgs {
+export interface SessionSaveWorkerArgs extends SourceOptions {
   readonly cursor?: string | undefined
   readonly path?: string | undefined
   readonly format?: 'chatml' | 'markdown' | 'jsonl' | undefined

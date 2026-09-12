@@ -100,6 +100,24 @@ describe('Node worker cancellation', () => {
 })
 
 describe('plugin recall subagent', () => {
+  test('forwards slash command arguments, attachments and delivery with the selected history tool', async () => {
+    const harness = pluginHarness({ preseedCommands: false })
+    await RecallPlugin.setup(harness.context)
+    for (const name of TOOL_NAMES_FOR_TEST) {
+      await harness.commands.get(name)?.execute({
+        sessionID: 'ses_command',
+        prompt: { text: 'fixture request', files: [{ uri: 'file:///fixture.txt', mention: { start: 0, end: 7, text: 'fixture' } }], skills: undefined },
+        delivery: 'queue',
+      })
+      expect(harness.prompts.at(-1)).toEqual({
+        sessionID: 'ses_command',
+        text: `fixture request\n\nUse ${name} to fulfill this request.`,
+        files: [{ uri: 'file:///fixture.txt', mention: { start: 0, end: 7, text: 'fixture' } }],
+        delivery: 'queue',
+      })
+    }
+  })
+
   test('creates its agent and all slash commands on a clean installation', async () => {
     const harness = pluginHarness({ preseedCommands: false, preseedRecallAgent: false })
     await RecallPlugin.setup(harness.context)
@@ -109,6 +127,8 @@ describe('plugin recall subagent', () => {
       mode: 'subagent',
       description: RECALL_AGENT_DESCRIPTION,
     })
+    expect(harness.agents.get(RECALL_AGENT_NAME)?.model).toBeUndefined()
+    expect(harness.agents.get(RECALL_AGENT_NAME)?.request).toBeUndefined()
     expect([...harness.commands.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
     expect([...harness.tools.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
   })
@@ -121,7 +141,7 @@ describe('plugin recall subagent', () => {
     const build = harness.agents.get('build')
 
     expect(recall?.mode).toBe('subagent')
-    expect(recall?.model).toEqual({ providerID: 'example', modelID: 'recall-mini' })
+    expect(recall?.model).toEqual({ providerID: 'example', id: 'recall-mini', variant: 'medium' })
     expect(recall?.request).toEqual({ body: { reasoningEffort: 'low', temperature: 0.2 } })
     expect(recall?.description).toContain('Source-grounded')
     expect(recall?.description).toContain('**Reinvoke** subagent for follow-ups/detail')
@@ -237,7 +257,7 @@ describe('config file loading', () => {
       expect(existsSync(configPath)).toBe(true)
       expect(readFileSync(configPath, 'utf-8')).toContain('"database"')
       expect(config.database.path).toContain('/opencode/opencode.db')
-      expect(config.database.indexPath).toContain('/opencode/opencode-recall-index.db')
+      expect(config.database.indexPath).toMatch(/\/opencode\/opencode-recall-[a-f0-9]{20}\.db$/)
       expect(config.embeddings).toEqual({
         ollamaUrl: 'http://127.0.0.1:11434',
         model: 'all-minilm',
@@ -1482,7 +1502,7 @@ interface TestPermission {
 
 interface TestAgent {
   id: string
-  model?: { providerID: string; modelID: string }
+  model?: { providerID: string; id: string; variant?: string }
   request?: { body: Record<string, unknown> }
   description?: string
   mode?: string
@@ -1501,6 +1521,16 @@ interface TestToolContext {
 interface TestTool {
   name: string
   execute(input: unknown, context: TestToolContext): Promise<{ content?: string }>
+}
+
+interface TestCommand {
+  name: string
+  description?: string
+  execute(input: {
+    sessionID: string
+    prompt: { text: string; files?: { uri: string; mention?: { start: number; end: number; text: string } }[]; skills?: undefined }
+    delivery: string
+  }): Promise<void>
 }
 
 function pluginHarness(
@@ -1522,15 +1552,16 @@ function pluginHarness(
   if (options.preseedRecallAgent !== false) {
     agents.set(RECALL_AGENT_NAME, {
       id: RECALL_AGENT_NAME,
-      model: { providerID: 'example', modelID: 'recall-mini' },
+      model: { providerID: 'example', id: 'recall-mini', variant: 'medium' },
       request: { body: { reasoningEffort: 'low', temperature: 0.2 } },
       permissions: [],
     })
   }
   const tools = new Map<string, TestTool>()
-  const commands = new Map<string, { description?: string; template: string }>()
+  const commands = new Map<string, TestCommand>()
+  const prompts: unknown[] = []
   if (options.preseedCommands !== false) {
-    for (const name of TOOL_NAMES_FOR_TEST) commands.set(name, { template: '' })
+    for (const name of TOOL_NAMES_FOR_TEST) commands.set(name, { name, async execute() {} })
   }
   let beforeToolExecute:
     | ((call: { agent: string; tool: string }) => Promise<void> | void)
@@ -1548,8 +1579,8 @@ function pluginHarness(
           get(name: string) {
             return commands.get(name)
           },
-          add(command: { name: string; description?: string; execute: unknown }) {
-            commands.set(command.name, command as never)
+          add(command: TestCommand) {
+            commands.set(command.name, command)
           },
         })
         return { dispose() {} }
@@ -1583,6 +1614,9 @@ function pluginHarness(
       },
     },
     session: {
+      async prompt(input: unknown) {
+        prompts.push(input)
+      },
       async get() {
         return { location: { directory } }
       },
@@ -1592,6 +1626,7 @@ function pluginHarness(
   return {
     agents,
     commands,
+    prompts,
     tools,
     get beforeToolExecute() {
       return beforeToolExecute

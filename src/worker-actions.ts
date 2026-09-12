@@ -3,13 +3,13 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 import { ChatmlRenderer } from './chatml-renderer.js'
-import { decodeCursor } from './cursor.js'
-import { HistoryDatabase, type SessionIndexRow } from './db.js'
+import { decodeCursor, qualifyCursor } from './cursor.js'
+import type { SessionIndexRow } from './db.js'
 import { OllamaEmbeddingProvider } from './embedding.js'
-import { normalizeWindow } from './normalizer.js'
+import { HistorySources } from './history-sources.js'
 import { parseReadMode } from './read-mode.js'
-import { formatSearchResult, formatSearchResults, rankSearchRows } from './search.js'
-import { RecallSidecarIndex } from './sidecar.js'
+import { formatSearchResult, formatSearchResults } from './search.js'
+import { currentSessionCursor } from './sources.js'
 import {
   DEFAULT_READ_LIMIT,
   DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS,
@@ -61,10 +61,10 @@ async function executeSessionSave(
 
   const destination = resolveWorkspacePath(request.context.directory, request.args.path)
   const format = parseSessionSaveFormat(request.args.format)
-  const db = new HistoryDatabase(request.args.historyDbPath)
+  const db = new HistorySources(request.args)
 
   try {
-    const window = normalizeWindow(db.readSession(cursor.sessionId))
+    const window = db.readSession(cursorValue)
     const content = renderSavedSession(window, format)
     await mkdir(dirname(destination), { recursive: true })
     await writeFile(destination, content, 'utf-8')
@@ -86,7 +86,7 @@ function executeSessionIndex(
   const before = optionalDateFilterValue('before', request.args.before)
   const excludeSessionId = currentSessionExclusion(
     includeCurrentSession,
-    request.context.sessionID,
+    currentSessionCursor(request.context.sessionID, request.args),
     request.args.excludeSessionId,
   )
   const options = {
@@ -97,7 +97,7 @@ function executeSessionIndex(
     ...optionalDateFilter('after', request.args.after),
     ...searchBeforeFilter(before, includeCurrentSession, request.context.sessionID),
   }
-  const db = new HistoryDatabase(request.args.historyDbPath)
+  const db = new HistorySources(request.args)
 
   try {
     return formatSessionIndexResponse(request, db.sessionIndex(options))
@@ -117,7 +117,7 @@ async function executeHistorySearch(
   const before = optionalDateFilterValue('before', request.args.before)
   const excludeSessionId = currentSessionExclusion(
     includeCurrentSession,
-    request.context.sessionID,
+    currentSessionCursor(request.context.sessionID, request.args),
     request.args.excludeSessionId,
   )
   const maxSearchLimit = request.args.maxSearchLimit ?? MAX_SEARCH_LIMIT
@@ -128,8 +128,7 @@ async function executeHistorySearch(
     ...optionalDateFilter('after', request.args.after),
     ...searchBeforeFilter(before, includeCurrentSession, request.context.sessionID),
   }
-  const db = new HistoryDatabase(request.args.historyDbPath)
-  const sidecar = new RecallSidecarIndex(request.args.sidecarDbPath)
+  const db = new HistorySources(request.args)
 
   try {
     if (query.trim().length === 0) {
@@ -138,21 +137,14 @@ async function executeHistorySearch(
     }
 
     const provider = semanticEnabled ? new OllamaEmbeddingProvider() : undefined
-    const syncResult = shouldSync
-      ? semanticEnabled && provider !== undefined
-        ? await sidecar.syncHistory(db, provider)
-        : sidecar.syncLexicalHistory(db)
-      : undefined
-    const [semanticRows, lexicalRows] = await Promise.all([
-      semanticEnabled && provider !== undefined
-        ? sidecar.search(query, options, provider)
-        : Promise.resolve([]),
-      Promise.resolve(lexicalEnabled ? sidecar.lexicalSearch(query, options) : []),
-    ])
-    const rows = rankSearchRows(query, [...lexicalRows, ...semanticRows], options.limit)
-    return formatSearchResponse(request, rows, syncResult)
+    const result = await db.search(
+      query,
+      options,
+      { semantic: semanticEnabled, lexical: lexicalEnabled, sync: shouldSync },
+      provider,
+    )
+    return formatSearchResponse(request, result.rows, result.sync)
   } finally {
-    sidecar.close()
     db.close()
   }
 }
@@ -166,18 +158,13 @@ function executeHistoryReadWindow(
     throw new Error('history_read requires cursor')
   }
 
-  const cursor = decodeCursor(cursorValue)
   const mode = parseReadMode(request.args.mode)
   const limit = clampNumber(request.args.n, DEFAULT_READ_LIMIT, 1, MAX_READ_LIMIT)
-  const db = new HistoryDatabase(request.args.historyDbPath)
+  const db = new HistorySources(request.args)
 
   try {
     const readOptions = { mode, limit }
-    return normalizeWindow(
-      cursor.messageId === undefined
-        ? db.readWindowForSession(requiredSessionId(cursor.sessionId), readOptions)
-        : db.readWindow(cursor.messageId, readOptions),
-    )
+    return db.read(cursorValue, readOptions)
   } finally {
     db.close()
   }
@@ -286,6 +273,7 @@ function formatSessionIndexResponse(
 }
 
 function formatSessionIndexRow(row: SessionIndexRow): {
+  readonly sourceId?: string
   readonly cursor: string
   readonly sid: string
   readonly title: string
@@ -301,7 +289,8 @@ function formatSessionIndexRow(row: SessionIndexRow): {
   readonly approxContextChars: number
 } {
   return {
-    cursor: row.sessionId,
+    cursor: qualifyCursor(row.sessionId, row.sourceId),
+    ...(row.sourceId === undefined ? {} : { sourceId: row.sourceId }),
     sid: row.sessionId,
     title: row.title,
     directory: row.directory,
@@ -374,7 +363,7 @@ function renderMarkdownSession(window: TranscriptWindow): string {
   const lines = [
     `# ${window.title ?? window.sessionId}`,
     '',
-    `Session: \`${window.sessionId}\``,
+    `Session: \`${qualifyCursor(window.sessionId, window.sourceId)}\``,
     `Directory: \`${window.directory}\``,
     `Messages: ${window.messages.length}`,
   ]
@@ -390,7 +379,7 @@ function renderMarkdownMessage(message: TranscriptMessage): string {
   const lines = [
     `## ${message.index}. ${message.role}`,
     '',
-    `id: \`${message.id}\`  `,
+    `id: \`${qualifyCursor(message.id, message.sourceId)}\`  `,
     `time: \`${new Date(message.timeCreated).toISOString()}\``,
   ]
 
@@ -436,12 +425,4 @@ function clampNumber(
   }
 
   return Math.min(max, Math.max(min, Math.trunc(value)))
-}
-
-function requiredSessionId(value: string | undefined): string {
-  if (value !== undefined) {
-    return value
-  }
-
-  throw new Error('History cursor does not contain a message or session id')
 }
