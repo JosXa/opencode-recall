@@ -1,6 +1,7 @@
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+  protobufjs: false
 minimumReleaseAgeExclude:
   - '@typescript/typescript-aix-ppc64@7.0.2'
   - '@typescript/typescript-darwin-arm64@7.0.2'
