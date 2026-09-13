@@ -47,6 +47,27 @@ export interface SyncOptions {
   }) => void
 }
 
+function enableWal(db: Database): void {
+  const deadline = Date.now() + 5000
+  const wait = new Int32Array(new SharedArrayBuffer(4))
+  // Concurrent first opens can fail this journal transition without invoking SQLite's busy handler.
+  for (;;) {
+    try {
+      db.exec('pragma journal_mode = wal')
+      return
+    } catch (error) {
+      if (
+        !(error instanceof Error && 'errcode' in error) ||
+        error.errcode !== 5 ||
+        Date.now() >= deadline
+      ) {
+        throw error
+      }
+      Atomics.wait(wait, 0, 0, 10)
+    }
+  }
+}
+
 export class RecallSidecarIndex {
   readonly #db: Database
   readonly #owner = randomUUID()
@@ -56,7 +77,7 @@ export class RecallSidecarIndex {
   public constructor(path = defaultSidecarPath()) {
     ensureParentDirectory(path)
     this.#db = new Database(path)
-    this.#db.exec('pragma journal_mode = wal')
+    enableWal(this.#db)
     this.#db.exec('pragma busy_timeout = 2500')
     this.#db.exec(`
       create table if not exists metadata (
@@ -97,6 +118,31 @@ export class RecallSidecarIndex {
 
   public close(): void {
     this.#db.close()
+  }
+
+  /** One physical sidecar belongs to one source, including across independent host processes. */
+  public bindSource(identity: string): void {
+    this.#db.transaction(() => {
+      const existing = this.#getMetadata('source_identity')
+      if (existing !== undefined && existing !== identity) {
+        throw new Error(
+          `Recall sidecar belongs to a different source: ${existing}; requested ${identity}`,
+        )
+      }
+      if (existing === undefined) {
+        const active = this.#db
+          .query('select owner from sync_lock where expires_at > ?')
+          .get(Date.now())
+        if (active !== null)
+          throw new Error(
+            'Recall sidecar is being synced by an older unbound worker; retry after it finishes',
+          )
+        // Old indexes have no trustworthy source identity and may contain mixed history.
+        this.#lexical.sync([], [])
+        this.#db.exec("delete from chunk; delete from metadata where key != 'schema_version'")
+        this.#setMetadata('source_identity', identity)
+      }
+    }, true)()
   }
 
   public async sync(
@@ -334,6 +380,15 @@ export class RecallSidecarIndex {
   ): Promise<SearchRow[]> {
     const [queryEmbedding] = await provider.embed([query])
 
+    return this.searchWithEmbedding(query, options, provider.model, queryEmbedding)
+  }
+
+  public searchWithEmbedding(
+    query: string,
+    options: SearchOptions,
+    model: string,
+    queryEmbedding: Float32Array | undefined,
+  ): SearchRow[] {
     if (queryEmbedding === undefined) {
       return []
     }
@@ -377,7 +432,7 @@ export class RecallSidecarIndex {
           and (? is null or session_id != ?)
       `)
       .all(
-        provider.model,
+        model,
         options.after ?? null,
         options.after ?? null,
         options.before ?? null,

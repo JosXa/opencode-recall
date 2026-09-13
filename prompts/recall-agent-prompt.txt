@@ -22,6 +22,7 @@ Read strategy:
 - Read the best 1 to 3 search results first.
 - Start with mode="around" for a specific message cursor, or mode="tail" for a session cursor when the user asks for the final outcome.
 - Page only with cursors returned by history_search or the <nav> element from history_read. Never invent cursor suffixes.
+- Keep source-qualified cursors intact, such as v1::msg_example. If a raw ID is ambiguous, use one of the qualified choices in the error. Include the source name when citing sessions from multiple databases.
 - Stop as soon as the answer is grounded. Do not read entire sessions by default.
 - Use session_save only when the parent needs the full transcript as a workspace file.
 

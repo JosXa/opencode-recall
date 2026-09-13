@@ -1,25 +1,50 @@
+import { pathToFileURL } from 'node:url'
 import type { Database } from './sqlite.js'
 
 /** Read the host's materialized projection, never replay events or mutate its database. */
-export function installHistorySchema(db: Database): void {
+export function installHistorySchema(db: Database, legacyPath?: string): void {
+  if (legacyPath !== undefined) {
+    const uri = pathToFileURL(legacyPath)
+    uri.searchParams.set('mode', 'ro')
+    db.query('attach database ? as recall_legacy').run(uri.href)
+  }
   const tables = new Set(
     db
       .query<{ name: string }>("select name from main.sqlite_master where type = 'table'")
       .all()
       .map((row) => row.name),
   )
-  const legacy = ['session', 'message', 'part'].every((name) => tables.has(name))
+  const legacySchema = legacyPath === undefined ? 'main' : 'recall_legacy'
+  const legacyTables =
+    legacyPath === undefined
+      ? tables
+      : new Set(
+          db
+            .query<{ name: string }>(
+              "select name from recall_legacy.sqlite_master where type = 'table'",
+            )
+            .all()
+            .map((row) => row.name),
+        )
+  const legacy = ['session', 'message', 'part'].every((name) => legacyTables.has(name))
+  if (legacyPath !== undefined && !legacy)
+    throw new Error('Configured legacyPath must contain V1 session, message and part tables')
   const native = ['session_v2', 'session_message'].every((name) => tables.has(name))
   if (!(legacy || native))
     throw new Error(
       'Unsupported OpenCode history schema: expected V1 history tables or V2 session projections',
     )
-  const sessions = legacy ? 'select id, title, directory, time_updated from main.session' : ''
-  const messages = legacy
-    ? 'select id, session_id, data, time_created, time_updated, time_created as history_order from main.message'
+  const sessions = legacy
+    ? `select id, title, directory, time_updated from ${legacySchema}.session`
     : ''
-  const parts = legacy ? 'select id, message_id, session_id, data, time_updated from main.part' : ''
+  const messages = legacy
+    ? `select id, session_id, data, time_created, time_updated, time_created as history_order from ${legacySchema}.message`
+    : ''
+  const parts = legacy
+    ? `select id, message_id, session_id, data, time_updated from ${legacySchema}.part`
+    : ''
   if (!native) {
+    db.exec(`create temp view session as ${sessions}; create temp view part as ${parts}`)
     db.exec(`create temp view message as ${messages}`)
     return
   }
@@ -37,7 +62,8 @@ export function installHistorySchema(db: Database): void {
     : ''
   db.exec(`
     create temp view session as ${oldSessions}
-      select s.id, s.title, s.directory,
+      -- V2 sessions can have no title before automatic title generation finishes.
+      select s.id, coalesce(s.title, '') as title, s.directory,
         max(s.time_updated, coalesce((select max(m.time_updated) from main.session_message m where m.session_id = s.id), 0)) as time_updated
       from main.session_v2 s;
     create temp view message as ${oldMessages}

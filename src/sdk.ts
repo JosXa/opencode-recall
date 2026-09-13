@@ -15,6 +15,7 @@ import type {
 } from './sdk-direct.js'
 import type { HistorySearchResult } from './search.js'
 import type { SyncOptions, SyncResult } from './sidecar.js'
+import { currentSessionCursor, type SourceOptions } from './sources.js'
 import type { TranscriptWindow } from './transcript.js'
 import type {
   HistoryReadWorkerArgs,
@@ -22,6 +23,7 @@ import type {
   SessionIndexWorkerArgs,
 } from './worker-protocol.js'
 
+export type { RecallSource } from './config.js'
 export type { EmbeddingProvider, OllamaEmbeddingProviderOptions } from './embedding.js'
 export { OllamaEmbeddingProvider } from './embedding.js'
 export type {
@@ -40,7 +42,6 @@ export type { TranscriptWindow } from './transcript.js'
 const DEFAULT_SEARCH_LIMIT = 50
 const DEFAULT_SESSION_INDEX_LIMIT = 20
 const DEFAULT_FRESHNESS_EXCLUSION_MS = 30_000
-const DEFAULT_WORKER_TIMEOUT_MS = 120_000
 const WORKER_DIR = dirname(fileURLToPath(import.meta.url))
 
 export class OpenCodeRecall {
@@ -164,7 +165,8 @@ export async function searchHistory(
       args: searchWorkerArgs(query, options),
       context: { sessionID: options.currentSessionId ?? '' },
     },
-    workerSignal(options.workerTimeoutMs),
+    new AbortController().signal,
+    options.workerTimeoutMs,
   )
 
   return parseWorkerSearchResult(raw)
@@ -185,7 +187,8 @@ export async function sessionIndex(
       args: sessionIndexWorkerArgs(options),
       context: { sessionID: options.currentSessionId ?? '' },
     },
-    workerSignal(options.workerTimeoutMs),
+    new AbortController().signal,
+    options.workerTimeoutMs,
   )
 
   return parseWorkerSessionIndexResult(raw)
@@ -228,6 +231,8 @@ function readWorkerArgs(
     mode: options.mode,
     n: options.limit,
     historyDbPath: options.historyDbPath,
+    sidecarDbPath: options.sidecarDbPath,
+    sources: options.sources,
   }
 }
 
@@ -246,6 +251,7 @@ function searchWorkerArgs(
     before: optionalDateArg(options.before ?? defaultBefore(options)),
     historyDbPath: options.historyDbPath,
     sidecarDbPath: options.sidecarDbPath,
+    sources: options.sources,
     semantic: options.semantic,
     lexical: options.lexical,
     sync: options.sync,
@@ -265,6 +271,8 @@ function sessionIndexWorkerArgs(
     after: optionalDateArg(options.after),
     before: optionalDateArg(options.before ?? defaultBefore(options)),
     historyDbPath: options.historyDbPath,
+    sidecarDbPath: options.sidecarDbPath,
+    sources: options.sources,
     format: 'json',
   }
 }
@@ -325,6 +333,7 @@ function isWorkerSessionIndexResult(value: unknown): value is {
 }
 
 interface WorkerSessionIndexEntry {
+  readonly sourceId?: string
   readonly cursor: string
   readonly sid: string
   readonly title: string
@@ -369,6 +378,7 @@ function toSearchHit(result: HistorySearchResult): RecallSearchHit {
 
   return {
     cursor: result.cursor,
+    ...(result.sourceId === undefined ? {} : { sourceId: result.sourceId }),
     sessionId: result.sid,
     sessionTitle: result.title,
     directory: result.directory,
@@ -390,6 +400,7 @@ function toSessionIndexEntry(result: WorkerSessionIndexEntry): RecallSessionInde
 
   return {
     cursor: result.cursor,
+    ...(result.sourceId === undefined ? {} : { sourceId: result.sourceId }),
     sessionId: result.sid,
     title: result.title,
     directory: result.directory,
@@ -413,14 +424,6 @@ function optionalParsedTime(value: string | undefined): number | undefined {
 
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : undefined
-}
-
-function workerSignal(workerTimeoutMs: number | false | undefined): AbortSignal {
-  if (workerTimeoutMs === false) {
-    return new AbortController().signal
-  }
-
-  return AbortSignal.timeout(workerTimeoutMs ?? DEFAULT_WORKER_TIMEOUT_MS)
 }
 
 function isWorkerSearchResult(value: unknown): value is {
@@ -463,13 +466,15 @@ function isTranscriptWindow(value: unknown): value is TranscriptWindow {
 }
 
 function defaultExcludedSessionId(
-  options: RecallSearchOptions | RecallSessionIndexOptions,
+  options: (RecallSearchOptions | RecallSessionIndexOptions) & SourceOptions,
 ): string | undefined {
   if (options.includeCurrentSession === true) {
     return undefined
   }
 
-  return options.currentSessionId
+  return options.currentSessionId === undefined
+    ? undefined
+    : currentSessionCursor(options.currentSessionId, options)
 }
 
 function defaultBefore(

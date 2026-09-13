@@ -146,7 +146,8 @@ export const RecallPlugin = Plugin.define({
           properties: {
             cursor: {
               type: 'string',
-              description: 'Cursor from search/read nav, msg_*, or ses_*. No :offset suffixes.',
+              description:
+                'Exact cursor from search/read nav, including source-qualified cursors; raw msg_* or ses_* also accepted. No :offset suffixes.',
             },
             mode: {
               type: 'string',
@@ -215,7 +216,11 @@ export const RecallPlugin = Plugin.define({
         input: {
           ...OBJECT_SCHEMA,
           properties: {
-            cursor: { type: 'string', description: 'Session cursor. ses_* only.' },
+            cursor: {
+              type: 'string',
+              description:
+                'Exact session cursor from session_index, including source-qualified ses_* cursors.',
+            },
             path: { type: 'string', description: 'Workspace-relative destination.' },
             format: {
               type: 'string',

@@ -12,6 +12,21 @@
       "type": "object",
       "description": "OpenCode history and recall sidecar database paths",
       "properties": {
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Named read-only source databases. Both runtimes may share each source's dedicated sidecar. Overrides path/indexPath.",
+          "items": {
+            "type": "object",
+            "required": ["id", "path"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Stable source name used in qualified cursors." },
+              "path": { "type": "string", "minLength": 1 },
+              "indexPath": { "type": "string", "minLength": 1, "description": "Dedicated sidecar; defaults to a hash of the canonical source path." }
+            },
+            "additionalProperties": false
+          }
+        },
         "path": {
           "type": "string",
           "default": "~/.local/share/opencode/opencode.db",
@@ -19,8 +34,11 @@
         },
         "indexPath": {
           "type": "string",
-          "default": "~/.local/share/opencode/opencode-recall-index.db",
-          "description": "Recall sidecar embedding index. Safe to delete and rebuild."
+          "description": "Recall sidecar embedding index. Defaults to opencode-recall-<source-path-hash>.db in the OpenCode data directory. Safe to delete and rebuild."
+        },
+        "legacyPath": {
+          "type": "string",
+          "description": "Deprecated: use sources. Resolved as a separate source named legacy with its own index."
         }
       },
       "additionalProperties": false

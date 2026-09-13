@@ -2,9 +2,12 @@ import { Buffer } from 'node:buffer'
 
 const MESSAGE_ID_PATTERN = /^msg_[A-Za-z0-9]+$/
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/
+const QUALIFIED_CURSOR_PATTERN = /^([A-Za-z0-9_-]+)::(.+)$/
+export const SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]+$/
 
 export interface HistoryCursor {
   readonly version: 1
+  readonly sourceId?: string
   readonly messageId?: string
   readonly sessionId?: string
   readonly partId?: string
@@ -12,14 +15,20 @@ export interface HistoryCursor {
 }
 
 export function encodeCursor(cursor: HistoryCursor): string {
-  if (cursor.messageId === undefined) {
-    return cursor.sessionId ?? ''
-  }
+  return qualifyCursor(cursor.messageId ?? cursor.sessionId ?? '', cursor.sourceId)
+}
 
-  return cursor.messageId
+export function qualifyCursor(value: string, sourceId: string | undefined): string {
+  return sourceId === undefined ? value : `${sourceId}::${value}`
 }
 
 export function decodeCursor(value: string): HistoryCursor {
+  const qualified = QUALIFIED_CURSOR_PATTERN.exec(value)
+  if (qualified !== null) {
+    const cursor = decodeCursor(qualified[2] ?? '')
+    if (cursor.sourceId !== undefined) throw new Error('Invalid nested history source cursor')
+    return { ...cursor, sourceId: qualified[1] ?? '' }
+  }
   if (MESSAGE_ID_PATTERN.test(value)) {
     return { version: 1, messageId: value }
   }
@@ -55,6 +64,8 @@ function isHistoryCursor(value: unknown): value is HistoryCursor {
   const candidate = value as Partial<HistoryCursor>
   return (
     candidate.version === 1 &&
+    (candidate.sourceId === undefined ||
+      (typeof candidate.sourceId === 'string' && SOURCE_ID_PATTERN.test(candidate.sourceId))) &&
     (candidate.messageId === undefined || typeof candidate.messageId === 'string') &&
     (typeof candidate.messageId === 'string' || typeof candidate.sessionId === 'string') &&
     (candidate.sessionId === undefined || typeof candidate.sessionId === 'string') &&

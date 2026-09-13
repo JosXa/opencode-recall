@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -220,8 +221,9 @@ describe('config file loading', () => {
       expect(loadConfig().database.path).toBe(`${dataHome}/opencode/opencode-v2.db`)
       process.env['OPENCODE_DB'] = '/private/native.db'
       expect(loadConfig().database.path).toBe('/private/native.db')
-      writeFileSync(`${configDir}/recall.jsonc`, JSON.stringify({ database: { path: '/historical/v1.db' } }))
+      writeFileSync(`${configDir}/recall.jsonc`, JSON.stringify({ database: { path: '/historical/v1.db', legacyPath: '~/history/legacy.db' } }))
       expect(loadConfig().database.path).toBe('/historical/v1.db')
+      expect(loadConfig().database.legacyPath).toBe(`${homedir()}/history/legacy.db`)
       process.env['OPENCODE_DB_PATH'] = '/override/history.db'
       expect(loadConfig().database.path).toBe('/override/history.db')
     })
@@ -237,7 +239,7 @@ describe('config file loading', () => {
       expect(existsSync(configPath)).toBe(true)
       expect(readFileSync(configPath, 'utf-8')).toContain('"database"')
       expect(config.database.path).toContain('/opencode/opencode.db')
-      expect(config.database.indexPath).toContain('/opencode/opencode-recall-index.db')
+      expect(config.database.indexPath).toMatch(/\/opencode\/opencode-recall-[a-f0-9]{20}\.db$/)
       expect(config.embeddings).toEqual({
         ollamaUrl: 'http://127.0.0.1:11434',
         model: 'all-minilm',

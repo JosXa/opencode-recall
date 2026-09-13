@@ -26,6 +26,7 @@ const META_TEXT_PATTERNS = [
 ] as const
 
 export interface HistorySearchResult {
+  readonly sourceId?: string
   readonly cursor: string
   readonly sid: string
   readonly messageId?: string
@@ -90,12 +91,14 @@ export function formatSearchResult(row: SearchRow): HistorySearchResult {
   return {
     cursor: encodeCursor({
       version: 1,
+      ...(row.sourceId === undefined ? {} : { sourceId: row.sourceId }),
       sessionId: row.sessionId,
       messageId: row.messageId,
       partId: row.partId,
       timeCreated: row.timeCreated,
     }),
     sid: row.sessionId,
+    ...(row.sourceId === undefined ? {} : { sourceId: row.sourceId }),
     messageId: row.messageId,
     partId: row.partId,
     directory: row.directory,
@@ -112,13 +115,14 @@ function dedupeRows(rows: readonly SearchRow[]): SearchRow[] {
   const byPart = new Map<string, SearchRow>()
 
   for (const row of rows) {
-    const existing = byPart.get(row.partId)
+    const key = `${row.sourceId ?? ''}::${row.partId}`
+    const existing = byPart.get(key)
 
     if (existing !== undefined && (existing.score ?? 0) >= (row.score ?? 0)) {
       continue
     }
 
-    byPart.set(row.partId, row)
+    byPart.set(key, row)
   }
 
   return [...byPart.values()]
@@ -130,13 +134,14 @@ function dedupeCandidates(
   const byPart = new Map<string, { readonly row: SearchRow; readonly score: number }>()
 
   for (const candidate of candidates) {
-    const existing = byPart.get(candidate.row.partId)
+    const key = `${candidate.row.sourceId ?? ''}::${candidate.row.partId}`
+    const existing = byPart.get(key)
 
     if (existing !== undefined && existing.score >= candidate.score) {
       continue
     }
 
-    byPart.set(candidate.row.partId, candidate)
+    byPart.set(key, candidate)
   }
 
   return [...byPart.values()]
@@ -150,14 +155,15 @@ function diversifyBySession(
   const perSession = new Map<string, number>()
 
   for (const candidate of candidates) {
-    const count = perSession.get(candidate.row.sessionId) ?? 0
+    const key = `${candidate.row.sourceId ?? ''}::${candidate.row.sessionId}`
+    const count = perSession.get(key) ?? 0
 
     if (count >= MAX_RESULTS_PER_SESSION) {
       continue
     }
 
     selected.push(candidate)
-    perSession.set(candidate.row.sessionId, count + 1)
+    perSession.set(key, count + 1)
 
     if (selected.length >= limit) {
       return selected

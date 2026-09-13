@@ -43,6 +43,7 @@ export type TranscriptPart =
   | TranscriptToolPart
 
 export interface TranscriptMessage {
+  readonly sourceId?: string
   readonly index: number
   readonly id: string
   readonly role: TranscriptRole
@@ -51,6 +52,7 @@ export interface TranscriptMessage {
 }
 
 export interface TranscriptWindow {
+  readonly sourceId?: string
   readonly sessionId: string
   readonly title?: string
   readonly directory: string

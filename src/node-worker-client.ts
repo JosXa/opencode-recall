@@ -8,6 +8,7 @@ import type { HistoryWorkerRequest, HistoryWorkerResponse } from './worker-proto
 
 const MAX_WORKER_OUTPUT_BYTES = 10 * 1024 * 1024
 const ABORT_KILL_GRACE_MS = 500
+const DEFAULT_WORKER_TIMEOUT_MS = 120_000
 
 interface WorkerCommand {
   readonly command: string
@@ -18,13 +19,18 @@ export function executeNodeWorker(
   workerDir: string,
   request: HistoryWorkerRequest,
   signal: AbortSignal,
+  timeoutMs: number | false = DEFAULT_WORKER_TIMEOUT_MS,
 ): Promise<string> {
+  if (signal.aborted) return Promise.reject(new Error('opencode-recall Node worker was aborted'))
   const worker = resolveWorkerCommand(workerDir)
 
   return new Promise((resolve, reject) => {
     const child = spawn(worker.command, worker.args, {
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // A version-manager launcher (such as Volta) can spawn the actual Node process.
+      // Keep both in one worker-owned group so cancellation also stops its database work.
+      detached: process.platform !== 'win32',
     })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
@@ -32,6 +38,7 @@ export function executeNodeWorker(
     let stderrBytes = 0
     let settled = false
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined
+    let deadline: ReturnType<typeof setTimeout> | undefined
 
     const settle = (result: { readonly value: string } | { readonly error: Error }) => {
       if (settled) {
@@ -40,6 +47,7 @@ export function executeNodeWorker(
 
       settled = true
       signal.removeEventListener('abort', abort)
+      if (deadline !== undefined) clearTimeout(deadline)
 
       if ('error' in result) {
         reject(result.error)
@@ -49,28 +57,41 @@ export function executeNodeWorker(
       resolve(result.value)
     }
 
-    const abort = () => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGTERM')
-        // Cancellation must not leave a worker alive if it handles or ignores SIGTERM.
-        forceKillTimer = setTimeout(() => {
-          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-        }, ABORT_KILL_GRACE_MS)
-        forceKillTimer.unref()
+    const kill = (processSignal: NodeJS.Signals) => {
+      if (process.platform === 'win32') {
+        child.kill(processSignal)
+        return
       }
-      settle({ error: new Error('opencode-recall Node worker was aborted') })
+      if (child.pid === undefined) return
+      try {
+        process.kill(-child.pid, processSignal)
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error
+      }
     }
 
-    signal.addEventListener('abort', abort, { once: true })
-    if (signal.aborted) {
-      abort()
-      return
+    const terminate = (error: Error) => {
+      kill('SIGTERM')
+      // The launcher may exit before a child that ignores SIGTERM; kill the whole group.
+      forceKillTimer = setTimeout(() => kill('SIGKILL'), ABORT_KILL_GRACE_MS)
+      forceKillTimer.unref()
+      settle({ error })
     }
+    const abort = () => terminate(new Error('opencode-recall Node worker was aborted'))
+
+    if (timeoutMs !== false) {
+      deadline = setTimeout(
+        () => terminate(new Error(`opencode-recall Node worker timed out after ${timeoutMs} ms`)),
+        timeoutMs,
+      )
+      deadline.unref()
+    }
+    signal.addEventListener('abort', abort, { once: true })
     child.on('error', (error) => settle({ error }))
     child.stdout.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.length
       if (stdoutBytes > MAX_WORKER_OUTPUT_BYTES) {
-        child.kill()
+        kill('SIGKILL')
         settle({ error: new Error('opencode-recall Node worker exceeded stdout limit') })
         return
       }

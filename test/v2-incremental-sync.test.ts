@@ -14,7 +14,7 @@ test('V2 events reconcile projected sessions without reading unchanged transcrip
     create table session_message(id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text);
     create index session_message_session_seq_idx on session_message(session_id, seq);
     create table event(id text primary key, aggregate_id text, seq integer, type text, data text);
-    insert into session_v2 values ('ses_steady', 'Steady', '/steady', 1), ('ses_changed', 'Original', '/changed', 1);
+    insert into session_v2 values ('ses_steady', 'Steady', '/steady', 1), ('ses_changed', NULL, '/changed', 1);
     insert into session_message values
       ('msg_steady', 'ses_steady', 'user', 1, 1, 1, '{"text":"steady text"}'),
       ('msg_first', 'ses_changed', 'user', 1, 100, 1, '{"text":"original text"}'),
@@ -33,6 +33,7 @@ test('V2 events reconcile projected sessions without reading unchanged transcrip
   }
   try {
     expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(5)
+    expect(sidecar.lexicalSearch('original', { limit: 5 })[0]?.sessionTitle).toBe('')
     expect(history.readTextPartsForSessions(['ses_changed']).find(row => row.source === 'session-title')?.messageId).toBe('msg_first')
     const cursor = history.readLatestEventCursor()
     // Malformed untouched JSON makes accidental whole-history projection fail.
