@@ -363,8 +363,13 @@ export class HistoryDatabase {
   }
 
   public readIndexChanges(cursor: HistoryEventCursor | undefined): HistoryIndexChanges {
-    // The V2 event log cannot describe changes in a separately running V1 database.
-    if (this.#legacyPath !== undefined || !this.#hasTable('event')) {
+    // V2.0.2 creates an event table but leaves it empty; use timestamps until it records changes.
+    // The V2 event log also cannot describe changes in a separately running V1 database.
+    if (
+      this.#legacyPath !== undefined ||
+      !this.#hasTable('event') ||
+      this.#readLatestEventCursor().rowId === 0
+    ) {
       return { mode: 'legacy', sessionIds: [], rows: [] }
     }
     return this.#db.transaction(() => {

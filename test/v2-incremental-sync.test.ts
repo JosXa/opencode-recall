@@ -6,6 +6,36 @@ import { HistoryDatabase } from '../src/db.js'
 import { RecallSidecarIndex } from '../src/sidecar.js'
 import { Database } from '../src/sqlite.js'
 
+test('V2 history keeps indexing new messages when its event table is empty', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'recall-v2-empty-events-'))
+  const source = new Database(join(root, 'history.db'))
+  source.exec(`
+    create table session_v2(id text primary key, title text, directory text, time_updated integer);
+    create table session_message(id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text);
+    create table event(id text primary key, aggregate_id text, seq integer, type text, data text);
+    insert into session_v2 values ('ses_test', 'Migration', '/test', 100000);
+    insert into session_message values ('msg_first', 'ses_test', 'user', 1, 100000, 100000, '{"text":"original"}');
+  `)
+  const history = new HistoryDatabase(join(root, 'history.db'))
+  const sidecar = new RecallSidecarIndex(join(root, 'index.db'))
+  const provider = { model: 'fixture', embed: async (texts: readonly string[]) => texts.map(() => new Float32Array([1, 0])) }
+  try {
+    await sidecar.syncHistory(history, provider)
+    source.exec(`
+      insert into session_message values ('msg_new', 'ses_test', 'assistant', 2, 200000, 200000, '{"content":[{"type":"text","text":"fresh migration marker"}]}');
+      update session_v2 set time_updated = 200000 where id = 'ses_test';
+    `)
+    sidecar.syncLexicalHistory(history)
+    expect(sidecar.lexicalSearch('fresh migration marker', { limit: 5 }).some(row => row.messageId === 'msg_new')).toBe(true)
+    expect((await sidecar.syncHistory(history, provider)).indexedRows).toBeGreaterThan(0)
+  } finally {
+    sidecar.close()
+    history.close()
+    source.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('V2 events reconcile projected sessions without reading unchanged transcript JSON', async () => {
   const root = mkdtempSync(join(tmpdir(), 'recall-v2-events-'))
   const source = new Database(join(root, 'history.db'))
