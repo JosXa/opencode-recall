@@ -587,6 +587,8 @@ export class HistoryDatabase {
   }
 
   public readWindow(anchorMessageId: string, options: ReadOptions): WindowRows {
+    // Rank only the anchor session; ranking all history makes each preview scale
+    // with every conversation in the database instead of the selected one.
     const anchor = this.#db
       .query<
         MessageRow & {
@@ -594,7 +596,7 @@ export class HistoryDatabase {
           readonly title: string
           readonly directory: string
         },
-        [string]
+        [string, string]
       >(`
         with ordered as (
           select
@@ -607,10 +609,11 @@ export class HistoryDatabase {
             row_number() over (partition by m.session_id order by m.history_order, m.id) as messageIndex
           from message m
           join session s on s.id = m.session_id
+          where m.session_id = (select session_id from message where id = ?)
         )
         select * from ordered where messageId = ?
       `)
-      .get(anchorMessageId)
+      .get(anchorMessageId, anchorMessageId)
 
     if (anchor === null) {
       throw new Error(`History cursor points to missing message: ${anchorMessageId}`)
