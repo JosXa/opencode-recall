@@ -49,11 +49,15 @@ export const RecallPlugin = Plugin.define({
   id: 'josxa.opencode-recall',
   async setup(context) {
     const recallAgentPrompt = await loadRecallAgentPrompt()
-    const availableModels = new Set(
-      (await context.model.list()).data
-        .filter((model) => model.enabled)
-        .map((model) => `${model.providerID}/${model.modelID}`),
-    )
+    const availableModels = new Set<string>()
+    const refreshModels = async () => {
+      const models = (await context.model.list()).data
+      availableModels.clear()
+      for (const model of models) {
+        if (model.enabled) availableModels.add(`${model.providerID}/${model.id}`)
+      }
+    }
+    await refreshModels()
     const workers = new SessionWorkerAbortRegistry()
     const eventSubscription = new AbortController()
     let interruptionError: unknown
@@ -97,7 +101,7 @@ export const RecallPlugin = Plugin.define({
       )
       registerCommand(context, commands, SESSION_SAVE_COMMAND, 'Materialize session to file')
     })
-    await context.agent.transform((agents) => {
+    const configureRecall: Parameters<Plugin.Context['agent']['transform']>[0] = (agents) => {
       agents.update(RECALL_AGENT_NAME, (agent) => {
         // Keep an executable user-selected model; stale machine config must not disable Recall.
         if (
@@ -115,6 +119,25 @@ export const RecallPlugin = Plugin.define({
           ...toolPermissions('allow'),
         ]
       })
+    }
+    let agentRegistration = await context.agent.transform(configureRecall)
+    let admissionRefresh = Promise.resolve()
+    await context.session.hook('prompt', async () => {
+      // Native configuration transforms can register after plugin setup. Prompt
+      // admission runs after startup, before model selection, so reapply here.
+      admissionRefresh = admissionRefresh
+        .catch(() => {
+          // The previous prompt already received its error; allow the next retry.
+        })
+        .then(async () => {
+          await refreshModels()
+          const { data: agent } = await context.agent.get({ agentID: RECALL_AGENT_NAME })
+          if (!agent.model || availableModels.has(`${agent.model.providerID}/${agent.model.id}`))
+            return
+          await agentRegistration.dispose()
+          agentRegistration = await context.agent.transform(configureRecall)
+        })
+      await admissionRefresh
     })
 
     await context.tool.transform((tools) => {
@@ -263,6 +286,7 @@ export const RecallPlugin = Plugin.define({
     return async () => {
       eventSubscription.abort()
       workers.dispose()
+      await admissionRefresh
       await interruptionForwarder
       if (interruptionError !== undefined) throw interruptionError
     }

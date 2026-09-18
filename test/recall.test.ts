@@ -143,6 +143,28 @@ describe('plugin recall subagent', () => {
     })
   })
 
+  test('rechecks late native agent configuration and refreshed model availability before admission', async () => {
+    const availableModels: TestModel[] = [
+      { providerID: 'example', id: 'recall-mini', modelID: 'deployment-alias', enabled: true },
+    ]
+    const harness = pluginHarness({ availableModels })
+    await RecallPlugin.setup(harness.context)
+    const recall = harness.agents.get(RECALL_AGENT_NAME)
+    expect(recall?.model?.id).toBe('recall-mini')
+
+    // Native config runs after setup; provider discovery can also change later.
+    if (!recall) throw new Error('Recall agent missing')
+    recall.model = { providerID: 'example', id: 'removed-model' }
+    await harness.beforePrompt?.()
+    expect(recall.model).toBeUndefined()
+    expect(recall.request).toEqual({ body: { reasoningEffort: 'low', temperature: 0.2 } })
+
+    availableModels.push({ providerID: 'example', id: 'new-model', modelID: 'new-deployment', enabled: true })
+    recall.model = { providerID: 'example', id: 'new-model' }
+    await harness.beforePrompt?.()
+    expect(recall.model?.id).toBe('new-model')
+  })
+
   test('keeps the recall subagent sandboxed without hiding history tools from other agents', async () => {
     const harness = pluginHarness({ preseedCommands: false })
     await RecallPlugin.setup(harness.context)
@@ -1512,6 +1534,7 @@ interface TestPermission {
 
 interface TestModel {
   providerID: string
+  id: string
   modelID: string
   enabled: boolean
 }
@@ -1562,7 +1585,7 @@ function pluginHarness(
   const options = typeof input === 'string' ? { directory: input } : input
   const directory = options.directory ?? '/projects/opencode-recall'
   const availableModels = options.availableModels ?? [
-    { providerID: 'example', modelID: 'recall-mini', enabled: true },
+    { providerID: 'example', id: 'recall-mini', modelID: 'recall-mini', enabled: true },
   ]
   const agents = new Map<string, TestAgent>([
     [
@@ -1590,6 +1613,7 @@ function pluginHarness(
   let beforeToolExecute:
     | ((call: { agent: string; tool: string }) => Promise<void> | void)
     | undefined
+  let beforePrompt: (() => Promise<void>) | undefined
   const context = {
     app: { name: 'opencode', version: 'test', channel: 'test' },
     event: {
@@ -1611,6 +1635,9 @@ function pluginHarness(
       },
     },
     agent: {
+      async get({ agentID }: { agentID: string }) {
+        return { data: agents.get(agentID) }
+      },
       async transform(callback: (draft: unknown) => void) {
         callback({
           list: () => [...agents.values()],
@@ -1643,6 +1670,10 @@ function pluginHarness(
       },
     },
     session: {
+      async hook(name: string, callback: () => Promise<void>) {
+        if (name === 'prompt') beforePrompt = callback
+        return { dispose() {} }
+      },
       async prompt(input: unknown) {
         prompts.push(input)
       },
@@ -1657,6 +1688,9 @@ function pluginHarness(
     commands,
     prompts,
     tools,
+    get beforePrompt() {
+      return beforePrompt
+    },
     get beforeToolExecute() {
       return beforeToolExecute
     },
