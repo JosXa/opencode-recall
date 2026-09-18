@@ -184,7 +184,7 @@ Run `pnpm run eval:embeddings` to compare installed embedding models against the
 
 ### Choosing the `recall` subagent model
 
-Recall creates the native OpenCode V2 `recall` agent and preserves settings in `agents.recall`. The plugin supplies its description, subagent mode, system prompt, and history permissions. Other agent settings, including `model` and `request`, stay under your control.
+Recall creates the native OpenCode V2 `recall` agent and preserves settings in `agents.recall`. The plugin supplies its description, subagent mode, system prompt, and history permissions. Other agent settings, including `model` and `request`, stay under your control. If the configured model is unavailable, Recall removes that stale selection and lets OpenCode resolve its normal default model.
 
 For example, configure a small model for Recall independently of the parent agent:
 
@@ -205,7 +205,7 @@ For example, configure a small model for Recall independently of the parent agen
 }
 ```
 
-Recall keeps this model when a parent agent uses a different one, matching native OpenCode subagent behavior. Each machine can select a provider and model available in its own OpenCode configuration. When `agents.recall.model` is unset, Recall uses OpenCode's normal default model resolution.
+Recall keeps an available configured model when a parent agent uses a different one, matching native OpenCode subagent behavior. Each machine can select a provider and model available in its own OpenCode configuration. When `agents.recall.model` is unset or unavailable, Recall uses OpenCode's normal default model resolution.
 
 ## Tool reference
 

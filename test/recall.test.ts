@@ -133,6 +133,16 @@ describe('plugin recall subagent', () => {
     expect([...harness.tools.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
   })
 
+  test('falls back to OpenCode model resolution when the configured recall model is unavailable', async () => {
+    const harness = pluginHarness({ availableModels: [] })
+    await RecallPlugin.setup(harness.context)
+
+    expect(harness.agents.get(RECALL_AGENT_NAME)?.model).toBeUndefined()
+    expect(harness.agents.get(RECALL_AGENT_NAME)?.request).toEqual({
+      body: { reasoningEffort: 'low', temperature: 0.2 },
+    })
+  })
+
   test('keeps the recall subagent sandboxed without hiding history tools from other agents', async () => {
     const harness = pluginHarness({ preseedCommands: false })
     await RecallPlugin.setup(harness.context)
@@ -1500,6 +1510,12 @@ interface TestPermission {
   effect: 'allow' | 'deny'
 }
 
+interface TestModel {
+  providerID: string
+  modelID: string
+  enabled: boolean
+}
+
 interface TestAgent {
   id: string
   model?: { providerID: string; id: string; variant?: string }
@@ -1536,10 +1552,18 @@ interface TestCommand {
 function pluginHarness(
   input:
     | string
-    | { directory?: string; preseedCommands?: boolean; preseedRecallAgent?: boolean } = {},
+    | {
+        directory?: string
+        preseedCommands?: boolean
+        preseedRecallAgent?: boolean
+        availableModels?: TestModel[]
+      } = {},
 ) {
   const options = typeof input === 'string' ? { directory: input } : input
   const directory = options.directory ?? '/projects/opencode-recall'
+  const availableModels = options.availableModels ?? [
+    { providerID: 'example', modelID: 'recall-mini', enabled: true },
+  ]
   const agents = new Map<string, TestAgent>([
     [
       'build',
@@ -1598,6 +1622,11 @@ function pluginHarness(
           },
         })
         return { dispose() {} }
+      },
+    },
+    model: {
+      async list() {
+        return { data: availableModels }
       },
     },
     tool: {

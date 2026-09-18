@@ -49,6 +49,11 @@ export const RecallPlugin = Plugin.define({
   id: 'josxa.opencode-recall',
   async setup(context) {
     const recallAgentPrompt = await loadRecallAgentPrompt()
+    const availableModels = new Set(
+      (await context.model.list()).data
+        .filter((model) => model.enabled)
+        .map((model) => `${model.providerID}/${model.modelID}`),
+    )
     const workers = new SessionWorkerAbortRegistry()
     const eventSubscription = new AbortController()
     let interruptionError: unknown
@@ -94,7 +99,13 @@ export const RecallPlugin = Plugin.define({
     })
     await context.agent.transform((agents) => {
       agents.update(RECALL_AGENT_NAME, (agent) => {
-        // Keep user-selected model/request settings while owning Recall's safety boundary.
+        // Keep an executable user-selected model; stale machine config must not disable Recall.
+        if (
+          agent.model !== undefined &&
+          !availableModels.has(`${agent.model.providerID}/${agent.model.id}`)
+        ) {
+          delete agent.model
+        }
         agent.description = RECALL_AGENT_DESCRIPTION
         agent.mode = 'subagent'
         agent.system = recallAgentPrompt
