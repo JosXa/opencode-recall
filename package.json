@@ -1,6 +1,6 @@
 {
   "name": "@josxa/opencode-recall",
-  "version": "1.1.0-opencode-v2",
+  "version": "1.1.2-opencode-v2",
   "description": "OpenCode plugin that adds semantic + lexical recall over your local session history, with cursor-paginated ChatML transcript reads.",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
@@ -66,7 +66,8 @@
     "schema"
   ],
   "dependencies": {
-    "@opencode-ai/plugin": "0.0.0-beta-19157"
+    "@opencode-ai/plugin": "0.0.0-beta-19157",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,8 +17,12 @@ test('packed worker runs from an unrelated cwd without consumer tsx', () => {
 
   try {
     run('pnpm', ['pack', '--pack-destination', packDir], PROJECT_ROOT)
-    const archive = join(packDir, 'josxa-opencode-recall-1.1.0-opencode-v2.tgz')
+    const { version } = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8'))
+    const archive = join(packDir, `josxa-opencode-recall-${version}.tgz`)
     run('tar', ['-xzf', archive, '-C', root], PROJECT_ROOT)
+    // Install production dependencies as a package consumer would, including the
+    // platform-specific SQLite extension. No development loader is installed.
+    run('pnpm', ['install', '--prod', '--ignore-scripts', '--config.verify-deps-before-run=false'], join(root, 'package'))
 
     const workerClientUrl = pathToFileURL(
       join(root, 'package/dist/src/node-worker-client.js'),
