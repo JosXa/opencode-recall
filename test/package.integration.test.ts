@@ -33,6 +33,11 @@ describe('packed package', () => {
         execFileSync('tar', ['-xzf', archivePath, '-C', unpackRoot])
 
         const packedPackageDir = join(unpackRoot, 'package')
+        // Install production/native dependencies as a consumer would, without tsx.
+        execFileSync('pnpm', ['install', '--prod', '--ignore-scripts', '--config.verify-deps-before-run=false'], {
+          cwd: packedPackageDir,
+          stdio: 'pipe',
+        })
         const manifest = JSON.parse(readFileSync(join(packedPackageDir, 'package.json'), 'utf-8')) as {
           readonly dependencies?: Record<string, string>
         }

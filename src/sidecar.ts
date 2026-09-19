@@ -23,15 +23,6 @@ const LOCK_TTL_MS = 60_000
 const MAX_KEYWORD_BOOST = 0.2
 const WHITESPACE_REGEX = /\s+/u
 
-interface ChunkRow extends SearchRow {
-  readonly chunkId: string
-  readonly sourceUpdated: number
-  readonly contentHash: string
-  readonly model: string
-  readonly dims: number
-  readonly embedding: ArrayBuffer | Uint8Array
-}
-
 export interface SyncResult {
   readonly elapsedMs: number
   readonly indexedRows: number
@@ -55,7 +46,7 @@ export class RecallSidecarIndex {
 
   public constructor(path = defaultSidecarPath()) {
     ensureParentDirectory(path)
-    this.#db = new Database(path)
+    this.#db = new Database(path, { vectors: true })
     this.#db.exec('pragma journal_mode = wal')
     this.#db.exec('pragma busy_timeout = 2500')
     this.#db.exec(`
@@ -372,46 +363,40 @@ export class RecallSidecarIndex {
       return []
     }
 
-    const rows = this.#db
-      .query<
-        ChunkRow,
-        [
-          string,
-          number | null,
-          number | null,
-          number | null,
-          number | null,
-          string | null,
-          string | null,
-          string | null,
-          string | null,
-        ]
-      >(`
-        select
-          chunk_id as chunkId,
-          session_id as sessionId,
-          session_title as sessionTitle,
-          directory,
-          message_id as messageId,
-          part_id as partId,
-          role,
-          time_created as timeCreated,
-          source_updated as sourceUpdated,
-          text,
-          source,
-          content_hash as contentHash,
-          model,
-          dims,
-          embedding
-        from chunk
-        where model = ?
-          and (? is null or time_created >= ?)
-          and (? is null or time_created <= ?)
-          and (? is null or directory = ?)
-          and (? is null or session_id != ?)
+    const terms = tokenizeQuery(query)
+    // Preserve Unicode substring boosts while native SQLite scores the vectors.
+    this.#db.scalar('recall_keyword_boost', (text) =>
+      terms.length === 0 ? 0 : (matchedTermCount(text, terms) / terms.length) * MAX_KEYWORD_BOOST,
+    )
+    // Materialize only the best IDs before fetching their text and metadata.
+    // Embeddings stay in SQLite, avoiding an entire corpus of JS objects and copies.
+    return this.#db
+      .query<SearchRow>(`
+        with candidates as materialized (
+          select rowid,
+            coalesce(1 - vec_distance_cosine(embedding, ?), 0)
+              + recall_keyword_boost(text) as score,
+            time_created
+          from chunk
+          where model = ? and dims = ?
+            and (? is null or time_created >= ?)
+            and (? is null or time_created <= ?)
+            and (? is null or directory = ?)
+            and (? is null or session_id != ?)
+          order by score desc, time_created desc, rowid
+          limit ?
+        )
+        select c.session_id as sessionId, c.session_title as sessionTitle,
+          c.directory, c.message_id as messageId, c.part_id as partId,
+          c.role, c.time_created as timeCreated, c.text,
+          coalesce(c.source, 'text') as source, candidates.score
+        from candidates join chunk c on c.rowid = candidates.rowid
+        order by candidates.score desc, candidates.time_created desc, candidates.rowid
       `)
       .all(
+        float32ToBlob(queryEmbedding),
         model,
+        queryEmbedding.length,
         options.after ?? null,
         options.after ?? null,
         options.before ?? null,
@@ -420,30 +405,8 @@ export class RecallSidecarIndex {
         options.directory ?? null,
         options.excludeSessionId ?? null,
         options.excludeSessionId ?? null,
+        Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT),
       )
-    const terms = tokenizeQuery(query)
-
-    return rows
-      .map((row) => ({
-        row,
-        score: combinedScore(queryEmbedding, row, terms),
-      }))
-      .sort(
-        (left, right) => right.score - left.score || right.row.timeCreated - left.row.timeCreated,
-      )
-      .slice(0, Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT))
-      .map(({ row, score }) => ({
-        sessionId: row.sessionId,
-        sessionTitle: row.sessionTitle,
-        directory: row.directory,
-        messageId: row.messageId,
-        partId: row.partId,
-        role: row.role,
-        score,
-        timeCreated: row.timeCreated,
-        text: row.text,
-        source: row.source ?? 'text',
-      }))
   }
 
   public hasIndexedChunks(): boolean {
@@ -928,42 +891,6 @@ function hashId(...parts: readonly string[]): string {
 
 function float32ToBlob(value: Float32Array): Uint8Array {
   return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength))
-}
-
-function blobToFloat32(value: ArrayBuffer | Uint8Array): Float32Array {
-  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value)
-  return new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
-}
-
-function cosineSimilarity(left: Float32Array, right: Float32Array): number {
-  const dims = Math.min(left.length, right.length)
-  let dot = 0
-  let leftMagnitude = 0
-  let rightMagnitude = 0
-
-  for (let index = 0; index < dims; index += 1) {
-    const leftValue = left[index] ?? 0
-    const rightValue = right[index] ?? 0
-    dot += leftValue * rightValue
-    leftMagnitude += leftValue * leftValue
-    rightMagnitude += rightValue * rightValue
-  }
-
-  if (leftMagnitude === 0 || rightMagnitude === 0) {
-    return 0
-  }
-
-  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude))
-}
-
-function combinedScore(
-  queryEmbedding: Float32Array,
-  row: ChunkRow,
-  terms: readonly string[],
-): number {
-  const semanticScore = cosineSimilarity(queryEmbedding, blobToFloat32(row.embedding))
-  const keywordBoost = terms.length === 0 ? 0 : matchedTermCount(row.text, terms) / terms.length
-  return semanticScore + Math.min(MAX_KEYWORD_BOOST, keywordBoost * MAX_KEYWORD_BOOST)
 }
 
 function tokenizeQuery(query: string): string[] {

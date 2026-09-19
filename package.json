@@ -1,6 +1,6 @@
 {
   "name": "@josxa/opencode-recall",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "OpenCode plugin that adds semantic + lexical recall over your local session history, with cursor-paginated ChatML transcript reads.",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
@@ -76,5 +76,8 @@
     "tsx": "latest",
     "typescript": "^7.0.2",
     "vitest": "latest"
+  },
+  "dependencies": {
+    "sqlite-vec": "0.1.9"
   }
 }

@@ -37,6 +37,18 @@ Every OpenCode session is already saved locally. Recall makes them searchable, s
 
 ## Why Recall?
 
+Semantic search scores existing embeddings with the native `sqlite-vec` extension
+inside SQLite. Only the best candidate rows cross into JavaScript. The scan keeps
+cosine similarity, Unicode keyword boosts, and date/directory/session filters;
+existing sidecars need no rebuild. Vectors with a different model or dimension
+are excluded. This shared engine serves the SDK and OpenCode history tools.
+
+To compare speed, peak process memory, and top-result overlap against a built
+baseline checkout, run `node scripts/benchmark-search.mjs BASELINE_ROOT SIDECAR`.
+The benchmark starts fresh processes, alternates execution order, reuses each
+query embedding, and does not sync history. It measures vector search separately
+from embedding generation and lexical search.
+
 You've already solved this problem. You debugged this exact error six weeks ago in another project. You worked out the deploy steps in a session you can't find anymore. The knowledge is *there*, sitting in `opencode.db`, but the agent can't see it.
 
 Recall fixes that:
