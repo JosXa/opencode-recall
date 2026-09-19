@@ -54,6 +54,40 @@ function fixture() {
 }
 
 describe('federated history', () => {
+  test('excludes children before candidate limits across both schemas and SDK workers', async () => {
+    const f = fixture()
+    for (const [db, table] of [[f.legacy, 'session'], [f.native, 'session_v2']] as const) {
+      db.exec(`alter table ${table} add column parent_id text`)
+      // More children than either retrieval lane's candidate floor. Roots must
+      // still be found, even when children are newer and match the same query.
+      for (let i = 0; i < 220; i++) {
+        db.query(`insert into ${table} values (?, 'cobalt', '/children', 1000, 'ses_shared')`).run(`ses_child${i}`)
+        if (table === 'session') {
+          db.query('insert into message values (?, ?, ?, 1000, 1000)').run(`msg_child${i}`, `ses_child${i}`, '{"role":"user"}')
+          db.query('insert into part values (?, ?, ?, ?, 1000)').run(`part_child${i}`, `msg_child${i}`, `ses_child${i}`, '{"type":"text","text":"cobalt"}')
+        } else {
+          db.query('insert into session_message values (?, ?, ?, 1, 1000, 1000, ?)').run(`msg_child${i}`, `ses_child${i}`, 'user', '{"text":"cobalt"}')
+        }
+      }
+    }
+    const recall = new DirectOpenCodeRecall({ sources: f.sources, embeddingProvider: f.provider })
+    const worker = new OpenCodeRecall({ sources: f.sources })
+    try {
+      expect((await recall.search('cobalt')).hits.some(hit => hit.sessionId.startsWith('ses_child'))).toBe(true)
+      for (const lanes of [{ semantic: false }, { lexical: false }, {}]) {
+        const hits = (await recall.search('cobalt', { ...lanes, sync: false, excludeSubagents: true, limit: 1 })).hits
+        expect(hits).toHaveLength(1)
+        expect(hits[0]?.sessionId).toBe('ses_shared')
+      }
+      expect((await worker.search('cobalt', { semantic: false, sync: false, excludeSubagents: true })).hits.every(hit => hit.sessionId === 'ses_shared')).toBe(true)
+      expect((await worker.search('', { excludeSubagents: true, limit: 1 })).hits[0]?.sessionId).toBe('ses_shared')
+      expect((await worker.sessionIndex({ excludeSubagents: true })).sessions.map(row => row.cursor).sort()).toEqual(['v1::ses_shared', 'v2::ses_shared'])
+      // Parentage is read from live session metadata even without reindexing.
+      f.native.exec("update session_v2 set parent_id = 'parent' where id = 'ses_shared'")
+      expect((await worker.search('cobalt', { semantic: false, sync: false, excludeSubagents: true })).hits.map(hit => hit.sourceId)).toEqual(['v1'])
+    } finally { recall.close(); worker.close(); f.cleanup() }
+  })
+
   test('session index bounds metric reads before parsing unrelated history', async () => {
     const f = fixture()
     const recall = new OpenCodeRecall({ sources: f.sources })

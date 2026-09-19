@@ -34,8 +34,15 @@ export function installHistorySchema(db: Database, legacyPath?: string): void {
     throw new Error(
       'Unsupported OpenCode history schema: expected V1 history tables or V2 session projections',
     )
+  const parentColumn = (schema: string, table: string) =>
+    db
+      .query<{ name: string }>(`pragma ${schema}.table_info(${table})`)
+      .all()
+      .some((column) => column.name === 'parent_id')
+      ? 'parent_id'
+      : 'null'
   const sessions = legacy
-    ? `select id, title, directory, time_updated from ${legacySchema}.session`
+    ? `select id, title, directory, time_updated, ${parentColumn(legacySchema, 'session')} as parent_id from ${legacySchema}.session`
     : ''
   const messages = legacy
     ? `select id, session_id, data, time_created, time_updated, time_created as history_order from ${legacySchema}.message`
@@ -64,7 +71,8 @@ export function installHistorySchema(db: Database, legacyPath?: string): void {
     create temp view session as ${oldSessions}
       -- V2 sessions can have no title before automatic title generation finishes.
       select s.id, coalesce(s.title, '') as title, s.directory,
-        max(s.time_updated, coalesce((select max(m.time_updated) from main.session_message m where m.session_id = s.id), 0)) as time_updated
+        max(s.time_updated, coalesce((select max(m.time_updated) from main.session_message m where m.session_id = s.id), 0)) as time_updated,
+        ${parentColumn('main', 'session_v2')} as parent_id
       from main.session_v2 s;
     create temp view message as ${oldMessages}
       select id, session_id,

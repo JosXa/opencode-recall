@@ -33,6 +33,8 @@ export interface OpenCodeRecallOptions extends SourceOptions {
 }
 
 export interface RecallSearchOptions {
+  /** Exclude child sessions by parent_id, before search candidate limits. */
+  readonly excludeSubagents?: boolean
   readonly limit?: number
   readonly after?: Date | number | string
   readonly before?: Date | number | string
@@ -64,6 +66,8 @@ export interface RecallSearchHit {
 }
 
 export interface RecallSessionIndexOptions {
+  /** Return only sessions without a parent. */
+  readonly excludeSubagents?: boolean
   readonly limit?: number
   readonly title?: string
   readonly after?: Date | number | string
@@ -261,6 +265,7 @@ function normalizeSearchOptions(options: RecallSearchOptions): SearchOptions {
 
   return {
     limit: options.limit ?? DEFAULT_SEARCH_LIMIT,
+    excludeSubagents: options.excludeSubagents === true,
     ...optionalTimestampFilter('after', options.after),
     ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
     ...(options.directory === undefined ? {} : { directory: options.directory }),
@@ -273,6 +278,7 @@ function normalizeSessionIndexOptions(options: RecallSessionIndexOptions): Sessi
 
   return {
     limit: options.limit ?? DEFAULT_SESSION_INDEX_LIMIT,
+    excludeSubagents: options.excludeSubagents === true,
     ...optionalTimestampFilter('after', options.after),
     ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
     ...(options.directory === undefined ? {} : { directory: options.directory }),

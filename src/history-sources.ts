@@ -115,7 +115,11 @@ export class HistorySources {
     queryEmbedding: Float32Array | undefined,
   ): SearchRow[] {
     const index = this.#index(entry)
-    const scoped = scopedOptions(options, entry.source.id)
+    const scoped = {
+      ...scopedOptions(options, entry.source.id),
+      // Apply the root-session boundary before either lane limits candidates.
+      ...(options.excludeSubagents ? { sessionIds: entry.history.mainSessionIds() } : {}),
+    }
     const lexical = features.lexical ? index.lexicalSearch(query, scoped) : []
     const semantic =
       features.semantic && provider !== undefined

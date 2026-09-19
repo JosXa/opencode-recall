@@ -91,6 +91,7 @@ function executeSessionIndex(
   )
   const options = {
     limit: clampNumber(request.args.n, DEFAULT_SESSION_INDEX_LIMIT, 1, MAX_SESSION_INDEX_LIMIT),
+    excludeSubagents: request.args.excludeSubagents === true,
     ...optionalStringFilter('directory', request.args.directory),
     ...optionalStringFilter('title', request.args.title),
     ...(excludeSessionId === undefined ? {} : { excludeSessionId }),
@@ -123,6 +124,7 @@ async function executeHistorySearch(
   const maxSearchLimit = request.args.maxSearchLimit ?? MAX_SEARCH_LIMIT
   const options = {
     limit: clampNumber(request.args.n, DEFAULT_SEARCH_LIMIT, 1, maxSearchLimit),
+    excludeSubagents: request.args.excludeSubagents === true,
     ...optionalStringFilter('directory', request.args.directory),
     ...(excludeSessionId === undefined ? {} : { excludeSessionId }),
     ...optionalDateFilter('after', request.args.after),

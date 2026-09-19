@@ -6,6 +6,9 @@ const WHITESPACE_REGEX = /\s+/u
 
 export interface SearchOptions {
   readonly limit: number
+  readonly excludeSubagents?: boolean
+  /** Source-local session allowlist, resolved before candidate limits. */
+  readonly sessionIds?: readonly string[]
   readonly after?: number
   readonly before?: number
   readonly directory?: string
@@ -14,6 +17,7 @@ export interface SearchOptions {
 
 export interface SessionIndexOptions {
   readonly limit: number
+  readonly excludeSubagents?: boolean
   readonly after?: number
   readonly before?: number
   readonly directory?: string
@@ -231,10 +235,18 @@ export class HistoryDatabase {
     return rows
   }
 
+  public mainSessionIds(): string[] {
+    return this.#db
+      .query<{ id: string }>('select id from session where parent_id is null')
+      .all()
+      .map((row) => row.id)
+  }
+
   public recent(options: SearchOptions): SearchRow[] {
     const conditions = [
       "json_extract(p.data, '$.type') = 'text'",
       "json_extract(p.data, '$.text') is not null",
+      ...(options.excludeSubagents ? ['s.parent_id is null'] : []),
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
       ...(options.directory === undefined ? [] : ['s.directory = ?']),
@@ -276,6 +288,7 @@ export class HistoryDatabase {
 
   #sessionIndex(options: SessionIndexOptions): SessionIndexRow[] {
     const conditions = [
+      ...(options.excludeSubagents ? ['s.parent_id is null'] : []),
       ...(options.after === undefined ? [] : ['coalesce(s.time_updated, 0) >= ?']),
       ...(options.before === undefined ? [] : ['coalesce(s.time_updated, 0) <= ?']),
       ...(options.directory === undefined ? [] : ['s.directory = ?']),

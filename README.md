@@ -188,6 +188,8 @@ With multiple sources, results include `sourceId`, and cursors are qualified, fo
 
 The SDK accepts the same list as `new OpenCodeRecall({ sources: [...] })` or `searchHistory(query, { sources: [...] })`. Hits and transcript windows retain raw IDs plus `sourceId`; use the `cursor` and navigation fields to read. The worker SDK and direct SDK with a custom embedding provider share the same federation coordinator.
 
+Pass `excludeSubagents: true` to `searchHistory`, `sessionIndex`, or their `OpenCodeRecall` methods to return only main sessions. The `history_search` and `session_index` tools expose the same option. It uses the source session's `parent_id`, across V1 and V2, and filters before lexical and semantic candidate limits so child sessions cannot crowd out main results. The default includes all sessions; titles and agent names do not determine parentage.
+
 `database.path` / `database.indexPath` and SDK `historyDbPath` / `sidecarDbPath` remain supported for one source, with unchanged cursor output. The default source follows `OPENCODE_DB`, or `opencode.db` in the OpenCode data directory. Default sidecars use `opencode-recall-<source-path-hash>.db` so V1 and V2 cannot accidentally share an index. `OPENCODE_DB_PATH` or `OPENCODE_RECALL_DB_PATH` suppresses the configured source list for isolated runs; explicit SDK source lists take precedence. The former `legacyPath` option resolves to a separate `legacy` source; new configurations should use `sources`.
 
 Run `pnpm run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).

@@ -29,6 +29,7 @@ interface LexicalSessionRow {
 }
 
 interface Filters {
+  readonly sessionIds?: readonly string[]
   readonly after?: number
   readonly before?: number
   readonly directory?: string
@@ -127,6 +128,7 @@ export class LexicalIndex {
     }
 
     const filters: Filters = {
+      ...(options.sessionIds === undefined ? {} : { sessionIds: options.sessionIds }),
       ...(options.after === undefined ? {} : { after: options.after }),
       ...(options.before === undefined ? {} : { before: options.before }),
       ...(options.directory === undefined ? {} : { directory: options.directory }),
@@ -642,6 +644,10 @@ function buildFilterClauses(
   alias: 'pm' | 'sm',
 ): string {
   const clauses: string[] = []
+  if (filters.sessionIds !== undefined) {
+    clauses.push(`${alias}.session_id in (select value from json_each(?))`)
+    params.push(JSON.stringify(filters.sessionIds))
+  }
   if (filters.after !== undefined) {
     clauses.push(`${alias}.time_created >= ?`)
     params.push(filters.after)
