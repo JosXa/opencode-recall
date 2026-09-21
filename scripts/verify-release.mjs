@@ -12,8 +12,8 @@ if (packageJson.name !== '@josxa/opencode-recall') {
   throw new Error(`Package name must remain @josxa/opencode-recall, received ${packageJson.name}`)
 }
 
-if (!/^\d+\.\d+\.\d+-opencode-v2$/.test(packageJson.version)) {
-  throw new Error(`Version must be a main-line version suffixed -opencode-v2: ${packageJson.version}`)
+if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-opencode-v2\.[1-9]\d*$/.test(packageJson.version)) {
+  throw new Error(`Version must use X.Y.Z-opencode-v2.N: ${packageJson.version}`)
 }
 
 if (expectedVersion !== packageJson.version) {

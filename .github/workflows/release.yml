@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_version:
-        description: Exact package version to publish (must end in -opencode-v2)
+        description: Exact package version to publish (X.Y.Z-opencode-v2.N)
         required: true
         type: string
 
