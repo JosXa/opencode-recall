@@ -287,6 +287,7 @@ function parseWorkerSearchResult(value: string): RecallSearchResult {
   return {
     hits: parsed.hits.map(toSearchHit),
     ...(parsed.sync === undefined ? {} : { sync: parsed.sync }),
+    ...(parsed.notice === undefined ? {} : { notice: parsed.notice }),
   }
 }
 
@@ -429,13 +430,22 @@ function optionalParsedTime(value: string | undefined): number | undefined {
 function isWorkerSearchResult(value: unknown): value is {
   readonly hits: readonly HistorySearchResult[]
   readonly sync?: SyncResult
+  readonly notice?: string
 } {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
 
-  const result = value as { readonly hits?: unknown; readonly sync?: unknown }
-  return Array.isArray(result.hits) && result.hits.every(isHistorySearchResult)
+  const result = value as {
+    readonly hits?: unknown
+    readonly sync?: unknown
+    readonly notice?: unknown
+  }
+  return (
+    Array.isArray(result.hits) &&
+    result.hits.every(isHistorySearchResult) &&
+    (result.notice === undefined || typeof result.notice === 'string')
+  )
 }
 
 function safeDecodeCursor(value: string): HistoryCursor {

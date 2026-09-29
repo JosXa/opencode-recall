@@ -19,6 +19,7 @@ import { decodeCursor } from '../src/cursor.js'
 import { HistoryDatabase, type IndexSourceRow, type SearchRow } from '../src/db.js'
 import type { EmbeddingProvider } from '../src/embedding.js'
 import { OllamaEmbeddingProvider } from '../src/embedding.js'
+import { HistorySources } from '../src/history-sources.js'
 import {
   executeNodeWorker,
   forwardSessionInterruptions,
@@ -433,6 +434,19 @@ describe('read mode parsing', () => {
 })
 
 describe('ollama embeddings', () => {
+  test('missing ollama binary rejects promptly with setup instructions instead of crashing', async () => {
+    const previousPath = process.env['PATH']
+    process.env['PATH'] = '/nonexistent/opencode-recall-ollama'
+
+    try {
+      await expect(
+        new OllamaEmbeddingProvider({ baseUrl: 'http://127.0.0.1:1' }).embed(['invoices cli']),
+      ).rejects.toThrow(/Install Ollama: https:\/\/ollama.com\/download[\s\S]*spawn ollama ENOENT/)
+    } finally {
+      process.env['PATH'] = previousPath
+    }
+  }, 3000)
+
   test('normalizes long inputs before calling Ollama', async () => {
     const originalFetch = globalThis.fetch
     const requests: string[] = []
@@ -915,6 +929,56 @@ describe('current session exclusion', () => {
 })
 
 describe('library sdk', () => {
+  test('failed embedding falls back to synced lexical hits and exposes a notice', async () => {
+    const historyPath = `/tmp/opencode-recall-fallback-history-${crypto.randomUUID()}.db`
+    const sidecarPath = `/tmp/opencode-recall-fallback-sidecar-${crypto.randomUUID()}.db`
+    const db = new Database(historyPath)
+
+    try {
+      db.exec(`
+        create table session (id text primary key, title text, directory text, time_updated integer);
+        create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+        create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+      `)
+      insertTextPart(db, 'ses_fallback', 'Fallback', 'msg_fallback', 'part_fallback', 1)
+
+      const result = await searchHistory('invoices cli', {
+        historyDbPath: historyPath,
+        sidecarDbPath: sidecarPath,
+        embeddingProvider: new ThrowingEmbeddingProvider(),
+      })
+
+      expect(result.hits.map((hit) => hit.sessionId)).toContain('ses_fallback')
+      expect(result.sync?.indexedRows).toBeGreaterThan(0)
+      expect(result.notice).toBe(
+        'Semantic search unavailable; showing lexical results only. Install Ollama: https://ollama.com/download.',
+      )
+    } finally {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
+    }
+  })
+
+  test('database failures still reject instead of falling back', async () => {
+    const historyPath = `/tmp/opencode-recall-corrupt-history-${crypto.randomUUID()}.db`
+    writeFileSync(historyPath, 'not a sqlite database')
+    const history = new HistorySources({ historyDbPath: historyPath })
+    try {
+      await expect(
+        history.search(
+          'invoices cli',
+          { limit: 5 },
+          { lexical: true, semantic: true, sync: true },
+          new ThrowingEmbeddingProvider(),
+        ),
+      ).rejects.toThrow()
+    } finally {
+      history.close()
+      removeSqliteFiles(historyPath)
+    }
+  })
+
   test('package advertises only Node versions that can import node:sqlite without flags', () => {
     const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
 
