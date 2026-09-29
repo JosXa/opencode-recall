@@ -32,6 +32,11 @@ interface SearchFeatures {
   readonly syncOptions?: SyncOptions | undefined
 }
 
+const LEXICAL_FALLBACK_NOTICE =
+  'Semantic search unavailable; showing lexical results only. Install Ollama: https://ollama.com/download.'
+
+class EmbeddingUnavailableError extends Error {}
+
 /** Federation lives above the single-source index so event cursors and pruning never cross databases. */
 export class HistorySources {
   readonly #sources: readonly ResolvedSource[]
@@ -68,8 +73,40 @@ export class HistorySources {
     options: SearchOptions,
     features: SearchFeatures,
     provider?: EmbeddingProvider,
-  ): Promise<{ rows: SearchRow[]; sync?: SyncResult }> {
+  ): Promise<{ rows: SearchRow[]; sync?: SyncResult; notice?: string }> {
     if (query.trim() === '') return { rows: this.recent(options) }
+    const guardedProvider =
+      features.semantic && provider !== undefined
+        ? {
+            model: provider.model,
+            async embed(texts: readonly string[]) {
+              try {
+                return await provider.embed(texts)
+              } catch (error) {
+                throw new EmbeddingUnavailableError('Embedding provider failed', { cause: error })
+              }
+            },
+          }
+        : undefined
+    try {
+      return await this.#search(query, options, features, guardedProvider)
+    } catch (error) {
+      if (!(error instanceof EmbeddingUnavailableError)) throw error
+      const result = await this.#search(query, options, {
+        ...features,
+        lexical: true,
+        semantic: false,
+      })
+      return { ...result, notice: LEXICAL_FALLBACK_NOTICE }
+    }
+  }
+
+  async #search(
+    query: string,
+    options: SearchOptions,
+    features: SearchFeatures,
+    provider?: EmbeddingProvider,
+  ): Promise<{ rows: SearchRow[]; sync?: SyncResult }> {
     const rows: SearchRow[] = []
     const syncResults: SyncResult[] = []
     const available = this.#available()

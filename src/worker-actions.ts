@@ -143,7 +143,7 @@ async function executeHistorySearch(
       { semantic: semanticEnabled, lexical: lexicalEnabled, sync: shouldSync },
       provider,
     )
-    return formatSearchResponse(request, result.rows, result.sync)
+    return formatSearchResponse(request, result.rows, result.sync, result.notice)
   } finally {
     db.close()
   }
@@ -244,15 +244,18 @@ function formatSearchResponse(
   request: Extract<HistoryWorkerRequest, { readonly kind: 'search' }>,
   rows: readonly Parameters<typeof formatSearchResult>[0][],
   syncResult?: Parameters<typeof formatSearchResults>[1],
+  notice?: string,
 ): string {
   if (request.args.format === 'json') {
     return JSON.stringify({
       hits: rows.map(formatSearchResult),
       ...(syncResult === undefined ? {} : { sync: syncResult }),
+      ...(notice === undefined ? {} : { notice }),
     })
   }
 
-  return formatSearchResults(rows, syncResult)
+  const results = formatSearchResults(rows, syncResult)
+  return notice === undefined ? results : `${notice}\n${results}`
 }
 
 function formatSessionIndexResponse(

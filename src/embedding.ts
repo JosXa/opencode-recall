@@ -79,7 +79,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       return
     }
 
-    this.#startServer()
+    await this.#startServer()
     const started = await this.#waitForServer()
 
     if (started) {
@@ -101,13 +101,24 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     }
   }
 
-  #startServer(): void {
+  #startServer(): Promise<void> {
     try {
-      this.#serverProcess = spawn('ollama', ['serve'], {
+      const server = spawn('ollama', ['serve'], {
         env: { ...process.env, OLLAMA_HOST: ollamaHost(this.#baseUrl) },
         stdio: 'ignore',
       })
-      this.#serverProcess.unref()
+      this.#serverProcess = server
+      server.unref()
+      return new Promise((resolve, reject) => {
+        server.once('spawn', resolve)
+        server.on('error', (error: Error) => {
+          reject(
+            new Error(
+              `${this.#setupInstructions()}\n\nFailed to start \`ollama serve\`: ${error.message}`,
+            ),
+          )
+        })
+      })
     } catch (error) {
       throw new Error(
         `${this.#setupInstructions()}\n\nFailed to start \`ollama serve\`: ${error instanceof Error ? error.message : String(error)}`,

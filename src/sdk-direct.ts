@@ -107,6 +107,7 @@ export interface RecallReadOptions {
 export interface RecallSearchResult {
   readonly hits: readonly RecallSearchHit[]
   readonly sync?: SyncResult
+  readonly notice?: string
 }
 
 export class DirectOpenCodeRecall {
@@ -171,6 +172,7 @@ export class DirectOpenCodeRecall {
     return {
       hits: result.rows.map(toSearchHit),
       ...(result.sync === undefined ? {} : { sync: result.sync }),
+      ...(result.notice === undefined ? {} : { notice: result.notice }),
     }
   }
 
