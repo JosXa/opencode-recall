@@ -22,6 +22,10 @@ const SEMANTIC_CANDIDATE_LIMIT = 80
 const LOCK_TTL_MS = 60_000
 const MAX_KEYWORD_BOOST = 0.2
 const WHITESPACE_REGEX = /\s+/u
+const SQLITE_BUSY = 5
+const SQLITE_LOCKED = 6
+const WAL_SWITCH_TIMEOUT_MS = 5_000
+const WAL_SWITCH_RETRY_MS = 25
 
 export interface SyncResult {
   readonly elapsedMs: number
@@ -47,7 +51,7 @@ export class RecallSidecarIndex {
   public constructor(path = defaultSidecarPath()) {
     ensureParentDirectory(path)
     this.#db = new Database(path, { vectors: true })
-    this.#db.exec('pragma journal_mode = wal')
+    enableWriteAheadLog(this.#db)
     this.#db.exec('pragma busy_timeout = 2500')
     this.#db.exec(`
       create table if not exists metadata (
@@ -853,7 +857,28 @@ function isSqliteContention(error: unknown): boolean {
     return false
   }
   const code = 'code' in error ? String(error.code) : ''
-  return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED'
+  if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') return true
+  // node:sqlite reports ERR_SQLITE_ERROR and puts the SQLite result code in errcode.
+  const primaryCode =
+    'errcode' in error && typeof error.errcode === 'number' ? error.errcode & 0xff : 0
+  return primaryCode === SQLITE_BUSY || primaryCode === SQLITE_LOCKED
+}
+
+/** Switching to WAL needs an exclusive lock and skips the busy handler, so parallel workers opening a fresh sidecar retry here. */
+function enableWriteAheadLog(db: Database): void {
+  const deadline = Date.now() + WAL_SWITCH_TIMEOUT_MS
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  for (;;) {
+    try {
+      const current = db.query<{ readonly journal_mode: string }, []>('pragma journal_mode').get()
+      if (current?.journal_mode === 'wal') return
+      db.exec('pragma journal_mode = wal')
+      return
+    } catch (error) {
+      if (!isSqliteContention(error) || Date.now() >= deadline) throw error
+      Atomics.wait(pause, 0, 0, WAL_SWITCH_RETRY_MS)
+    }
+  }
 }
 
 function indexablePartIds(rows: readonly IndexSourceRow[]): string[] {
