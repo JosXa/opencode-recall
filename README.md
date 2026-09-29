@@ -200,7 +200,8 @@ Recall exposes four history tools. They are intended to be called by the `recall
 | `title`  | string   | Case-insensitive session title filter.                                                                |
 | `directory` | string   | Exact OpenCode session directory filter.                                                               |
 | `after`  | ISO date | Only sessions updated at or after this timestamp.                                                      |
-| `before` | ISO date | Only sessions updated at or before this timestamp. Defaults to *now - 30 s* to exclude the live chat.  |
+| `before` | ISO date | Only sessions updated at or before this timestamp. Defaults to *now − 30 s* unless `includeCurrentSession` is set. |
+| `includeCurrentSession` | boolean | Include the calling session. Default `false`: the current session is excluded by id, and `before` defaults to *now − 30 s*. |
 
 Returns newest-first session rows with a `ses_...` cursor for `history_read` and quick usefulness signals:
 
@@ -254,11 +255,12 @@ The destination is always overwritten and must stay inside the active workspace.
 
 | Arg      | Type     | Notes                                                                                                  |
 | -------- | -------- | ------------------------------------------------------------------------------------------------------ |
-| `q`      | string   | **Required.** Free-text query.                                                                         |
+| `q`      | string   | Free-text query. Omit or leave empty to list the most recent messages instead.                         |
 | `n`      | number   | Max hits (default `8`, max `25`).                                                                      |
 | `directory` | string   | Exact OpenCode session directory filter.                                                               |
 | `after`  | ISO date | Only messages at or after this timestamp.                                                              |
-| `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* to exclude the live conversation.  |
+| `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* unless `includeCurrentSession` is set. |
+| `includeCurrentSession` | boolean | Include the calling session. Default `false`: the current session is excluded by id, and `before` defaults to *now − 30 s*. |
 
 Returns a JSON array of compact hits:
 
