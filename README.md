@@ -4,54 +4,15 @@
 [![CI](https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml/badge.svg)](https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-> 🧠 **Searchable memory for [OpenCode](https://opencode.ai).** Ask *"what did we figure out about X last month?"* and the agent actually finds it.
+**Give your [OpenCode](https://opencode.ai) agent a memory of every conversation you've had with it.**
 
-Every OpenCode session is already saved locally. Recall makes them searchable, so the agent can pull the right slice of a past conversation back into context on demand, instead of you re-explaining yourself or dumping whole sessions into the prompt.
+You've solved this before. Six weeks ago, in another project, you tracked down this exact error. Last month you worked out the release steps in a session you can't find anymore. OpenCode kept all of it, but your agent can't look back. With Recall it can:
 
 ```text
-          you ask                             you (or the agent) follow up
-  "what did we figure out                    "show me more around that one"
-   about rate limiting?"                        "what came right before?"
-             │                                              │
-             ▼                                              ▼
-   ┌────────────────────┐                      ┌──────────────────────────┐
-   │   search history   │ ─ hits + cursors ──► │   ranked snippets        │
-   └────────────────────┘                      └────────────┬─────────────┘
-                                                            │
-                                                      pick a cursor
-                                                            │
-                                                            ▼
-                                               ┌──────────────────────────┐
-                                       ┌──────►│   read transcript        │
-                                       │       └────────────┬─────────────┘
-                                       │                    │
-                                       │          transcript + cursors
-                                       │                    │
-                                       │                    ▼
-                                       │       ┌──────────────────────────┐
-                                      next page
-                                       └──────►│   pull surrounding       │
-                                               │   messages (ChatML)      │
-                                               └──────────────────────────┘
+@recall how did we fix the flaky auth test last time?
 ```
 
 ## Why Recall?
-
-Semantic search scores existing embeddings with the native `sqlite-vec` extension
-inside SQLite. Only the best candidate rows cross into JavaScript. The scan keeps
-cosine similarity, Unicode keyword boosts, and date/directory/session filters;
-existing sidecars need no rebuild. Vectors with a different model or dimension
-are excluded. This shared engine serves the SDK and OpenCode history tools.
-
-To compare speed, peak process memory, and top-result overlap against a built
-baseline checkout, run `node scripts/benchmark-search.mjs BASELINE_ROOT SIDECAR`.
-The benchmark starts fresh processes, alternates execution order, reuses each
-query embedding, and does not sync history. It measures vector search separately
-from embedding generation and lexical search.
-
-You've already solved this problem. You debugged this exact error six weeks ago in another project. You worked out the deploy steps in a session you can't find anymore. The knowledge is *there*, sitting in `opencode.db`, but the agent can't see it.
-
-Recall fixes that:
 
 🔎 **Find the right session in seconds.** Hybrid lexical + semantic search across every project you've used OpenCode in.
 
@@ -63,11 +24,11 @@ Recall fixes that:
 
 ## What it looks like
 
-**Simple recall: "remind me how we did this."**
+**"Remind me how we did this."** One search, one read, and the answer comes back with the actual config and commands.
 
 ![Recall asking how trusted publishing was set up, agent runs history_search then history_read and returns the workflow config, publish command, and release flow](./assets/screenshot-01.png)
 
-**Iterative recall: agent reformulates the search when the first pass is thin.**
+**When the first search comes up thin, it tries again.** The agent narrows the query and filters by project until it finds the exact files.
 
 ![Recall asking about match marker file names, agent runs an initial broad search, then a narrower one with stronger terms and a directory filter, then returns a precise file list](./assets/screenshot-02.png)
 
@@ -97,33 +58,27 @@ Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json
 
 </details>
 
-## Set up embeddings (Ollama)
+### Search by meaning with Ollama
 
-Semantic search uses [Ollama](https://ollama.com) running locally. Install it, that's it:
+To match on meaning, Recall uses [Ollama](https://ollama.com) on your machine. Install it and you're done:
 
 ```sh
-ollama --version  # should print a version. install from https://ollama.com/download if not.
+ollama --version  # prints a version if installed; otherwise get it from https://ollama.com/download
 ```
 
-Everything else is handled for you. The first `history_search` call will start `ollama serve` if it isn't running, pull the default embedding model (`all-minilm`, small and fast) if it isn't installed, and build the sidecar index. Subsequent calls reuse it and synchronize only sessions changed since the previous search.
+On the first search, Recall starts Ollama if needed, downloads a small embedding model, and builds its index. Without Ollama, Recall still works but only matches exact words, so rephrased questions miss more often.
 
-Lexical search still works without Ollama, but you lose paraphrase recall, which is half the value.
+## Usage
 
-## How to actually use it
-
-Recall is explicit. Ask the dedicated subagent when you want old session context:
+Mention `@recall` whenever old context would help:
 
 ```text
 @recall how did we set up trusted publishing last time?
-@recall find the session where we debugged recall lookup accuracy
+@recall find the session where we debugged the Postgres connection pool
 @recall what did we decide about the rate limiter design?
 ```
 
-The `recall` subagent starts with fresh context, searches and reads past sessions, then returns only a concise answer to the parent agent. It reports useful source session ids, titles, and directories, but not internal `msg_...` cursors unless you explicitly ask for raw read anchors. That gives you the useful part of session-level querying without dumping raw transcript pages into the main conversation. If you ask a follow-up about the same recalled session, the parent should invoke `@recall` again instead of answering from memory.
-
-The subagent only checks OpenCode history. It does not read current files, run commands, or verify whether old session facts are still true.
-
-Some natural-language prompts that should trigger recall:
+Plain requests also work, because your agent hands them to Recall:
 
 - *"Recall how we set up the GitHub Actions release workflow."*
 - *"Did we ever debug the Postgres connection pool exhaustion? Find that conversation."*
@@ -131,7 +86,18 @@ Some natural-language prompts that should trigger recall:
 - *"Search my history for anything about Figma MCP and Azure."*
 - *"What were the file names involved when we worked on the timeline component?"*
 
-The recall subagent runs `history_search`, picks a promising hit, calls `history_read` to load the surrounding messages, and can page forward or back if more context is needed.
+### How the `recall` subagent works
+
+Recall does its digging in a dedicated subagent, so the search work stays out of your main conversation:
+
+1. **It starts with fresh context.** The subagent receives only your question, so nothing from the current chat biases the search.
+2. **It searches and reads.** It runs `history_search`, picks a promising hit, and loads the messages around it with `history_read`. When the first results are thin, it rephrases the query or narrows it to a project. When a match needs more context, it pages forward or back through the transcript.
+3. **It returns a concise answer.** The parent agent receives the findings plus the source sessions (id, title, and directory). Raw transcript pages stay inside the subagent, and internal `msg_...` cursors appear only if you explicitly ask for read anchors.
+4. **Follow-ups go back to Recall.** If you ask more about a recalled session, the parent calls `@recall` again and does not answer from what it remembers of the first summary.
+
+The subagent sees only your OpenCode history. It does not read current files, run commands, or check whether facts from old sessions are still true, so verify anything that may have changed since then.
+
+You can give the subagent its own, cheaper model. See [Choosing the `recall` subagent model](#choosing-the-recall-subagent-model).
 
 ## Configuration
 
@@ -361,6 +327,7 @@ Tool calls, patches, and file attachments render as structured tags with explici
 - **Source of truth.** `opencode.db` is opened read-only. The plugin never writes to it.
 - **Sidecar index.** A separate SQLite database (`opencode-recall-index.db`) stores text chunks, content hashes, and `Float32` embedding blobs. Synthetic `session-title:<id>` rows are indexed so proper-noun title queries beat noisy snippet matches.
 - **Sync.** Searches use OpenCode's persisted event log to reconcile only changed sessions, including deletions. There is no watcher or background process. Existing sidecars upgrade automatically; custom eventless databases retain the timestamp fallback.
+- **Vector scoring.** Semantic search scores existing embeddings with the native `sqlite-vec` extension inside SQLite, so only the best candidate rows cross into JavaScript. The scan keeps cosine similarity, Unicode keyword boosts, and date/directory/session filters. Existing sidecars need no rebuild, and vectors from a different model or dimension are excluded. The SDK and the OpenCode history tools share this engine.
 - **Ranking.** Lexical and semantic candidates are merged, scored with title/text/directory term ratios plus phrase boosts, filtered to require enough query-term overlap, and diversified to at most two hits per session. A small semantic-rescue lane admits paraphrase matches that miss lexical filters but have high embedding similarity.
 - **Reads.** Windows are computed by `row_number()` over `(session_id, time_created, id)`, then parts are normalized into `text | tool | patch | file` and capped (tool input 2 000 chars, output 6 000 chars).
 
@@ -373,6 +340,8 @@ pnpm test                   # deterministic ranking + cursor tests
 pnpm run eval:real-history  # regression suite against your local opencode.db
 pnpm run build              # emits dist/
 ```
+
+To compare speed, peak process memory, and top-result overlap against a built baseline checkout, run `node scripts/benchmark-search.mjs BASELINE_ROOT SIDECAR`. The benchmark starts fresh processes, alternates execution order, reuses each query embedding, and does not sync history. It measures vector search separately from embedding generation and lexical search.
 
 Code quality is enforced by `biome` and `tsc --noEmit`. See [`AGENTS.md`](./AGENTS.md) for the style guide.
 
