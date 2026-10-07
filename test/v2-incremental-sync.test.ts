@@ -6,6 +6,44 @@ import { HistoryDatabase } from '../src/db.js'
 import { RecallSidecarIndex } from '../src/sidecar.js'
 import { Database } from '../src/sqlite.js'
 
+test('V2 without an event log keeps indexing sessions created after the first sync', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'recall-v2-no-events-'))
+  const source = new Database(join(root, 'history.db'))
+  source.exec(`
+    create table session_v2(id text primary key, title text, directory text, time_updated integer);
+    create table session_message(id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text);
+    create table event(id text primary key, aggregate_id text, seq integer, type text, data text);
+    insert into session_v2 values ('ses_first', 'First', '/first', 1);
+    insert into session_message values ('msg_first', 'ses_first', 'user', 1, 1, 1, '{"text":"first needle"}');
+  `)
+  const history = new HistoryDatabase(join(root, 'history.db'))
+  const sidecar = new RecallSidecarIndex(join(root, 'index.db'))
+  const provider = {
+    model: 'fixture',
+    embed(texts: readonly string[]) {
+      return Promise.resolve(texts.map(() => new Float32Array([1, 0])))
+    },
+  }
+  try {
+    expect(history.readIndexChanges(undefined).mode).toBe('legacy')
+    expect(sidecar.syncLexicalHistory(history).indexedRows).toBe(2)
+    expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(2)
+    const later = Date.now()
+    source.exec(`
+      insert into session_v2 values ('ses_later', 'Later', '/later', ${later});
+      insert into session_message values ('msg_later', 'ses_later', 'user', 1, ${later}, ${later}, '{"text":"later needle"}');
+    `)
+    sidecar.syncLexicalHistory(history)
+    expect(sidecar.lexicalSearch('later', { limit: 5 })[0]?.sessionId).toBe('ses_later')
+    expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(2)
+  } finally {
+    sidecar.close()
+    history.close()
+    source.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('V2 events reconcile projected sessions without reading unchanged transcript JSON', async () => {
   const root = mkdtempSync(join(tmpdir(), 'recall-v2-events-'))
   const source = new Database(join(root, 'history.db'))

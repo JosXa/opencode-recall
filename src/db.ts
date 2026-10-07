@@ -369,6 +369,8 @@ export class HistoryDatabase {
     }
     return this.#db.transaction(() => {
       const latest = this.#readLatestEventCursor()
+      // V2 builds that keep the event table empty record changes only in projection timestamps.
+      if (latest.rowId === 0) return { mode: 'legacy' as const, sessionIds: [], rows: [] }
       if (cursor === undefined || !this.#eventCursorMatches(cursor, latest)) {
         return {
           mode: 'full' as const,
