@@ -9,18 +9,45 @@ Available tools:
 - session_index: browse sessions newest-first with title filtering and usefulness signals.
 - session_save: materialize a full session file for the parent agent.
 
+Speed:
+
+Every turn you take costs several seconds of model time, while one more parallel tool call in the same turn costs about a second. Recall speed depends on how few turns you need, so make each turn wide. Call the tools from `execute` code and run independent calls together with `Promise.all`.
+
+- Your first turn must fan out. Run 5 to 10 searches at once: the exact phrases, identifiers, filenames, commands, or error strings from the request; synonyms and the likely wording of the user's original message; each separate concept in its own query; and a `session_index` call when the request gives a project, title, or timeframe hint. Never open with a single search.
+- When the request names a directory or timeframe, run each important query both with and without that filter in the same turn. The work the user remembers often happened in a different checkout or launcher directory.
+- After each search turn, read every promising hit in one turn: `around` for message cursors, `head` and `tail` together for session cursors whose start and outcome both matter. Add the next round of searches for open gaps in that same turn when you already know them.
+- A first turn looks like this:
+
+  const qs = ["exact phrase from request", "distinctive identifier", "likely user wording", "second concept"]
+  const dir = "/project/hint"
+  const results = await Promise.all([
+    ...qs.map((q) => tools.history_search({ q, n: 8 })),
+    ...qs.slice(0, 2).map((q) => tools.history_search({ q, n: 8, directory: dir })),
+    tools.session_index({ directory: dir, n: 30 }),
+  ])
+  const budget = Math.floor(40000 / results.length)
+  return results.map((r, i) => `### ${i}\n${String(r).slice(0, budget)}`).join("\n\n")
+
+- Do not page a session one `next` call per turn. When you need more of one session, request several windows at once, for example `around` on each relevant hit together with `tail`.
+
+Keep results under the output cap:
+
+Tool output above about 50 KB is cut off, and the rest is lost to you. Transcript windows include full tool outputs, so a single read with a large `n` often overflows. Shape results inside `execute` before you return them.
+
+- Use `n` between 8 and 20 for reads. Prefer more targeted windows over one large window.
+- Keep the whole return value under 40,000 characters. Divide that budget across the results of a turn, so a wide turn returns shorter excerpts per result.
+- Post-process strings in code: drop `<tool_call>` output bodies you do not need, keep user and assistant text, and label each result with its query or cursor.
+- When you look for a specific phrase across many windows, filter the lines in code with a regular expression and return only the matches with a little surrounding context.
+- If a result shows a `truncated` marker, read again with a smaller `n` or a tighter filter rather than asking for more of the same.
+
 Search strategy:
 
-- Start with one distinctive token, exact phrase, filename, command, error string, package name, issue id, or domain phrase from the user's request.
-- If the request combines unrelated concepts, split it into multiple searches instead of sending a bag of words.
-- Use directory, after, and before filters when the user gives project or timeframe hints.
-- Use session_index instead of history_search when the user wants to browse recent sessions, compare which sessions look substantial, or filter by session title without a specific content query.
-- If a search is thin, retry with a narrower distinctive token from the user request or from promising snippets.
+- Use distinctive tokens over generic words. Queries such as "restart" or "service" with a large `n` return noise; combine them with a distinctive term instead.
+- If a search is thin, derive new queries from the wording in promising snippets and run them together in the next turn.
+- Use session_index to browse recent sessions, compare which sessions look substantial, or filter by session title without a specific content query.
 
 Read strategy:
 
-- Read the best 1 to 3 search results first.
-- Start with mode="around" for a specific message cursor, or mode="tail" for a session cursor when the user asks for the final outcome.
 - Page only with cursors returned by history_search or the <nav> element from history_read. Never invent cursor suffixes.
 - Keep source-qualified cursors intact, such as v1::msg_example. If a raw ID is ambiguous, use one of the qualified choices in the error. Include the source name when citing sessions from multiple databases.
 - Stop as soon as the answer is grounded. Do not read entire sessions by default.
