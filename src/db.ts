@@ -67,7 +67,14 @@ export interface IndexSourceRow extends SearchRow {
 export interface HistoryEventCursor {
   readonly rowId: number
   readonly eventId: string
+  // OpenCode V2 persists bus events only on request, so its projection
+  // timestamps are the change log. This is the newest timestamp already read.
+  readonly updatedAt?: number
 }
+
+// V2 stamps time_updated before its write transaction commits. Re-read this
+// window so a slow commit with an older stamp is never skipped.
+const PROJECTION_OVERLAP_MS = 60 * 1000
 
 export interface HistoryIndexChanges {
   readonly mode: 'full' | 'incremental' | 'legacy'
@@ -369,8 +376,7 @@ export class HistoryDatabase {
     }
     return this.#db.transaction(() => {
       const latest = this.#readLatestEventCursor()
-      // V2 builds that keep the event table empty record changes only in projection timestamps.
-      if (latest.rowId === 0) return { mode: 'legacy' as const, sessionIds: [], rows: [] }
+      if (latest.rowId === 0) return this.#readProjectionChanges(cursor)
       if (cursor === undefined || !this.#eventCursorMatches(cursor, latest)) {
         return {
           mode: 'full' as const,
@@ -387,6 +393,49 @@ export class HistoryDatabase {
         rows: this.readTextPartsForSessions(sessionIds),
       }
     })()
+  }
+
+  #readProjectionChanges(cursor: HistoryEventCursor | undefined): HistoryIndexChanges {
+    if (!this.#hasTable('session_message')) return { mode: 'legacy', sessionIds: [], rows: [] }
+    const latest = this.#readProjectionWatermark()
+    if (cursor?.updatedAt === undefined) {
+      return {
+        mode: 'full',
+        cursor: { rowId: 0, eventId: '', updatedAt: latest },
+        sessionIds: [],
+        rows: this.readTextPartsForIndex(undefined),
+      }
+    }
+    // Raw projection tables keep this to two narrow scans; the session view
+    // would compute a per-session max over every transcript.
+    const since = Math.max(0, cursor.updatedAt - PROJECTION_OVERLAP_MS)
+    const sessionIds = this.#db
+      .query<{ readonly sessionId: string }, [number, number]>(`
+        select id as sessionId from session_v2 where time_updated >= ?
+        union
+        select session_id as sessionId from session_message where time_updated >= ?
+        order by sessionId
+      `)
+      .all(since, since)
+      .map((row) => row.sessionId)
+    return {
+      mode: 'incremental',
+      cursor: { rowId: 0, eventId: '', updatedAt: Math.max(latest, cursor.updatedAt) },
+      sessionIds,
+      rows: this.readTextPartsForSessions(sessionIds),
+    }
+  }
+
+  #readProjectionWatermark(): number {
+    const row = this.#db
+      .query<{ readonly value: number }, []>(`
+        select max(
+          coalesce((select max(time_updated) from session_v2), 0),
+          coalesce((select max(time_updated) from session_message), 0)
+        ) as value
+      `)
+      .get()
+    return row?.value ?? 0
   }
 
   public eventCursorMatches(cursor: HistoryEventCursor): boolean {

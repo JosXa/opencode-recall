@@ -25,7 +25,7 @@ test('V2 without an event log keeps indexing sessions created after the first sy
     },
   }
   try {
-    expect(history.readIndexChanges(undefined).mode).toBe('legacy')
+    expect(history.readIndexChanges(undefined).mode).toBe('full')
     expect(sidecar.syncLexicalHistory(history).indexedRows).toBe(2)
     expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(2)
     const later = Date.now()
@@ -33,9 +33,29 @@ test('V2 without an event log keeps indexing sessions created after the first sy
       insert into session_v2 values ('ses_later', 'Later', '/later', ${later});
       insert into session_message values ('msg_later', 'ses_later', 'user', 1, ${later}, ${later}, '{"text":"later needle"}');
     `)
+    expect(history.readIndexChanges({ rowId: 0, eventId: '', updatedAt: later - 1 })).toMatchObject({
+      mode: 'incremental',
+      sessionIds: ['ses_later'],
+      cursor: { updatedAt: later },
+    })
     sidecar.syncLexicalHistory(history)
     expect(sidecar.lexicalSearch('later', { limit: 5 })[0]?.sessionId).toBe('ses_later')
     expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(2)
+    // Malformed untouched JSON makes accidental whole-history projection fail.
+    source.exec("update session_message set data = 'not JSON' where id = 'msg_first'")
+    // Message edits move only session_message.time_updated in V2.
+    source.exec(
+      `update session_message set data = '{"text":"edited needle"}', time_updated = ${later + 1} where id = 'msg_later'`,
+    )
+    expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(1)
+    expect(sidecar.lexicalSearch('edited', { limit: 5 })[0]?.sessionId).toBe('ses_later')
+    source.exec(`
+      update session_message set data = '{"text":"first needle"}' where id = 'msg_first';
+      delete from session_message where session_id = 'ses_later';
+      delete from session_v2 where id = 'ses_later';
+    `)
+    expect((await sidecar.syncHistory(history, provider)).deletedRows).toBe(2)
+    expect(sidecar.lexicalSearch('edited', { limit: 5 })).toEqual([])
   } finally {
     sidecar.close()
     history.close()

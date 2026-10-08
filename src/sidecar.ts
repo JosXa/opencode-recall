@@ -784,12 +784,19 @@ export class RecallSidecarIndex {
     if (rowId === undefined || eventId === undefined || !Number.isSafeInteger(rowId) || rowId < 0) {
       return undefined
     }
-    return { rowId, eventId }
+    // Indexes built by the timestamp fallback already hold a projection watermark.
+    const updatedAt =
+      this.#getNumberMetadata(`event_cursor_${lane}_updated_at`) ??
+      this.#getNumberMetadata(lane === 'semantic' ? 'last_source_updated' : 'last_lexical_synced')
+    return updatedAt === undefined ? { rowId, eventId } : { rowId, eventId, updatedAt }
   }
 
   #setEventCursor(lane: 'lexical' | 'semantic', cursor: HistoryEventCursor): void {
     this.#setMetadata(`event_cursor_${lane}_rowid`, String(cursor.rowId))
     this.#setMetadata(`event_cursor_${lane}_event_id`, cursor.eventId)
+    if (cursor.updatedAt !== undefined) {
+      this.#setMetadata(`event_cursor_${lane}_updated_at`, String(cursor.updatedAt))
+    }
   }
 
   #setEventCursors(cursor: HistoryEventCursor): void {
