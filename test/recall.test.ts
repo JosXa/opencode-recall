@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -273,8 +274,9 @@ describe('config file loading', () => {
       expect(loadConfig().database.path).toBe(`${dataHome}/opencode/opencode-v2.db`)
       process.env['OPENCODE_DB'] = '/private/native.db'
       expect(loadConfig().database.path).toBe('/private/native.db')
-      writeFileSync(`${configDir}/recall.jsonc`, JSON.stringify({ database: { path: '/historical/v1.db' } }))
+      writeFileSync(`${configDir}/recall.jsonc`, JSON.stringify({ database: { path: '/historical/v1.db', legacyPath: '~/history/legacy.db' } }))
       expect(loadConfig().database.path).toBe('/historical/v1.db')
+      expect(loadConfig().database.legacyPath).toBe(`${homedir()}/history/legacy.db`)
       process.env['OPENCODE_DB_PATH'] = '/override/history.db'
       expect(loadConfig().database.path).toBe('/override/history.db')
     })

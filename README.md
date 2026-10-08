@@ -37,6 +37,18 @@ Every OpenCode session is already saved locally. Recall makes them searchable, s
 
 ## Why Recall?
 
+Semantic search scores existing embeddings with the native `sqlite-vec` extension
+inside SQLite. Only the best candidate rows cross into JavaScript. The scan keeps
+cosine similarity, Unicode keyword boosts, and date/directory/session filters;
+existing sidecars need no rebuild. Vectors with a different model or dimension
+are excluded. This shared engine serves the SDK and OpenCode history tools.
+
+To compare speed, peak process memory, and top-result overlap against a built
+baseline checkout, run `node scripts/benchmark-search.mjs BASELINE_ROOT SIDECAR`.
+The benchmark starts fresh processes, alternates execution order, reuses each
+query embedding, and does not sync history. It measures vector search separately
+from embedding generation and lexical search.
+
 You've already solved this problem. You debugged this exact error six weeks ago in another project. You worked out the deploy steps in a session you can't find anymore. The knowledge is *there*, sitting in `opencode.db`, but the agent can't see it.
 
 Recall fixes that:
@@ -178,6 +190,8 @@ With multiple sources, results include `sourceId`, and cursors are qualified, fo
 
 The SDK accepts the same list as `new OpenCodeRecall({ sources: [...] })` or `searchHistory(query, { sources: [...] })`. Hits and transcript windows retain raw IDs plus `sourceId`; use the `cursor` and navigation fields to read. The worker SDK and direct SDK with a custom embedding provider share the same federation coordinator.
 
+Pass `excludeSubagents: true` to `searchHistory`, `sessionIndex`, or their `OpenCodeRecall` methods to return only main sessions. The `history_search` and `session_index` tools expose the same option. It uses the source session's `parent_id`, across V1 and V2, and filters before lexical and semantic candidate limits so child sessions cannot crowd out main results. The default includes all sessions; titles and agent names do not determine parentage.
+
 `database.path` / `database.indexPath` and SDK `historyDbPath` / `sidecarDbPath` remain supported for one source, with unchanged cursor output. The default source follows `OPENCODE_DB`, or `opencode.db` in the OpenCode data directory. Default sidecars use `opencode-recall-<source-path-hash>.db` so V1 and V2 cannot accidentally share an index. `OPENCODE_DB_PATH` or `OPENCODE_RECALL_DB_PATH` suppresses the configured source list for isolated runs; explicit SDK source lists take precedence. The former `legacyPath` option resolves to a separate `legacy` source; new configurations should use `sources`.
 
 Run `pnpm run eval:embeddings` to compare installed embedding models against the local regression cases in [`docs/real-history-regressions.md`](./docs/real-history-regressions.md).
@@ -214,6 +228,8 @@ Recall exposes four history tools through Code Mode. The `recall` subagent provi
 The history reader detects V1 tables and native V2 session projections. V2 transcripts follow the stored session sequence and retain user text, assistant text, tool inputs/results, attachment metadata, and conversation checkpoints. Recall opens the source database read-only and keeps its search index in a separate database. When both schemas exist, V2 sessions take precedence over older copies with the same session ID.
 
 Without an explicit Recall database path, the reader follows the host's `OPENCODE_DB` setting. Relative host paths resolve below the OpenCode data directory. `database.path` in `recall.jsonc` can select a historical V1 database, and `OPENCODE_DB_PATH` remains the highest-priority Recall override.
+
+When V1 and V2 history live in separate files, configure named `database.sources` as described above. Each source retains its own event cursor and embedding index.
 
 <details>
 <summary><code>session_index</code>: browse sessions by recency and usefulness</summary>

@@ -148,6 +148,10 @@ export const RecallPlugin = Plugin.define({
           ...OBJECT_SCHEMA,
           properties: {
             q: { type: 'string', description: 'Recall query. Empty=recent.' },
+            excludeSubagents: {
+              type: 'boolean',
+              description: 'Return only main sessions. Default false.',
+            },
             n: { type: 'number', description: `Max hits. Default ${DEFAULT_SEARCH_LIMIT}.` },
             directory: { type: 'string', description: 'Session directory.' },
             includeCurrentSession: {
@@ -181,7 +185,7 @@ export const RecallPlugin = Plugin.define({
             cursor: {
               type: 'string',
               description:
-                'Exact cursor from search/read nav, including source-qualified msg_* or ses_* cursors. No :offset suffixes.',
+                'Exact cursor from search/read nav, including source-qualified cursors; raw msg_* or ses_* also accepted. No :offset suffixes.',
             },
             mode: {
               type: 'string',
@@ -218,6 +222,10 @@ export const RecallPlugin = Plugin.define({
               description: `Max sessions. Default ${DEFAULT_SESSION_INDEX_LIMIT}.`,
             },
             title: { type: 'string', description: 'Case-insensitive session title filter.' },
+            excludeSubagents: {
+              type: 'boolean',
+              description: 'Return only main sessions. Default false.',
+            },
             directory: { type: 'string', description: 'Exact session directory.' },
             includeCurrentSession: {
               type: 'boolean',

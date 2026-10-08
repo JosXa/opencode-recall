@@ -1,6 +1,7 @@
 import type { SourceOptions } from './sources.js'
 
 export interface HistorySearchWorkerArgs extends SourceOptions {
+  readonly excludeSubagents?: boolean | undefined
   readonly q?: string | undefined
   readonly n?: number | undefined
   readonly maxSearchLimit?: number | undefined
@@ -25,6 +26,7 @@ export interface HistoryReadWorkerArgs extends SourceOptions {
 }
 
 export interface SessionIndexWorkerArgs extends SourceOptions {
+  readonly excludeSubagents?: boolean | undefined
   readonly n?: number | undefined
   readonly title?: string | undefined
   readonly directory?: string | undefined

@@ -242,6 +242,7 @@ function searchWorkerArgs(
 ): HistorySearchWorkerArgs {
   return {
     q: query,
+    excludeSubagents: options.excludeSubagents,
     n: options.limit ?? DEFAULT_SEARCH_LIMIT,
     maxSearchLimit: Math.max(options.limit ?? DEFAULT_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT),
     directory: options.directory,
@@ -265,6 +266,7 @@ function sessionIndexWorkerArgs(
   return {
     n: options.limit ?? DEFAULT_SESSION_INDEX_LIMIT,
     title: options.title,
+    excludeSubagents: options.excludeSubagents,
     directory: options.directory,
     includeCurrentSession: options.includeCurrentSession,
     excludeSessionId: options.excludeSessionId ?? defaultExcludedSessionId(options),

@@ -1,4 +1,5 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import { load as loadVectorExtension } from 'sqlite-vec'
 
 const BUSY_TIMEOUT_MS = 5000
 
@@ -13,11 +14,16 @@ export class Database {
   readonly #db: DatabaseSync
   #transactionDepth = 0
 
-  public constructor(path: string, options: { readonly?: boolean } = {}) {
+  public constructor(path: string, options: { readonly?: boolean; vectors?: boolean } = {}) {
     this.#db = new DatabaseSync(path, {
       readOnly: options.readonly === true,
       timeout: BUSY_TIMEOUT_MS,
+      allowExtension: options.vectors === true,
     })
+    if (options.vectors) {
+      loadVectorExtension(this.#db)
+      this.#db.enableLoadExtension(false)
+    }
     this.#db.exec(`pragma busy_timeout = ${BUSY_TIMEOUT_MS}`)
   }
 
@@ -33,6 +39,10 @@ export class Database {
 
   public close(): void {
     this.#db.close()
+  }
+
+  public scalar(name: string, callback: (value: string) => number): void {
+    this.#db.function(name, { deterministic: true }, (value) => callback(String(value)))
   }
 
   public query<TResult, TParams extends SqliteBindParams = SqliteBindParams>(
