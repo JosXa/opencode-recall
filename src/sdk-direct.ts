@@ -42,6 +42,8 @@ export interface RecallSearchOptions {
   readonly excludeSessionId?: string
   readonly semantic?: boolean
   readonly lexical?: boolean
+  /** Lexical only: return every session that contains all query terms as word prefixes. */
+  readonly matchAll?: boolean
   readonly sync?: boolean
   readonly syncOptions?: SyncOptions
   readonly workerTimeoutMs?: number | false
@@ -267,6 +269,7 @@ function normalizeSearchOptions(options: RecallSearchOptions): SearchOptions {
     ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
     ...(options.directory === undefined ? {} : { directory: options.directory }),
     ...(excluded === undefined ? {} : { excludeSessionId: excluded }),
+    ...(options.matchAll === undefined ? {} : { matchAll: options.matchAll }),
   }
 }
 

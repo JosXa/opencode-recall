@@ -125,7 +125,12 @@ export class HistorySources {
       rows.push(...this.#searchSource(entry, query, options, features, provider, queryEmbedding))
     }
     return {
-      rows: rankSearchRows(query, rows, options.limit),
+      // Session-level all-terms matches need not contain every term in their
+      // representative row, so the term-score filter would drop them.
+      rows:
+        options.matchAll === true
+          ? rows.slice(0, options.limit)
+          : rankSearchRows(query, rows, options.limit),
       ...(features.sync && (features.lexical || features.semantic)
         ? { sync: combineSync(syncResults) }
         : {}),

@@ -811,6 +811,46 @@ describe('current session exclusion', () => {
     }
   })
 
+  test('all-terms lexical search matches word prefixes across messages and the title', () => {
+    const path = `/tmp/opencode-recall-lex-all-${crypto.randomUUID()}.db`
+    const index = new RecallSidecarIndex(path)
+    const row = (sessionId: string, title: string, partId: string, text: string): IndexSourceRow => ({
+      sessionId,
+      sessionTitle: title,
+      directory: '/tmp',
+      messageId: `msg_${partId}`,
+      partId,
+      role: 'user',
+      timeCreated: 1,
+      sourceUpdated: 1,
+      text,
+      source: 'text',
+    })
+    const rows = [
+      row('ses_split', 'Reading Unread inbox', 'a', 'this was about TEAMS messages'),
+      row('ses_split', 'Reading Unread inbox', 'b', 'second message'),
+      row('ses_one', 'Teams chat', 'c', 'read the thread'),
+    ]
+
+    try {
+      index.syncLexicalOnly(
+        () => rows,
+        () => rows.map((item) => item.partId),
+      )
+      const all = (query: string) =>
+        index.lexicalSearch(query, { limit: 10, matchAll: true }).map((item) => item.sessionId)
+      expect(all('teams unread')).toEqual(['ses_split'])
+      expect(all('team unr')).toEqual(['ses_split'])
+      expect(all('teams')).toEqual(expect.arrayContaining(['ses_split', 'ses_one']))
+      expect(
+        index.lexicalSearch('teams unread', { limit: 10 }).map((item) => item.sessionId),
+      ).toContain('ses_one')
+    } finally {
+      index.close()
+      removeSqliteFiles(path)
+    }
+  })
+
   test('sidecar lexical search excludes the current session by default option', async () => {
     const path = `/tmp/opencode-recall-lex-exclude-${crypto.randomUUID()}.db`
     const index = new RecallSidecarIndex(path)

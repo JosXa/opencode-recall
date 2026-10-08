@@ -10,6 +10,8 @@ export interface SearchOptions {
   readonly before?: number
   readonly directory?: string
   readonly excludeSessionId?: string
+  /** Lexical only: every term must occur in the session, as a word prefix. */
+  readonly matchAll?: boolean
 }
 
 export interface SessionIndexOptions {

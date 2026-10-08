@@ -121,7 +121,7 @@ export class LexicalIndex {
   }
 
   public search(query: string, options: SearchOptions): SearchRow[] {
-    const match = buildMatchQuery(query)
+    const match = buildMatchQuery(query, options.matchAll === true)
     if (match.length === 0) {
       return []
     }
@@ -135,8 +135,10 @@ export class LexicalIndex {
         : { excludeSessionId: options.excludeSessionId }),
     }
 
-    const partRows = this.#searchParts(match, filters)
-    const sessionRows = this.#searchSessions(match, filters)
+    // Callers that list every match, such as all-terms lookups, ask for more than the default cap.
+    const cap = Math.max(FTS_CANDIDATE_LIMIT, options.limit)
+    const partRows = this.#searchParts(match, filters, cap)
+    const sessionRows = this.#searchSessions(match, filters, cap)
 
     return this.#fuseAndProject(partRows, sessionRows, options.limit)
   }
@@ -423,10 +425,10 @@ export class LexicalIndex {
     return removed
   }
 
-  #searchParts(match: string, filters: Filters): readonly LexicalPartRow[] {
+  #searchParts(match: string, filters: Filters, cap: number): readonly LexicalPartRow[] {
     const params: (string | number)[] = [match]
     const where = buildFilterClauses(filters, params, 'pm')
-    params.push(FTS_CANDIDATE_LIMIT)
+    params.push(cap)
     return this.#db
       .query<LexicalPartRow, (string | number)[]>(`
         select
@@ -450,10 +452,10 @@ export class LexicalIndex {
       .all(...params)
   }
 
-  #searchSessions(match: string, filters: Filters): readonly LexicalSessionRow[] {
+  #searchSessions(match: string, filters: Filters, cap: number): readonly LexicalSessionRow[] {
     const params: (string | number)[] = [match]
     const where = buildFilterClauses(filters, params, 'sm')
-    params.push(FTS_CANDIDATE_LIMIT)
+    params.push(cap)
     return this.#db
       .query<LexicalSessionRow, (string | number)[]>(`
         select
@@ -622,8 +624,9 @@ function batches(values: readonly string[]): readonly string[][] {
 
 // FTS5 query sanitiser: drop operators, lowercase, quote each term, OR-join.
 // Quoting blocks accidental syntax (dots, hyphens) and matches the benchmark
-// behaviour that produced the R4 RRF result.
-function buildMatchQuery(query: string): string {
+// behaviour that produced the R4 RRF result. All-terms queries AND word
+// prefixes instead; the session table then matches terms across messages.
+function buildMatchQuery(query: string, all: boolean): string {
   const terms = query
     .toLowerCase()
     .split(TOKEN_SPLIT)
@@ -633,7 +636,8 @@ function buildMatchQuery(query: string): string {
   if (terms.length === 0) {
     return ''
   }
-  return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(' OR ')
+  const quoted = terms.map((term) => `"${term.replaceAll('"', '""')}"`)
+  return all ? quoted.map((term) => `${term}*`).join(' AND ') : quoted.join(' OR ')
 }
 
 function buildFilterClauses(
