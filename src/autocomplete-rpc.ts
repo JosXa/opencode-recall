@@ -3,6 +3,7 @@ import { Rpc } from '@opencode/plugin/rpc'
 export interface SuggestInput {
   readonly sessionID: string
   readonly situation: string
+  readonly previousUser?: string
   readonly text: string
   readonly mode: 'typing' | 'next'
 }
@@ -27,6 +28,7 @@ export const Autocomplete = Rpc.define({
         properties: {
           sessionID: { type: 'string' },
           situation: { type: 'string', maxLength: 2000 },
+          previousUser: { type: 'string', maxLength: 1000 },
           text: { type: 'string', maxLength: 4000 },
           mode: { type: 'string', enum: ['typing', 'next'] },
         },

@@ -18,6 +18,19 @@ export function isHumanPrompt(text: string): boolean {
 }
 
 export function submittedPrompt(data: string, fallback: string): string {
-  const parsed = JSON.parse(data) as { metadata?: Record<string, { text?: string }> }
-  return parsed.metadata?.['opencode-snippets:submitted']?.text ?? fallback
+  const parsed = JSON.parse(data) as { metadata?: Record<string, unknown> }
+  return submittedText(parsed.metadata, fallback)
+}
+
+export function submittedText(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  fallback: string,
+): string {
+  const submitted = metadata?.['opencode-snippets:submitted']
+  return submitted &&
+    typeof submitted === 'object' &&
+    'text' in submitted &&
+    typeof submitted.text === 'string'
+    ? submitted.text
+    : fallback
 }

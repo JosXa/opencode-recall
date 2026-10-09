@@ -13,6 +13,7 @@ import {
   type PromptSnapshot,
 } from './src/autocomplete-controller.js'
 import { Autocomplete, type SuggestOutput } from './src/autocomplete-rpc.js'
+import { submittedText } from './src/prompt-example.js'
 
 const isPrompt = (editor: EditBufferRenderable | null | undefined): editor is TextareaRenderable =>
   !!editor &&
@@ -25,6 +26,14 @@ const isPrompt = (editor: EditBufferRenderable | null | undefined): editor is Te
 const reference = /(^|\s)[#@][^\s#@]*$/u
 const command = /^\/\S*$/u
 const wordChunk = /^\s*\S+/u
+
+function previousUserText(
+  user:
+    | { readonly text: string; readonly metadata?: Readonly<Record<string, unknown>> }
+    | undefined,
+): string {
+  return user ? submittedText(user.metadata, user.text).slice(-1000) : ''
+}
 
 const foreign = (editor: TextareaRenderable, text: string) =>
   ('completer' in editor.traits && editor.traits.completer === 'snippets') ||
@@ -107,6 +116,7 @@ export default Plugin.define({
           const latest = messages.findLast(
             (message) => message.type === 'user' || message.type === 'assistant',
           )
+          const user = messages.findLast((message) => message.type === 'user')
           const situation =
             reply?.type === 'assistant'
               ? reply.content
@@ -120,6 +130,8 @@ export default Plugin.define({
             scope: `${sessionID}:${reply?.id ?? 'home'}`,
             sessionID,
             situation,
+            // The question explains why the assistant wrote this reply.
+            previousUser: previousUserText(user),
             text,
             mode: text ? 'typing' : 'next',
             eligible: eligible(editor, text, latest?.type === 'assistant' && idle),

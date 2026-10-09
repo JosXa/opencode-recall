@@ -28,7 +28,13 @@ export class AutocompleteController {
   #pending: AbortController | undefined
   #timer: ReturnType<typeof setTimeout> | undefined
   #candidate:
-    | { scope: string; situation: string; mode: SuggestInput['mode']; text: string }
+    | {
+        scope: string
+        situation: string
+        previousUser: string
+        mode: SuggestInput['mode']
+        text: string
+      }
     | undefined
   readonly #cache = new Map<string, string>()
   #loading = false
@@ -52,6 +58,7 @@ export class AutocompleteController {
     return state?.eligible &&
       candidate?.scope === state.scope &&
       candidate.situation === state.situation &&
+      candidate.previousUser === (state.previousUser ?? '') &&
       candidate.mode === state.mode &&
       candidate.text.startsWith(state.text)
       ? candidate.text.slice(state.text.length)
@@ -63,6 +70,7 @@ export class AutocompleteController {
     if (
       previous?.scope === state.scope &&
       previous.situation === state.situation &&
+      previous.previousUser === state.previousUser &&
       previous.text === state.text &&
       previous.eligible === state.eligible &&
       previous.mode === state.mode
@@ -79,11 +87,12 @@ export class AutocompleteController {
       this.#changed()
       return
     }
-    const key = `${state.scope}\0${state.situation}\0${state.mode}\0${state.text}`
+    const key = `${state.scope}\0${state.situation}\0${state.previousUser ?? ''}\0${state.mode}\0${state.text}`
     if (this.#cache.has(key)) {
       this.#candidate = {
         scope: state.scope,
         situation: state.situation,
+        previousUser: state.previousUser ?? '',
         mode: state.mode,
         text: this.#cache.get(key) ?? '',
       }
@@ -102,6 +111,7 @@ export class AutocompleteController {
           {
             sessionID: state.sessionID,
             situation: state.situation,
+            previousUser: state.previousUser ?? '',
             text: state.text,
             mode: state.mode,
           },
@@ -114,6 +124,7 @@ export class AutocompleteController {
             this.#candidate = {
               scope: state.scope,
               situation: state.situation,
+              previousUser: state.previousUser ?? '',
               mode: state.mode,
               text: result.text,
             }
@@ -149,7 +160,7 @@ export class AutocompleteController {
     this.#candidate = undefined
     if (this.#snapshot)
       this.#cache.set(
-        `${this.#snapshot.scope}\0${this.#snapshot.situation}\0${this.#snapshot.mode}\0${this.#snapshot.text}`,
+        `${this.#snapshot.scope}\0${this.#snapshot.situation}\0${this.#snapshot.previousUser ?? ''}\0${this.#snapshot.mode}\0${this.#snapshot.text}`,
         '',
       )
     this.#changed()

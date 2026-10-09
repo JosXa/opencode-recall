@@ -6,6 +6,7 @@ import { acceptKey, AutocompleteController, type PromptSnapshot } from '../src/a
 import { normalizeSuggestion, suggestionPrompt } from '../src/autocomplete.js'
 import { HistoryDatabase } from '../src/db.js'
 import { HistorySources } from '../src/history-sources.js'
+import { submittedText } from '../src/prompt-example.js'
 import { Database } from '../src/sqlite.js'
 
 const snapshot = (text = 'run ', extra: Partial<PromptSnapshot> = {}): PromptSnapshot => ({
@@ -135,6 +136,25 @@ test('streaming reply revisions invalidate requests, candidates and cached misse
   expect(controller.suffix).toBe('')
   await vi.advanceTimersByTimeAsync(150)
   expect(request).toHaveBeenCalledTimes(3)
+  controller.dispose()
+})
+
+test('typing includes the original preceding question and does not reuse another question\'s candidate', async () => {
+  vi.useFakeTimers()
+  expect(submittedText({ 'opencode-snippets:submitted': { text: '#pr explain this' } }, 'Expanded skill')).toBe('#pr explain this')
+  const request = vi.fn(async () => ({ text: 'and why does it need that section?' }))
+  const controller = new AutocompleteController(request, () => {})
+  const state = snapshot('and why ', { previousUser: 'what does pr do?' })
+  expect(suggestionPrompt(state, [])).toContain('what does pr do?')
+  expect(suggestionPrompt(state, [])).toContain('finish a coherent question')
+  controller.update(state)
+  await vi.advanceTimersByTimeAsync(150)
+  expect(request).toHaveBeenCalledWith(expect.objectContaining({ previousUser: 'what does pr do?' }), expect.any(AbortSignal))
+  expect(controller.suffix).toBe('does it need that section?')
+  controller.update({ ...state, previousUser: 'what does retro do?' })
+  expect(controller.suffix).toBe('')
+  await vi.advanceTimersByTimeAsync(150)
+  expect(request).toHaveBeenCalledTimes(2)
   controller.dispose()
 })
 
