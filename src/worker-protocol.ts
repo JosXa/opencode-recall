@@ -47,6 +47,11 @@ export interface SessionSaveWorkerArgs extends SourceOptions {
 
 export type HistoryWorkerRequest =
   | {
+      readonly kind: 'prompt-examples'
+      readonly args: SourceOptions & { readonly situation: string; readonly sync?: boolean }
+      readonly context: { readonly sessionID: string }
+    }
+  | {
       readonly kind: 'search'
       readonly args: HistorySearchWorkerArgs
       readonly context: {

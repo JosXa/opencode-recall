@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Plugin } from '@opencode/plugin'
+import { registerAutocomplete } from './src/autocomplete.js'
 
 import {
   HISTORY_READ_COMMAND,
@@ -58,6 +59,9 @@ export const RecallPlugin = Plugin.define({
       }
     }
     await refreshModels()
+    // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket access for the host option index signature.
+    const enabled = context.options['autocomplete'] === true
+    const stopAutocomplete = enabled ? await registerAutocomplete(context, WORKER_DIR) : undefined
     const workers = new SessionWorkerAbortRegistry()
     const eventSubscription = new AbortController()
     let interruptionError: unknown
@@ -292,6 +296,7 @@ export const RecallPlugin = Plugin.define({
     })
 
     return async () => {
+      await stopAutocomplete?.()
       eventSubscription.abort()
       workers.dispose()
       await admissionRefresh

@@ -17,7 +17,9 @@
     "moduleDetection": "force",
     "types": ["node", "vitest/globals"],
     "skipLibCheck": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
     "noEmit": true
   },
-  "include": ["index.ts", "src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+  "include": ["index.ts", "tui.tsx", "src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
 }

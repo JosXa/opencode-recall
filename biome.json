@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["*.ts", "src/**/*.ts", "*.json", "*.md", ".husky/*"],
+    "includes": [
+      "*.ts",
+      "tui.tsx",
+      "src/**/*.ts",
+      "scripts/build-tui.mjs",
+      "*.json",
+      "*.md",
+      ".husky/*"
+    ],
     "ignoreUnknown": true
   },
   "formatter": {

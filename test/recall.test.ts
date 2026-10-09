@@ -1721,6 +1721,7 @@ function pluginHarness(
     | undefined
   let beforePrompt: (() => Promise<void>) | undefined
   const context = {
+    options: {},
     app: { name: 'opencode', version: 'test', channel: 'test' },
     event: {
       subscribe() {

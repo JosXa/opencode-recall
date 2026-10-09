@@ -91,6 +91,49 @@ Register the built directory in your V2 config. Replace the example path with th
 }
 ```
 
+## Prompt autocomplete (opt in)
+
+Recall can show one dim suggestion at the end of the prompt. While you type, Luna
+completes your draft using earlier prompts you wrote after similar assistant
+replies. When a turn ends, the session's model suggests a short next action in
+the empty input. Suggestions stay outside the edit buffer until you accept them.
+
+Enable autocomplete in both the server plugin registration (`opencode.json`) and
+the TUI registration (`cli.json`):
+
+```jsonc
+{
+  "plugins": [{
+    "package": "file:///path/to/opencode-recall/dist",
+    "options": {
+      "autocomplete": true,
+      "autocompleteModel": "openai/gpt-6-luna-fast"
+    }
+  }]
+}
+```
+
+Restart the server and TUI after changing these settings. Omit `autocomplete` or
+set it to `false` to use Recall without automatic generation.
+
+**Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts the suggestion. **Alt+F** or
+**Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
+the text you have typed or accepted. Suggestions hide while selecting text,
+moving away from the end, using shell mode, or opening snippets and native menus.
+The first version displays one line and clips longer suggestions.
+
+Recall uses its existing local embeddings to find similar replies and the user's
+next original prompt, including text before snippet expansion. It excludes
+subagents, the active session, and known automated prompts. Generation sends the
+current draft, recent reply, and selected examples to the configured provider.
+The turn-end suggestion uses transient `session.generate` and adds no messages
+to history.
+
+To compare backends against held-out conversations, run
+`pnpm run benchmark:autocomplete prepare`, then
+`pnpm run benchmark:autocomplete run`. Results contain private prompt text and
+are stored outside the repository.
+
 ## Set up embeddings (Ollama)
 
 Semantic search uses [Ollama](https://ollama.com) running locally. Install it, that's it:

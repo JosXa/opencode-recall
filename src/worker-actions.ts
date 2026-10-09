@@ -23,6 +23,23 @@ import type { TranscriptMessage, TranscriptPart, TranscriptWindow } from './tran
 import type { HistoryWorkerRequest, SessionSaveWorkerArgs } from './worker-protocol.js'
 
 export async function executeWorkerRequest(request: HistoryWorkerRequest): Promise<string> {
+  if (request.kind === 'prompt-examples') {
+    const history = new HistorySources(request.args)
+    const provider = new OllamaEmbeddingProvider()
+    try {
+      if (request.args.sync) await history.sync(provider)
+      return JSON.stringify(
+        await history.promptExamples(
+          request.args.situation,
+          currentSessionCursor(request.context.sessionID, request.args),
+          provider,
+        ),
+      )
+    } finally {
+      history.close()
+      provider.close()
+    }
+  }
   if (request.kind === 'search') {
     return executeHistorySearch(request)
   }
