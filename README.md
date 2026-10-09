@@ -124,8 +124,9 @@ The first version displays one line and clips longer suggestions.
 
 Recall uses its existing local embeddings to find similar replies and the user's
 next original prompt, including text before snippet expansion. It excludes
-subagents, the active session, and known automated prompts. Generation sends the
-current draft, recent reply, and selected examples to the configured provider.
+subagents, the active session, and known automated prompts. Typing generation
+sends the draft, preceding user message, recent assistant reply, and selected
+examples to the configured provider.
 The turn-end suggestion uses transient `session.generate` and adds no messages
 to history.
 
