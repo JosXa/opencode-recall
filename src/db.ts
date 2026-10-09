@@ -391,7 +391,9 @@ export class HistoryDatabase {
     }
     return this.#db.transaction(() => {
       const latest = this.#readLatestEventCursor()
-      if (latest.rowId === 0) return this.#readProjectionChanges(cursor)
+      if (latest.rowId === 0 || this.#eventLogBehindProjection()) {
+        return this.#readProjectionChanges(cursor)
+      }
       if (cursor === undefined || !this.#eventCursorMatches(cursor, latest)) {
         return {
           mode: 'full' as const,
@@ -439,6 +441,24 @@ export class HistoryDatabase {
       sessionIds,
       rows: this.readTextPartsForSessions(sessionIds),
     }
+  }
+
+  #eventLogBehindProjection(): boolean {
+    // V2 persists bus events only on request. Rows from early builds can stay
+    // in the log while every later session writes projections alone; an event
+    // cursor would then match forever and never index those sessions.
+    if (!this.#hasTable('session_message')) return false
+    const created = this.#db
+      .query<{ readonly name: string }, []>('pragma table_info(event)')
+      .all()
+      .some((column) => column.name === 'created')
+    if (!created) return false
+    const row = this.#db
+      .query<{ readonly value: number | null }, []>(
+        'select created as value from event order by rowid desc limit 1',
+      )
+      .get()
+    return (row?.value ?? 0) < this.#readProjectionWatermark()
   }
 
   #readProjectionWatermark(): number {

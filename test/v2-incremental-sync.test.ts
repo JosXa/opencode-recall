@@ -64,6 +64,47 @@ test('V2 without an event log keeps indexing sessions created after the first sy
   }
 })
 
+test('V2 keeps indexing new sessions when old events remain in the event log', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'recall-v2-stale-events-'))
+  const source = new Database(join(root, 'history.db'))
+  const start = Date.now()
+  // V2 persists bus events only on request: early builds left rows behind and
+  // later sessions write projections alone.
+  source.exec(`
+    create table session_v2(id text primary key, title text, directory text, time_updated integer);
+    create table session_message(id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text);
+    create table event(id text primary key, aggregate_id text, seq integer, created integer, type text, data text);
+    insert into session_v2 values ('ses_early', 'Early', '/early', ${start});
+    insert into session_message values ('msg_early', 'ses_early', 'user', 1, ${start}, ${start}, '{"text":"early needle"}');
+    insert into event values ('evt_1', 'ses_early', 1, ${start}, 'session.created.1', '{}');
+  `)
+  const history = new HistoryDatabase(join(root, 'history.db'))
+  const sidecar = new RecallSidecarIndex(join(root, 'index.db'))
+  const provider = {
+    model: 'fixture',
+    embed(texts: readonly string[]) {
+      return Promise.resolve(texts.map(() => new Float32Array([1, 0])))
+    },
+  }
+  try {
+    sidecar.syncLexicalHistory(history)
+    await sidecar.syncHistory(history, provider)
+    const later = start + 1
+    source.exec(`
+      insert into session_v2 values ('ses_later', 'Later', '/later', ${later});
+      insert into session_message values ('msg_later', 'ses_later', 'user', 1, ${later}, ${later}, '{"text":"later needle"}');
+    `)
+    sidecar.syncLexicalHistory(history)
+    expect(sidecar.lexicalSearch('later', { limit: 5 })[0]?.sessionId).toBe('ses_later')
+    expect((await sidecar.syncHistory(history, provider)).indexedRows).toBe(2)
+  } finally {
+    sidecar.close()
+    history.close()
+    source.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('V2 events reconcile projected sessions without reading unchanged transcript JSON', async () => {
   const root = mkdtempSync(join(tmpdir(), 'recall-v2-events-'))
   const source = new Database(join(root, 'history.db'))
