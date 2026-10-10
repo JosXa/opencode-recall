@@ -10,6 +10,7 @@ export interface SuggestInput {
 
 export interface SuggestOutput {
   readonly text: string
+  readonly continuations?: readonly string[]
   readonly notice?: string
 }
 
@@ -37,7 +38,11 @@ export const Autocomplete = Rpc.define({
       output: {
         type: 'object',
         additionalProperties: false,
-        properties: { text: { type: 'string' }, notice: { type: 'string' } },
+        properties: {
+          text: { type: 'string' },
+          continuations: { type: 'array', maxItems: 2, items: { type: 'string' } },
+          notice: { type: 'string' },
+        },
         required: ['text'],
       },
     },

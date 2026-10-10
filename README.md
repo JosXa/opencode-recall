@@ -116,7 +116,11 @@ the TUI registration (`cli.json`):
 Restart the server and TUI after changing these settings. Omit `autocomplete` or
 set it to `false` to use Recall without automatic generation.
 
-**Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts the suggestion. **Alt+F** or
+**Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts the visible chunk. Recall
+generates up to three related chunks in one request and shows the next cached
+chunk after each acceptance. It can refill the chain with one background request
+while you use the remaining chunks. Editing or dismissing cancels that request.
+**Alt+F** or
 **Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,
 moving away from the end, using shell mode, or opening snippets and native menus.

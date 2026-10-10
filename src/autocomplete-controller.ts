@@ -19,6 +19,40 @@ export interface PromptSnapshot extends SuggestInput {
 
 type Request = (input: SuggestInput, signal: AbortSignal) => Promise<SuggestOutput>
 
+type Candidate = {
+  scope: string
+  situation: string
+  previousUser: string
+  mode: SuggestInput['mode']
+  text: string
+  ends: readonly number[]
+}
+
+const cacheKey = (state: PromptSnapshot) =>
+  `${state.scope}\0${state.situation}\0${state.previousUser ?? ''}\0${state.mode}\0${state.text}`
+
+function requestInput(state: PromptSnapshot): SuggestInput {
+  return {
+    sessionID: state.sessionID,
+    situation: state.situation,
+    previousUser: state.previousUser ?? '',
+    text: state.text,
+    mode: state.mode,
+  }
+}
+
+function makeCandidate(state: PromptSnapshot, result: SuggestOutput): Candidate {
+  const chunks = [result.text, ...(result.continuations ?? [])]
+  return {
+    scope: state.scope,
+    situation: state.situation,
+    previousUser: state.previousUser ?? '',
+    mode: state.mode,
+    text: chunks.join(''),
+    ends: chunks.map((_chunk, index) => chunks.slice(0, index + 1).join('').length),
+  }
+}
+
 /** Owns request cancellation and render-only state; the editor is never passed in. */
 export class AutocompleteController {
   readonly #request: Request
@@ -27,16 +61,9 @@ export class AutocompleteController {
   #snapshot: PromptSnapshot | undefined
   #pending: AbortController | undefined
   #timer: ReturnType<typeof setTimeout> | undefined
-  #candidate:
-    | {
-        scope: string
-        situation: string
-        previousUser: string
-        mode: SuggestInput['mode']
-        text: string
-      }
-    | undefined
-  readonly #cache = new Map<string, string>()
+  #candidate: Candidate | undefined
+  #prefetch: { controller: AbortController; text: string } | undefined
+  readonly #cache = new Map<string, SuggestOutput>()
   #loading = false
   #error: string | undefined
 
@@ -55,13 +82,11 @@ export class AutocompleteController {
   public get suffix(): string {
     const state = this.#snapshot
     const candidate = this.#candidate
-    return state?.eligible &&
-      candidate?.scope === state.scope &&
-      candidate.situation === state.situation &&
-      candidate.previousUser === (state.previousUser ?? '') &&
-      candidate.mode === state.mode &&
-      candidate.text.startsWith(state.text)
-      ? candidate.text.slice(state.text.length)
+    return state?.eligible && candidate && this.#compatible(state)
+      ? candidate.text.slice(
+          state.text.length,
+          candidate.ends.find((end) => end > state.text.length) ?? state.text.length,
+        )
       : ''
   }
 
@@ -78,24 +103,22 @@ export class AutocompleteController {
       return
     this.#cancel()
     this.#snapshot = state
+    // accepted() updates the snapshot itself; other text changes are manual edits.
+    if (previous?.text !== state.text || !(state.eligible && this.#compatible(state)))
+      this.#cancelPrefetch()
     this.#error = undefined
     if (!state.eligible) {
       this.#changed()
       return
     }
-    if (this.suffix) {
+    if (this.suffix || this.#prefetch?.text === state.text) {
       this.#changed()
       return
     }
-    const key = `${state.scope}\0${state.situation}\0${state.previousUser ?? ''}\0${state.mode}\0${state.text}`
-    if (this.#cache.has(key)) {
-      this.#candidate = {
-        scope: state.scope,
-        situation: state.situation,
-        previousUser: state.previousUser ?? '',
-        mode: state.mode,
-        text: this.#cache.get(key) ?? '',
-      }
+    const key = cacheKey(state)
+    const cached = this.#cache.get(key)
+    if (cached) {
+      this.#candidate = makeCandidate(state, cached)
       this.#changed()
       return
     }
@@ -107,27 +130,12 @@ export class AutocompleteController {
         this.#pending = pending
         this.#loading = true
         this.#changed()
-        void this.#request(
-          {
-            sessionID: state.sessionID,
-            situation: state.situation,
-            previousUser: state.previousUser ?? '',
-            text: state.text,
-            mode: state.mode,
-          },
-          pending.signal,
-        )
+        void this.#request(requestInput(state), pending.signal)
           .then((result) => {
             if (pending.signal.aborted || this.#pending !== pending) return
             if (this.#cache.size >= 20) this.#cache.delete(this.#cache.keys().next().value ?? '')
-            this.#cache.set(key, result.text)
-            this.#candidate = {
-              scope: state.scope,
-              situation: state.situation,
-              previousUser: state.previousUser ?? '',
-              mode: state.mode,
-              text: result.text,
-            }
+            this.#cache.set(key, result)
+            this.#candidate = makeCandidate(state, result)
             this.#error = result.notice
           })
           .catch((error: unknown) => {
@@ -152,22 +160,21 @@ export class AutocompleteController {
     this.#cancel()
     this.#snapshot = { ...this.#snapshot, text, mode: 'typing' }
     this.#candidate = { ...this.#candidate, mode: 'typing' }
+    this.#prefetchMore()
     this.#changed()
   }
 
   public dismiss(): void {
     this.#cancel()
+    this.#cancelPrefetch()
     this.#candidate = undefined
-    if (this.#snapshot)
-      this.#cache.set(
-        `${this.#snapshot.scope}\0${this.#snapshot.situation}\0${this.#snapshot.previousUser ?? ''}\0${this.#snapshot.mode}\0${this.#snapshot.text}`,
-        '',
-      )
+    if (this.#snapshot) this.#cache.set(cacheKey(this.#snapshot), { text: '' })
     this.#changed()
   }
 
   public dispose(): void {
     this.#cancel()
+    this.#cancelPrefetch()
     this.#snapshot = undefined
   }
 
@@ -177,5 +184,65 @@ export class AutocompleteController {
     this.#pending?.abort()
     this.#pending = undefined
     this.#loading = false
+  }
+
+  #cancelPrefetch(): void {
+    this.#prefetch?.controller.abort()
+    this.#prefetch = undefined
+  }
+
+  #compatible(state: PromptSnapshot): boolean {
+    const value = this.#candidate
+    return (
+      !!value &&
+      value.scope === state.scope &&
+      value.situation === state.situation &&
+      value.previousUser === (state.previousUser ?? '') &&
+      value.mode === state.mode &&
+      value.text.startsWith(state.text)
+    )
+  }
+
+  #append(state: PromptSnapshot, result: SuggestOutput): void {
+    if (!result.text || this.#candidate?.text !== state.text) return
+    const next = makeCandidate(state, result)
+    this.#candidate = { ...next, ends: [...this.#candidate.ends, ...next.ends] }
+    this.#error = result.notice
+    this.#changed()
+  }
+
+  #prefetchMore(): void {
+    const state = this.#snapshot
+    const current = this.#candidate
+    if (!(state && current) || this.#prefetch || !current.text || current.text.length > 4000) return
+    // Refill only after a whole chunk was accepted, with at most two left.
+    if (
+      state.text.length < (current.ends[0] ?? 0) ||
+      current.ends.filter((end) => end > state.text.length).length > 2
+    )
+      return
+    const future: PromptSnapshot = { ...state, text: current.text, mode: 'typing' }
+    const cached = this.#cache.get(cacheKey(future))
+    if (cached) {
+      this.#append(future, cached)
+      return
+    }
+    const task = { controller: new AbortController(), text: current.text }
+    this.#prefetch = task
+    void this.#request(requestInput(future), task.controller.signal)
+      .then((result) => {
+        if (task.controller.signal.aborted || this.#prefetch !== task) return
+        if (this.#cache.size >= 20) this.#cache.delete(this.#cache.keys().next().value ?? '')
+        this.#cache.set(cacheKey(future), result)
+        this.#append(future, result)
+      })
+      .catch((error: unknown) => {
+        if (task.controller.signal.aborted) return
+        this.#error = error instanceof Error ? error.message : String(error)
+        this.#changed()
+      })
+      .finally(() => {
+        if (this.#prefetch === task) this.#prefetch = undefined
+      })
   }
 }

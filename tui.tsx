@@ -66,16 +66,14 @@ export default Plugin.define({
         variant: 'error',
       }),
     )
-    const [status, setStatus] = createSignal('')
-    const stopStatus = context.ui.slot({
-      append: 'prompt.footer.status',
-      render: () => <text fg={context.theme.text.muted}>{status()}</text>,
-    })
     const stopPrompt = context.ui.slot({
       append: 'prompt.footer',
       render: (footer) => {
         const [ghost, setGhost] = createSignal('')
-        const [position, setPosition] = createSignal({ top: 0, left: 0, width: 1 })
+        const [position, setPosition] = createSignal(
+          { top: 0, left: 0, width: 1 },
+          { equals: (a, b) => a.top === b.top && a.left === b.left && a.width === b.width },
+        )
         let anchor: BoxRenderable | undefined
         let hidden:
           | { editor: TextareaRenderable; placeholder: TextareaRenderable['placeholder'] }
@@ -95,7 +93,6 @@ export default Plugin.define({
           async (input, signal) => (await rpc.suggest(input, { signal })) as SuggestOutput,
           () => {
             sync()
-            setStatus(controller.loading ? 'suggesting…' : '')
             if (controller.error && controller.error !== reported) {
               reported = controller.error
               context.ui.toast.show({
@@ -160,6 +157,9 @@ export default Plugin.define({
         }
         const keypress = (event: KeyEvent) => {
           sync()
+          // Read edited text after the host handles the key, without waiting
+          // for the fallback poll when no ghost is currently visible.
+          queueMicrotask(sync)
           const editor = active()
           if (!(editor && controller.suffix)) return
           const name = event.name?.toLowerCase()
@@ -171,7 +171,6 @@ export default Plugin.define({
           }
           const accept = acceptKey(event)
           if (!accept) {
-            queueMicrotask(sync)
             return
           }
           const suffix = controller.suffix
@@ -189,7 +188,6 @@ export default Plugin.define({
           context.renderer.keyInput.removeListener('keypress', keypress)
           controller.dispose()
           restore()
-          setStatus('')
         })
         return (
           <box
@@ -217,9 +215,6 @@ export default Plugin.define({
         )
       },
     })
-    return () => {
-      stopPrompt()
-      stopStatus()
-    }
+    return stopPrompt
   },
 })

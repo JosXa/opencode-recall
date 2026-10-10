@@ -18,8 +18,8 @@ type Handler = (input: SuggestInput, call: { signal: AbortSignal }) => Promise<S
 async function harness() {
   let suggest: Handler | undefined
   let prepare: (() => Promise<unknown>) | undefined
-  const generate = vi.fn(async (_request: { prompt: string }) => ({ text: 'run the tests' }))
-  const next = vi.fn(async () => ({ text: 'review and commit the changes' }))
+  const generate = vi.fn(async (_request: { prompt: string }) => ({ text: '{"chunks":["the tests"]}' }))
+  const next = vi.fn(async () => ({ text: '{"chunks":["review and commit the changes"]}' }))
   const dispose = vi.fn()
   const context = {
     options: {}, generate: { text: generate }, session: { generate: next },

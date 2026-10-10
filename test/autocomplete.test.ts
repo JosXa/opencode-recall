@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test, vi } from 'vitest'
 import { acceptKey, AutocompleteController, type PromptSnapshot } from '../src/autocomplete-controller.js'
-import { normalizeSuggestion, suggestionPrompt } from '../src/autocomplete.js'
+import { normalizeSuggestion, normalizeSuggestions, suggestionPrompt } from '../src/autocomplete.js'
 import { HistoryDatabase } from '../src/db.js'
 import { HistorySources } from '../src/history-sources.js'
 import { submittedText } from '../src/prompt-example.js'
@@ -38,6 +38,111 @@ test('generation preserves typed text and keeps next actions short', () => {
   expect(normalizeSuggestion('  commit and push the changes\n', next)).toBe('commit and push the changes')
   expect(normalizeSuggestion('one two three four five six seven eight nine', next)).toBe('')
   expect(suggestionPrompt(input, [{ situation: 'Ready', prompt: 'ship it', directory: '/project' }])).toContain('ship it')
+})
+
+test('suffix JSON preserves periods and identifiers without echoing the draft', () => {
+  expect(normalizeSuggestions('{"chunks":[" Add a regression test."," Then run the suite."]}', snapshot('Review the diff.')))
+    .toEqual({ text: 'Review the diff. Add a regression test.', continuations: [' Then run the suite.'] })
+  expect(normalizeSuggestions('{"chunks":["Add a regression test."]}', snapshot('Review the diff. ')))
+    .toEqual({ text: 'Review the diff. Add a regression test.' })
+  expect(normalizeSuggestions('{"chunks":["json scripts"]}', snapshot('package.'))).toEqual({ text: 'package.json scripts' })
+  expect(normalizeSuggestions('{"chunks":["review the diff","Run the tests."]}', snapshot('', { mode: 'next' })))
+    .toEqual({ text: 'review the diff', continuations: [' Run the tests.'] })
+  for (const raw of ['garbage', '{"chunks":[]}', '{"chunks":["NONE"]}', '{"chunks":["a\\nb"]}', '{"chunks":[42]}'])
+    expect(normalizeSuggestions(raw, snapshot())).toEqual({ text: '' })
+  expect(normalizeSuggestions('{"chunks":["the tests","NONE","padding"]}', snapshot())).toEqual({ text: 'run the tests' })
+})
+
+test('Tab acceptance reveals cached chunks immediately while one bounded refill runs', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string; continuations: string[] }>()
+  const request = vi.fn(async (input: { text: string }) => input.text === 'run '
+    ? { text: 'run the tests.', continuations: [' Review the diff.', ' Then commit.'] }
+    : refill.promise)
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot())
+  await vi.advanceTimersByTimeAsync(150)
+  expect(controller.suffix).toBe('the tests.')
+  controller.accepted('run the tests.')
+  expect(controller.suffix).toBe(' Review the diff.')
+  expect(request).toHaveBeenCalledTimes(2)
+  expect(request.mock.calls[1]?.[0]).toEqual({
+    sessionID: 'ses_current',
+    situation: 'The tests pass.',
+    previousUser: '',
+    text: 'run the tests. Review the diff. Then commit.',
+    mode: 'typing',
+  })
+  controller.accepted('run the tests. Review the diff.')
+  expect(controller.suffix).toBe(' Then commit.')
+  controller.accepted('run the tests. Review the diff. Then commit.')
+  controller.update(snapshot('run the tests. Review the diff. Then commit.'))
+  expect(request).toHaveBeenCalledTimes(2)
+  expect(controller.suffix).toBe('')
+  refill.resolve({ text: 'run the tests. Review the diff. Then commit. Push the branch.', continuations: [' Watch CI.'] })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(controller.suffix).toBe(' Push the branch.')
+  controller.dispose()
+})
+
+test('editing or dismissing a chain cancels speculative work and ignores late responses', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string }>()
+  const calls: AbortSignal[] = []
+  const request = vi.fn(async (_input, signal: AbortSignal) => {
+    calls.push(signal)
+    return calls.length === 1 ? { text: 'run the tests.', continuations: [' Review the diff.'] } : refill.promise
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot())
+  await vi.advanceTimersByTimeAsync(150)
+  controller.accepted('run the tests.')
+  controller.update(snapshot('something different'))
+  expect(calls[1]?.aborted).toBe(true)
+  refill.resolve({ text: 'run the tests. Review the diff. Push changes.' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(controller.suffix).toBe('')
+  controller.dispose()
+})
+
+test('backspacing cancels refill while retaining a compatible cached continuation', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string }>()
+  const signals: AbortSignal[] = []
+  const request = vi.fn(async (_input, signal: AbortSignal) => {
+    signals.push(signal)
+    return signals.length === 1 ? { text: 'run the tests.', continuations: [' Review the diff.'] } : refill.promise
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot())
+  await vi.advanceTimersByTimeAsync(150)
+  controller.accepted('run the tests.')
+  controller.update(snapshot('run the test'))
+  expect(signals[1]?.aborted).toBe(true)
+  expect(controller.suffix).toBe('s.')
+  refill.resolve({ text: 'run the tests. Review the diff. Push changes.' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(controller.suffix).toBe('s.')
+  controller.dispose()
+})
+
+test('a refill failure notifies the view after the cached chain is consumed', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string }>()
+  const changed = vi.fn()
+  const request = vi.fn(async (input: { text: string }) => input.text === 'run '
+    ? { text: 'run the tests.' } : refill.promise)
+  const controller = new AutocompleteController(request, changed)
+  controller.update(snapshot())
+  await vi.advanceTimersByTimeAsync(150)
+  controller.accepted('run the tests.')
+  expect(controller.suffix).toBe('')
+  const notifications = changed.mock.calls.length
+  refill.reject(new Error('Generation unavailable'))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(controller.error).toBe('Generation unavailable')
+  expect(changed.mock.calls.length).toBeGreaterThan(notifications)
+  controller.dispose()
 })
 
 test('typing is debounced and a fresh request supersedes an old response', async () => {
@@ -168,7 +273,8 @@ test('native history finds original human prompts through synthetic turns and fe
     create index session_message_seq on session_message(session_id, seq);
     insert into session_v2 values ('ses_past', NULL, 'Past', '/project', 1),
       ('ses_auto', NULL, 'Automation', '/automation', 1), ('ses_current', NULL, 'Current', '/project', 1),
-      ('ses_child', 'ses_past', 'Child', '/project', 1);
+      ('ses_child', 'ses_past', 'Child', '/project', 1),
+      ('ses_job', NULL, 'Scheduled job', '/projects/shepherd/topic-agent', 1);
     insert into session_message values
       ('msg_reply', 'ses_past', 'assistant', 1, 1, 1, '{"content":[{"type":"text","text":"Tests pass"}]}'),
       ('msg_idle', 'ses_past', 'idle', 2, 1, 1, '{}'),
@@ -178,7 +284,9 @@ test('native history finds original human prompts through synthetic turns and fe
       ('msg_current_reply', 'ses_current', 'assistant', 1, 1, 1, '{"content":[{"type":"text","text":"Tests pass"}]}'),
       ('msg_current_user', 'ses_current', 'user', 2, 2, 2, '{"agents":[],"text":"exclude current"}'),
       ('msg_child_reply', 'ses_child', 'assistant', 1, 1, 1, '{"content":[{"type":"text","text":"Tests pass"}]}'),
-      ('msg_child_user', 'ses_child', 'user', 2, 2, 2, '{"agents":[],"text":"exclude child"}');
+      ('msg_child_user', 'ses_child', 'user', 2, 2, 2, '{"agents":[],"text":"exclude child"}'),
+      ('msg_job_reply', 'ses_job', 'assistant', 1, 1, 1, '{"content":[{"type":"text","text":"Tests pass"}]}'),
+      ('msg_job_user', 'ses_job', 'user', 2, 2, 2, '{"agents":[],"text":"exclude scheduled job"}');
   `)
   const db = new HistoryDatabase(path)
   const history = new HistorySources({ sources: [{ id: 'fixture', path, indexPath: join(root, 'index.db') }] })
@@ -187,6 +295,8 @@ test('native history finds original human prompts through synthetic turns and fe
     expect(db.nextPrompt('msg_reply')).toBe('#review then commit')
     expect(db.nextPrompt('msg_auto_reply')).toBeUndefined()
     await history.sync(provider)
+    const ordinary = await history.search('Tests pass', { limit: 40, excludeSubagents: true }, { semantic: true, lexical: false, sync: false }, provider)
+    expect(ordinary.rows.some(row => row.sessionId === 'ses_job')).toBe(true)
     await expect(history.promptExamples('Tests pass', 'fixture::ses_current', {
       model: provider.model, embed: async () => { throw new Error('Ollama unavailable') },
     })).rejects.toThrow(/lexical/i)

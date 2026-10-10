@@ -31,6 +31,7 @@ interface SearchFeatures {
   readonly semantic: boolean
   readonly sync: boolean
   readonly syncOptions?: SyncOptions | undefined
+  readonly excludeAutomations?: boolean
 }
 
 const LEXICAL_FALLBACK_NOTICE =
@@ -86,7 +87,7 @@ export class HistorySources {
         excludeSessionId: sessionID,
         before: Date.now() - 30_000,
       },
-      { semantic: true, lexical: false, sync: false },
+      { semantic: true, lexical: false, sync: false, excludeAutomations: true },
       provider,
     )
     // Autocomplete must retry semantic retrieval after a provider recovers.
@@ -209,7 +210,9 @@ export class HistorySources {
     const scoped = {
       ...scopedOptions(options, entry.source.id),
       // Apply the root-session boundary before either lane limits candidates.
-      ...(options.excludeSubagents ? { sessionIds: entry.history.mainSessionIds() } : {}),
+      ...(options.excludeSubagents
+        ? { sessionIds: entry.history.mainSessionIds(features.excludeAutomations) }
+        : {}),
     }
     const lexical = features.lexical ? index.lexicalSearch(query, scoped) : []
     const semantic =

@@ -245,9 +245,10 @@ export class HistoryDatabase {
     return rows
   }
 
-  public mainSessionIds(): string[] {
+  public mainSessionIds(excludeAutomations = false): string[] {
     return this.#db
-      .query<{ id: string }>('select id from session where parent_id is null')
+      .query<{ id: string }>(`select id from session where parent_id is null
+        ${excludeAutomations ? "and instr(directory || '/', '/shepherd/topic-agent/') = 0 and instr(directory || '/', '/oca/jobs/') = 0" : ''}`)
       .all()
       .map((row) => row.id)
   }
@@ -697,14 +698,26 @@ export class HistoryDatabase {
         return isHumanPrompt(text) ? text : undefined
       }
     }
+    return this.#nextLegacyPrompt(messageId)
+  }
+
+  #nextLegacyPrompt(messageId: string): string | undefined {
+    const anchor = this.#db
+      .query<{ session: string; position: number }, [string]>(
+        'select session_id as session, history_order as position from message where id = ?',
+      )
+      .get(messageId)
+    if (!anchor) return
+    // Bind the session before scanning for a user turn; a self-join made SQLite
+    // scan unrelated legacy sessions instead of using the session/time index.
     const next = this.#db
-      .query<{ id: string; data: string }, [string]>(`
-      select m.id, m.data from message m join message anchor on anchor.id = ?
-      where m.session_id = anchor.session_id and m.history_order > anchor.history_order
+      .query<{ id: string; data: string }, [string, number]>(`
+      select m.id, m.data from message m
+      where m.session_id = ? and m.history_order > ?
         and json_extract(m.data, '$.role') = 'user'
       order by m.history_order, m.id limit 1
     `)
-      .get(messageId)
+      .get(anchor.session, anchor.position)
     if (!next) return
     const parts = readParts(this.#db, [next.id]).flatMap((part) => {
       const data = JSON.parse(part.data) as {
