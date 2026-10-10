@@ -117,9 +117,11 @@ Restart the server and TUI after changing these settings. Omit `autocomplete` or
 set it to `false` to use Recall without automatic generation.
 
 **Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts the visible chunk. Recall
-generates up to three related chunks in one request and shows the next cached
-chunk after each acceptance. It can refill the chain with one background request
-while you use the remaining chunks. Editing or dismissing cancels that request.
+generates a continuation that can include several useful follow-up sentences,
+then caches it as sentences or sections of up to 16 words. Each acceptance shows
+the next cached chunk immediately. Short replies start one background request
+before the first acceptance; longer replies refill as you use the cached chunks.
+Editing or dismissing cancels that request.
 **Alt+F** or
 **Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,

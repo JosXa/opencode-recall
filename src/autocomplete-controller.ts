@@ -120,6 +120,7 @@ export class AutocompleteController {
     if (cached) {
       this.#candidate = makeCandidate(state, cached)
       this.#changed()
+      this.#prefetchMore()
       return
     }
     this.#candidate = undefined
@@ -147,6 +148,7 @@ export class AutocompleteController {
             this.#pending = undefined
             this.#loading = false
             this.#changed()
+            this.#prefetchMore()
           })
       },
       state.mode === 'next' ? 0 : this.#debounce,
@@ -204,9 +206,10 @@ export class AutocompleteController {
   }
 
   #append(state: PromptSnapshot, result: SuggestOutput): void {
-    if (!result.text || this.#candidate?.text !== state.text) return
+    const current = this.#candidate
+    if (!result.text || current?.text !== state.text) return
     const next = makeCandidate(state, result)
-    this.#candidate = { ...next, ends: [...this.#candidate.ends, ...next.ends] }
+    this.#candidate = { ...next, mode: current.mode, ends: [...current.ends, ...next.ends] }
     this.#error = result.notice
     this.#changed()
   }
@@ -214,13 +217,17 @@ export class AutocompleteController {
   #prefetchMore(): void {
     const state = this.#snapshot
     const current = this.#candidate
-    if (!(state && current) || this.#prefetch || !current.text || current.text.length > 4000) return
-    // Refill only after a whole chunk was accepted, with at most two left.
     if (
-      state.text.length < (current.ends[0] ?? 0) ||
-      current.ends.filter((end) => end > state.text.length).length > 2
+      !(state?.eligible && current && this.#compatible(state)) ||
+      this.#prefetch ||
+      !current.text ||
+      current.text.length > 4000
     )
       return
+    // Short model replies need lookahead before the first Tab, not after it.
+    // Longer replies refill once acceptance leaves three cached chunks.
+    const remaining = current.ends.filter((end) => end > state.text.length).length
+    if (remaining > 3 || (remaining === 3 && state.text.length < (current.ends[0] ?? 0))) return
     const future: PromptSnapshot = { ...state, text: current.text, mode: 'typing' }
     const cached = this.#cache.get(cacheKey(future))
     if (cached) {

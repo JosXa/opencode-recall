@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test, vi } from 'vitest'
 import { acceptKey, AutocompleteController, type PromptSnapshot } from '../src/autocomplete-controller.js'
+import type { SuggestInput } from '../src/autocomplete-rpc.js'
 import { normalizeSuggestion, normalizeSuggestions, suggestionPrompt } from '../src/autocomplete.js'
 import { HistoryDatabase } from '../src/db.js'
 import { HistorySources } from '../src/history-sources.js'
@@ -33,24 +34,76 @@ test('generation preserves typed text and keeps next actions short', () => {
   expect(normalizeSuggestion('run ', input)).toBe('')
   expect(normalizeSuggestion('run a\nb', input)).toBe('')
   expect(normalizeSuggestion('NONE', input)).toBe('')
-  expect(normalizeSuggestion('run a b c d e f g h i j k l m', input)).toBe('')
+  expect(normalizeSuggestion('run a b c d e f g h i j k l m n o p q', input)).toBe('')
   const next = snapshot('', { mode: 'next' })
+  expect(suggestionPrompt(next, [])).toContain('completed conversation')
+  expect(suggestionPrompt(next, [])).not.toContain('A new request needs evidence in the draft')
   expect(normalizeSuggestion('  commit and push the changes\n', next)).toBe('commit and push the changes')
   expect(normalizeSuggestion('one two three four five six seven eight nine', next)).toBe('')
   expect(suggestionPrompt(input, [{ situation: 'Ready', prompt: 'ship it', directory: '/project' }])).toContain('ship it')
 })
 
-test('suffix JSON preserves periods and identifiers without echoing the draft', () => {
-  expect(normalizeSuggestions('{"chunks":[" Add a regression test."," Then run the suite."]}', snapshot('Review the diff.')))
+test('a complete generated continuation becomes cached sentences without rewriting the draft', () => {
+  expect(normalizeSuggestions('{"continuation":" Add a regression test. Then run the suite."}', snapshot('Review the diff.')))
     .toEqual({ text: 'Review the diff. Add a regression test.', continuations: [' Then run the suite.'] })
-  expect(normalizeSuggestions('{"chunks":["Add a regression test."]}', snapshot('Review the diff. ')))
+  expect(normalizeSuggestions('{"continuation":"Add a regression test."}', snapshot('Review the diff. ')))
     .toEqual({ text: 'Review the diff. Add a regression test.' })
-  expect(normalizeSuggestions('{"chunks":["json scripts"]}', snapshot('package.'))).toEqual({ text: 'package.json scripts' })
-  expect(normalizeSuggestions('{"chunks":["review the diff","Run the tests."]}', snapshot('', { mode: 'next' })))
-    .toEqual({ text: 'review the diff', continuations: [' Run the tests.'] })
-  for (const raw of ['garbage', '{"chunks":[]}', '{"chunks":["NONE"]}', '{"chunks":["a\\nb"]}', '{"chunks":[42]}'])
+  expect(normalizeSuggestions('{"continuation":"json scripts"}', snapshot('package.'))).toEqual({ text: 'package.json scripts' })
+  expect(normalizeSuggestions('{"continuation":"review the diff. Run the tests."}', snapshot('', { mode: 'next' })))
+    .toEqual({ text: 'review the diff.', continuations: [' Run the tests.'] })
+  for (const raw of ['garbage', '{"continuation":""}', '{"continuation":"NONE"}', '{"continuation":"a\\nb"}', '{"continuation":42}'])
     expect(normalizeSuggestions(raw, snapshot())).toEqual({ text: '' })
-  expect(normalizeSuggestions('{"chunks":["the tests","NONE","padding"]}', snapshot())).toEqual({ text: 'run the tests' })
+})
+
+test('long sentences produce bounded word chunks and keep every prepared word', () => {
+  const continuation = ' ' + Array.from({ length: 50 }, (_, index) => `word${index}`).join(' ') + '.'
+  const output = normalizeSuggestions(JSON.stringify({ continuation }), snapshot('Explain'))
+  expect(output.continuations).toHaveLength(3)
+  expect(output.text + output.continuations?.join('')).toBe('Explain' + continuation)
+  const next = normalizeSuggestions(JSON.stringify({ continuation }), snapshot('', { mode: 'next' }))
+  expect(next.text.split(' ')).toHaveLength(8)
+  expect(next.text + next.continuations?.join('')).toBe(continuation.trimStart())
+})
+
+test('long sentences prefer a meaningful clause within the display word budget', () => {
+  const first = ' keep the cached text outside the edit buffer, '
+  const second = 'and cancel background generation whenever the user changes the draft or moves the cursor.'
+  const output = normalizeSuggestions(JSON.stringify({ continuation: first + second }), snapshot('Please'))
+  expect(output.text).toBe('Please' + first.trimEnd())
+  expect(output.continuations).toEqual([' ' + second])
+})
+
+test('oversized or oversegmented responses never expose a silently truncated continuation', () => {
+  for (const continuation of [Array(73).fill('word').join(' '), ' One. Two. Three. Four. Five. Six. Seven. Eight. Nine.']) {
+    expect(normalizeSuggestions(JSON.stringify({ continuation }), snapshot())).toEqual({ text: '' })
+  }
+})
+
+test('sentence boundaries inside URL query strings preserve the full token', () => {
+  const continuation = ' open https://example.com/?page=2 and report the results. Check the redirects.'
+  const output = normalizeSuggestions(JSON.stringify({ continuation }), snapshot('Please'))
+  expect(output.text + (output.continuations?.join('') ?? '')).toBe('Please' + continuation)
+})
+
+test('real server normalization prepares multiple immediate Tabs beyond the first sentence', async () => {
+  vi.useFakeTimers()
+  const continuation = ' the changes for bugs. Pay particular attention to cancellation and stale results. Explain any issues before changing the code.'
+  const request = vi.fn(async (input: SuggestInput) => input.text === 'Please review'
+    ? normalizeSuggestions(JSON.stringify({ continuation }), input)
+    : new Promise<never>(() => {}))
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot('Please review'))
+  await vi.advanceTimersByTimeAsync(150)
+  let text = 'Please review'
+  for (const suffix of [' the changes for bugs.', ' Pay particular attention to cancellation and stale results.', ' Explain any issues before changing the code.']) {
+    expect(controller.suffix).toBe(suffix)
+    text += controller.suffix
+    controller.accepted(text)
+    controller.update(snapshot(text))
+  }
+  expect(text).toBe('Please review' + continuation)
+  expect(request).toHaveBeenCalledTimes(2)
+  controller.dispose()
 })
 
 test('Tab acceptance reveals cached chunks immediately while one bounded refill runs', async () => {
@@ -83,6 +136,67 @@ test('Tab acceptance reveals cached chunks immediately while one bounded refill 
   await vi.advanceTimersByTimeAsync(0)
   expect(controller.suffix).toBe(' Push the branch.')
   controller.dispose()
+})
+
+test('a short next action prepares follow-up text before acceptance and keeps the first action visible', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string; continuations: string[] }>()
+  const request = vi.fn(async (input: SuggestInput) => {
+    if (input.mode === 'next') return { text: 'Review the changes.' }
+    if (input.text === 'Review the changes.') return refill.promise
+    return { text: '' }
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot('', { mode: 'next' }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(request).toHaveBeenCalledTimes(2)
+  expect(request.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ mode: 'typing', text: 'Review the changes.' }))
+  refill.resolve({ text: 'Review the changes. Check cancellation.', continuations: [' Explain any issues.'] })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(controller.suffix).toBe('Review the changes.')
+  controller.accepted('Review the changes.')
+  expect(controller.suffix).toBe(' Check cancellation.')
+  controller.accepted('Review the changes. Check cancellation.')
+  expect(controller.suffix).toBe(' Explain any issues.')
+  controller.dispose()
+})
+
+test('editing before the first acceptance cancels short-reply lookahead', async () => {
+  vi.useFakeTimers()
+  const signals: AbortSignal[] = []
+  const request = vi.fn(async (_input, signal: AbortSignal) => {
+    signals.push(signal)
+    return signals.length === 1 ? { text: 'run the tests.' } : new Promise<never>(() => {})
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot())
+  await vi.advanceTimersByTimeAsync(150)
+  expect(request).toHaveBeenCalledTimes(2)
+  controller.update(snapshot('different'))
+  expect(signals[1]?.aborted).toBe(true)
+  controller.dispose()
+})
+
+test('a synchronous view change prevents eager lookahead after eligibility or context is lost', async () => {
+  vi.useFakeTimers()
+  for (const change of [{ eligible: false }, { situation: 'A different reply.' }]) {
+    const reply = Promise.withResolvers<{ text: string }>()
+    const request = vi.fn(async () => reply.promise)
+    let loseContext = false
+    const controller = new AutocompleteController(request, () => {
+      if (!loseContext) return
+      loseContext = false
+      controller.update(snapshot('run ', change))
+    })
+    controller.update(snapshot())
+    await vi.advanceTimersByTimeAsync(150)
+    loseContext = true
+    reply.resolve({ text: 'run the tests.' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(controller.suffix).toBe('')
+    controller.dispose()
+  }
 })
 
 test('editing or dismissing a chain cancels speculative work and ignores late responses', async () => {
@@ -172,7 +286,7 @@ test('typing is debounced and a fresh request supersedes an old response', async
 
 test('a matching continuation stays instant; menus, cursor moves and sessions suppress it', async () => {
   vi.useFakeTimers()
-  const request = vi.fn(async () => ({ text: 'run the tests' }))
+  const request = vi.fn(async (input: { text: string }) => ({ text: input.text === 'run ' ? 'run the tests' : '' }))
   const controller = new AutocompleteController(request, () => {})
   controller.update(snapshot())
   await vi.advanceTimersByTimeAsync(150)
@@ -180,7 +294,7 @@ test('a matching continuation stays instant; menus, cursor moves and sessions su
   controller.update(snapshot('run the '))
   expect(controller.suffix).toBe('tests')
   await vi.advanceTimersByTimeAsync(150)
-  expect(request).toHaveBeenCalledTimes(1)
+  expect(request).toHaveBeenCalledTimes(2)
   controller.update(snapshot('run the ', { eligible: false }))
   expect(controller.suffix).toBe('')
   controller.update(snapshot('run the '))
@@ -206,13 +320,13 @@ test('turn-end suggestions cancel as soon as typing starts and no-suggestion is 
   controller.update(snapshot('r', { eligible: false }))
   controller.update(snapshot('r'))
   await vi.advanceTimersByTimeAsync(150)
-  expect(request).toHaveBeenCalledTimes(2)
+  expect(request).toHaveBeenCalledTimes(3)
   controller.dispose()
 })
 
 test('explicit word acceptance preserves the rest of a next-action suggestion', async () => {
   vi.useFakeTimers()
-  const request = vi.fn(async () => ({ text: 'review and commit the changes' }))
+  const request = vi.fn(async (input: SuggestInput) => ({ text: input.mode === 'next' ? 'review and commit the changes' : '' }))
   const controller = new AutocompleteController(request, () => {})
   controller.update(snapshot('', { mode: 'next' }))
   await vi.advanceTimersByTimeAsync(0)
@@ -223,13 +337,13 @@ test('explicit word acceptance preserves the rest of a next-action suggestion', 
   controller.update(snapshot('review and'))
   expect(controller.suffix).toBe(' commit the changes')
   await vi.advanceTimersByTimeAsync(200)
-  expect(request).toHaveBeenCalledTimes(1)
+  expect(request).toHaveBeenCalledTimes(2)
   controller.dispose()
 })
 
 test('streaming reply revisions invalidate requests, candidates and cached misses', async () => {
   vi.useFakeTimers()
-  const request = vi.fn(async (input: { situation: string }) => ({ text: input.situation === 'final' ? 'run the tests' : '' }))
+  const request = vi.fn(async (input: SuggestInput) => ({ text: input.situation === 'final' && input.text === 'run ' ? 'run the tests' : '' }))
   const controller = new AutocompleteController(request, () => {})
   controller.update(snapshot())
   await vi.advanceTimersByTimeAsync(150)
@@ -240,14 +354,14 @@ test('streaming reply revisions invalidate requests, candidates and cached misse
   controller.update(snapshot('run ', { situation: 'new context' }))
   expect(controller.suffix).toBe('')
   await vi.advanceTimersByTimeAsync(150)
-  expect(request).toHaveBeenCalledTimes(3)
+  expect(request).toHaveBeenCalledTimes(4)
   controller.dispose()
 })
 
 test('typing includes the original preceding question and does not reuse another question\'s candidate', async () => {
   vi.useFakeTimers()
   expect(submittedText({ 'opencode-snippets:submitted': { text: '#pr explain this' } }, 'Expanded skill')).toBe('#pr explain this')
-  const request = vi.fn(async () => ({ text: 'and why does it need that section?' }))
+  const request = vi.fn(async (input: { text: string }) => ({ text: input.text === 'and why ' ? 'and why does it need that section?' : '' }))
   const controller = new AutocompleteController(request, () => {})
   const state = snapshot('and why ', { previousUser: 'what does pr do?' })
   expect(suggestionPrompt(state, [])).toContain('what does pr do?')
@@ -259,7 +373,7 @@ test('typing includes the original preceding question and does not reuse another
   controller.update({ ...state, previousUser: 'what does retro do?' })
   expect(controller.suffix).toBe('')
   await vi.advanceTimersByTimeAsync(150)
-  expect(request).toHaveBeenCalledTimes(2)
+  expect(request).toHaveBeenCalledTimes(4)
   controller.dispose()
 })
 

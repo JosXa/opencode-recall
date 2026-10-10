@@ -40,7 +40,7 @@ export const Autocomplete = Rpc.define({
         additionalProperties: false,
         properties: {
           text: { type: 'string' },
-          continuations: { type: 'array', maxItems: 2, items: { type: 'string' } },
+          continuations: { type: 'array', maxItems: 7, items: { type: 'string' } },
           notice: { type: 'string' },
         },
         required: ['text'],
