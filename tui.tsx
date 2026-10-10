@@ -6,12 +6,13 @@ import type {
   KeyEvent,
   TextareaRenderable,
 } from '@opentui/core'
-import { createSignal, onCleanup, onMount, Show } from 'solid-js'
+import { onCleanup, onMount } from 'solid-js'
 import {
   AutocompleteController,
   acceptKey,
   type PromptSnapshot,
 } from './src/autocomplete-controller.js'
+import { AutocompleteGhost } from './src/autocomplete-ghost.js'
 import { Autocomplete, type SuggestOutput } from './src/autocomplete-rpc.js'
 import { submittedText } from './src/prompt-example.js'
 
@@ -69,12 +70,17 @@ export default Plugin.define({
     const stopPrompt = context.ui.slot({
       append: 'prompt.footer',
       render: (footer) => {
-        const [ghost, setGhost] = createSignal('')
-        const [position, setPosition] = createSignal(
-          { top: 0, left: 0, width: 1 },
-          { equals: (a, b) => a.top === b.top && a.left === b.left && a.width === b.width },
-        )
         let anchor: BoxRenderable | undefined
+        const ghost = new AutocompleteGhost(context.renderer, {
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          visible: false,
+          fg: context.theme.text.muted,
+          wrapMode: 'word',
+          selectable: false,
+          zIndex: 50,
+        })
         let hidden:
           | { editor: TextareaRenderable; placeholder: TextareaRenderable['placeholder'] }
           | undefined
@@ -139,7 +145,6 @@ export default Plugin.define({
           controller.update(snapshot(editor))
           const text = editor?.plainText ?? ''
           const suffix = controller.suffix
-          setGhost(suffix)
           // The placeholder must be removed rather than painted over, including
           // transparent themes. Ghost text stays outside the edit buffer.
           if (hidden && (hidden.editor !== editor || !suffix || text)) restore()
@@ -147,13 +152,9 @@ export default Plugin.define({
             hidden = { editor, placeholder: editor.placeholder }
             editor.placeholder = null
           }
-          if (!(editor && suffix && anchor)) return
-          const cursor = editor.visualCursor
-          setPosition({
-            top: editor.y + cursor.visualRow - anchor.y,
-            left: editor.x + cursor.visualCol - anchor.x,
-            width: Math.max(1, editor.width - cursor.visualCol),
-          })
+          if (!(editor && suffix && anchor)) return ghost.hide()
+          ghost.fg = context.theme.text.muted
+          ghost.update(editor, suffix)
         }
         const keypress = (event: KeyEvent) => {
           sync()
@@ -161,7 +162,7 @@ export default Plugin.define({
           // for the fallback poll when no ghost is currently visible.
           queueMicrotask(sync)
           const editor = active()
-          if (!(editor && controller.suffix)) return
+          if (!(editor && controller.suffix && ghost.hasRoom)) return
           const name = event.name?.toLowerCase()
           if (name === 'escape') {
             controller.dismiss()
@@ -187,31 +188,18 @@ export default Plugin.define({
           clearInterval(timer)
           context.renderer.keyInput.removeListener('keypress', keypress)
           controller.dispose()
+          ghost.destroy()
           restore()
         })
         return (
           <box
             ref={(box) => {
               anchor = box
+              box.add(ghost)
             }}
             width={0}
             height={0}
-          >
-            <Show when={ghost()}>
-              <box
-                position="absolute"
-                top={position().top}
-                left={position().left}
-                width={position().width}
-                height={1}
-                zIndex={50}
-              >
-                <text fg={context.theme.text.muted} wrapMode="none">
-                  {ghost()}
-                </text>
-              </box>
-            </Show>
-          </box>
+          />
         )
       },
     })

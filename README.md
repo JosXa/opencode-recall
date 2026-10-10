@@ -124,7 +124,9 @@ while you use the remaining chunks. Editing or dismissing cancels that request.
 **Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,
 moving away from the end, using shell mode, or opening snippets and native menus.
-The first version displays one line and clips longer suggestions.
+Suggestions wrap across up to three display rows inside the prompt card. Recall
+temporarily reserves extra input height within OpenCode's limit and restores it
+when the suggestion hides. Longer suggestions are clipped at that limit.
 
 Recall uses its existing local embeddings to find similar replies and the user's
 next original prompt, including text before snippet expansion. It excludes
