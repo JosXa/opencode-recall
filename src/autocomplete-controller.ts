@@ -28,6 +28,36 @@ type Candidate = {
   ends: readonly number[]
 }
 
+const spaces = /^ +$/u
+const leadingSpaces = /^ +/u
+
+function sameContext(previous: PromptSnapshot | undefined, state: PromptSnapshot): boolean {
+  return (
+    previous?.scope === state.scope &&
+    previous.sessionID === state.sessionID &&
+    previous.situation === state.situation &&
+    previous.previousUser === state.previousUser &&
+    previous.eligible === state.eligible
+  )
+}
+
+function rebaseText(text: string, from: string, to: string): string {
+  if (text.length === 0 || !text.startsWith(from)) return text
+  const suffix = text.slice(from.length)
+  const remaining = to.endsWith(' ') ? suffix.replace(leadingSpaces, '') : suffix
+  return to + remaining
+}
+
+function rebaseCandidate(candidate: Candidate, from: string, to: string): Candidate {
+  const text = rebaseText(candidate.text, from, to)
+  const delta = text.length - candidate.text.length
+  return {
+    ...candidate,
+    text,
+    ends: candidate.ends.map((end) => (end > from.length ? end + delta : end)),
+  }
+}
+
 const cacheKey = (state: PromptSnapshot) =>
   `${state.scope}\0${state.situation}\0${state.previousUser ?? ''}\0${state.mode}\0${state.text}`
 
@@ -92,15 +122,9 @@ export class AutocompleteController {
 
   public update(state: PromptSnapshot): void {
     const previous = this.#snapshot
-    if (
-      previous?.scope === state.scope &&
-      previous.situation === state.situation &&
-      previous.previousUser === state.previousUser &&
-      previous.text === state.text &&
-      previous.eligible === state.eligible &&
-      previous.mode === state.mode
-    )
-      return
+    const contextMatches = sameContext(previous, state)
+    if (contextMatches && previous?.text === state.text && previous.mode === state.mode) return
+    if (this.#carrySpaces(previous, state)) return
     this.#cancel()
     this.#snapshot = state
     // accepted() updates the snapshot itself; other text changes are manual edits.
@@ -134,9 +158,16 @@ export class AutocompleteController {
         void this.#request(requestInput(state), pending.signal)
           .then((result) => {
             if (pending.signal.aborted || this.#pending !== pending) return
-            if (this.#cache.size >= 20) this.#cache.delete(this.#cache.keys().next().value ?? '')
-            this.#cache.set(key, result)
-            this.#candidate = makeCandidate(state, result)
+            this.#remember(state, result)
+            const current = this.#snapshot ?? state
+            this.#remember(current, {
+              ...result,
+              text: rebaseText(result.text, state.text, current.text),
+            })
+            this.#candidate = {
+              ...rebaseCandidate(makeCandidate(state, result), state.text, current.text),
+              mode: current.mode,
+            }
             this.#error = result.notice
           })
           .catch((error: unknown) => {
@@ -170,7 +201,7 @@ export class AutocompleteController {
     this.#cancel()
     this.#cancelPrefetch()
     this.#candidate = undefined
-    if (this.#snapshot) this.#cache.set(cacheKey(this.#snapshot), { text: '' })
+    if (this.#snapshot) this.#remember(this.#snapshot, { text: '' })
     this.#changed()
   }
 
@@ -178,6 +209,47 @@ export class AutocompleteController {
     this.#cancel()
     this.#cancelPrefetch()
     this.#snapshot = undefined
+  }
+
+  #carrySpaces(previous: PromptSnapshot | undefined, state: PromptSnapshot): boolean {
+    if (
+      !(
+        previous &&
+        state.eligible &&
+        sameContext(previous, state) &&
+        state.text.startsWith(previous.text) &&
+        spaces.test(state.text.slice(previous.text.length))
+      )
+    )
+      return false
+    if (previous.mode !== state.mode && !(previous.mode === 'next' && previous.text === ''))
+      return false
+    // A trailing space carries the existing pipeline forward, including its deadline.
+    this.#carryCached(previous, state)
+    this.#snapshot = state
+    if (this.#candidate) {
+      const future: PromptSnapshot = { ...previous, text: this.#candidate.text, mode: 'typing' }
+      this.#candidate = {
+        ...rebaseCandidate(this.#candidate, previous.text, state.text),
+        mode: state.mode,
+      }
+      this.#carryCached(future, { ...state, text: this.#candidate.text, mode: 'typing' })
+      if (this.#prefetch) this.#prefetch.text = this.#candidate.text
+    }
+    this.#changed()
+    return true
+  }
+
+  #remember(state: PromptSnapshot, result: SuggestOutput): void {
+    const key = cacheKey(state)
+    if (this.#cache.size >= 20 && !this.#cache.has(key))
+      this.#cache.delete(this.#cache.keys().next().value ?? '')
+    this.#cache.set(key, result)
+  }
+
+  #carryCached(from: PromptSnapshot, to: PromptSnapshot): void {
+    const cached = this.#cache.get(cacheKey(from))
+    if (cached) this.#remember(to, { ...cached, text: rebaseText(cached.text, from.text, to.text) })
   }
 
   #cancel(): void {
@@ -205,10 +277,10 @@ export class AutocompleteController {
     )
   }
 
-  #append(state: PromptSnapshot, result: SuggestOutput): void {
+  #append(state: PromptSnapshot, result: SuggestOutput, prefix = state.text): void {
     const current = this.#candidate
-    if (!result.text || current?.text !== state.text) return
-    const next = makeCandidate(state, result)
+    if (!result.text || current?.text !== prefix) return
+    const next = rebaseCandidate(makeCandidate(state, result), state.text, prefix)
     this.#candidate = { ...next, mode: current.mode, ends: [...current.ends, ...next.ends] }
     this.#error = result.notice
     this.#changed()
@@ -239,9 +311,15 @@ export class AutocompleteController {
     void this.#request(requestInput(future), task.controller.signal)
       .then((result) => {
         if (task.controller.signal.aborted || this.#prefetch !== task) return
-        if (this.#cache.size >= 20) this.#cache.delete(this.#cache.keys().next().value ?? '')
-        this.#cache.set(cacheKey(future), result)
-        this.#append(future, result)
+        this.#remember(future, result)
+        this.#remember(
+          { ...future, text: task.text },
+          {
+            ...result,
+            text: rebaseText(result.text, future.text, task.text),
+          },
+        )
+        this.#append(future, result, task.text)
       })
       .catch((error: unknown) => {
         if (task.controller.signal.aborted) return
