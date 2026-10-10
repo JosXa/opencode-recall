@@ -16,18 +16,46 @@ test('display waits for 500ms of idle typing independently of generation start',
   expect(indicator.update('Review', 20, false, 501)).toBe('')
 })
 
-test('spaces and repeated typing reset only the display deadline', () => {
+test('trailing-space edits preserve the pending display deadline', () => {
   const indicator = new GenerationIndicator()
   indicator.update('Review', 20, true, 0)
   expect(indicator.update('Review ', 20, true, 300)).toBe('')
-  expect(indicator.update('Review ', 20, true, 799)).toBe('')
-  expect(indicator.update('Review ', 20, true, 800)).toBe(' •')
-  expect(indicator.update('Review  ', 20, true, 801)).toBe('')
-  expect(indicator.update('Review  ', 20, true, 1300)).toBe('')
-  expect(indicator.update('Review  ', 20, true, 1301)).toBe(' •')
+  expect(indicator.update('Review   ', 20, true, 400)).toBe('')
+  expect(indicator.update('Review', 20, true, 499)).toBe('')
+  expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
 })
 
-test('a key hides an existing hint before the host edits or moves its cursor', () => {
+test('adding, deleting and replacing trailing spaces keep a visible hint', () => {
+  const indicator = new GenerationIndicator()
+  indicator.update('Review ', 20, true, 0)
+  expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
+  for (const text of ['Review   ', 'Review ', 'Review', 'Review  ', 'Review'])
+    expect(indicator.update(text, 20, true, 600)).toBe(' •')
+  expect(indicator.update('Review ', 1, true, 601)).toBe('')
+  expect(indicator.update('Review', 20, true, 602)).toBe(' •')
+})
+
+test('whitespace-only drafts preserve the display deadline in both directions', () => {
+  const indicator = new GenerationIndicator()
+  indicator.update('', 20, true, 0)
+  expect(indicator.update('   ', 20, true, 499)).toBe('')
+  expect(indicator.update('', 20, true, 500)).toBe(' •')
+  expect(indicator.update(' ', 20, true, 501)).toBe(' •')
+  expect(indicator.update('', 20, true, 502)).toBe(' •')
+})
+
+test('letter edits, internal spaces and line breaks still reset the display deadline', () => {
+  for (const text of ['Review it', 'Revie', 'Re view', 'Review\n', 'Review\t']) {
+    const indicator = new GenerationIndicator()
+    indicator.update('Review ', 20, true, 0)
+    expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
+    expect(indicator.update(text, 20, true, 600)).toBe('')
+    expect(indicator.update(text, 20, true, 1099)).toBe('')
+    expect(indicator.update(text, 20, true, 1100)).toBe(' •')
+  }
+})
+
+test('a key without a text edit restarts the display deadline', () => {
   const indicator = new GenerationIndicator()
   indicator.update('Review ', 20, true, 0)
   expect(indicator.update('Review ', 20, true, 500)).toBe(' •')

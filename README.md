@@ -100,6 +100,7 @@ the empty input. Suggestions stay outside the edit buffer until you accept them.
 After 500 ms without typing, a small gray `•` pulses in brightness while generation runs.
 Its display delay is separate from autocomplete timing, and it leaves the caret
 cell empty even after a typed space.
+Edits to trailing spaces keep the dot visible and preserve its display deadline.
 Cached suggestions stay visible while the background request runs.
 
 Enable autocomplete in both the server plugin registration (`opencode.json`) and

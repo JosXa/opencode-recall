@@ -189,13 +189,14 @@ export default Plugin.define({
           ghost.update(editor, content)
         }
         const keypress = (event: KeyEvent) => {
-          // Hide the hint before the host moves the caret or edits the buffer.
-          indicator.edited(performance.now())
-          sync()
-          // Read edited text after the host handles the key, without waiting
-          // for the fallback poll when no ghost is currently visible.
-          queueMicrotask(sync)
           const editor = active()
+          const text = editor?.plainText
+          // Read edited text after the host handles the key, without waiting
+          // for the fallback poll; trailing-space edits keep the pulse running.
+          queueMicrotask(() => {
+            if (editor?.plainText === text) indicator.edited(performance.now())
+            sync()
+          })
           if (!(editor && controller.suffix && ghost.hasRoom)) return
           const name = event.name?.toLowerCase()
           if (name === 'escape') {

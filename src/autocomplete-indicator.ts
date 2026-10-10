@@ -6,6 +6,7 @@ export function generationHint(columns: number): string {
 }
 
 export const indicatorDebounceMs = 500
+const trailingSpaces = / +$/u
 
 /** Display timing is independent of request debounce, cancellation, and caching. */
 export class GenerationIndicator {
@@ -18,8 +19,13 @@ export class GenerationIndicator {
 
   update(text: string, columns: number, generating: boolean, now: number): string {
     if (text !== this.#text) {
+      // Trailing-space edits preserve both a visible pulse and its pending deadline.
+      if (
+        this.#text === undefined ||
+        text.replace(trailingSpaces, '') !== this.#text.replace(trailingSpaces, '')
+      )
+        this.edited(now)
       this.#text = text
-      this.edited(now)
     }
     if (!generating || now - this.#editedAt < indicatorDebounceMs) return ''
     return generationHint(columns)
