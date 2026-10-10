@@ -1,9 +1,29 @@
 import type { RGBA } from '@opentui/core'
 
-/** The hint is render-only and never reserves another input row. */
-export function generationHint(text: string, columns: number): string {
-  const hint = text.endsWith(' ') ? '•' : ' •'
-  return columns >= hint.length ? hint : ''
+/** Reserve the caret cell even when the user already typed a trailing space. */
+export function generationHint(columns: number): string {
+  return columns >= 2 ? ' •' : ''
+}
+
+export const indicatorDebounceMs = 500
+
+/** Display timing is independent of request debounce, cancellation, and caching. */
+export class GenerationIndicator {
+  #text: string | undefined
+  #editedAt = 0
+
+  edited(now: number) {
+    this.#editedAt = now
+  }
+
+  update(text: string, columns: number, generating: boolean, now: number): string {
+    if (text !== this.#text) {
+      this.#text = text
+      this.edited(now)
+    }
+    if (!generating || now - this.#editedAt < indicatorDebounceMs) return ''
+    return generationHint(columns)
+  }
 }
 
 export function generationGray(elapsed: number, muted: Pick<RGBA, 'r' | 'g' | 'b'>): number {

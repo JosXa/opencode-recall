@@ -14,7 +14,7 @@ import {
   type PromptSnapshot,
 } from './src/autocomplete-controller.js'
 import { AutocompleteGhost } from './src/autocomplete-ghost.js'
-import { generationGray, generationHint } from './src/autocomplete-indicator.js'
+import { GenerationIndicator, generationGray } from './src/autocomplete-indicator.js'
 import { Autocomplete, type SuggestOutput } from './src/autocomplete-rpc.js'
 import { submittedText } from './src/prompt-example.js'
 
@@ -87,6 +87,7 @@ export default Plugin.define({
           | { editor: TextareaRenderable; placeholder: TextareaRenderable['placeholder'] }
           | undefined
         let reported: string | undefined
+        const indicator = new GenerationIndicator()
         let pulseStarted: number | undefined
         let pulseGray: number | undefined
         const color = (busy: boolean) => {
@@ -173,10 +174,14 @@ export default Plugin.define({
           const editor = active()
           controller.update(snapshot(editor))
           const suffix = controller.suffix
-          const hint =
-            editor && !suffix && controller.generating
-              ? generationHint(editor.plainText, editor.width - editor.visualCursor.visualCol)
-              : ''
+          const hint = editor
+            ? indicator.update(
+                editor.plainText,
+                editor.width - editor.visualCursor.visualCol,
+                controller.generating && !suffix,
+                performance.now(),
+              )
+            : ''
           const content = suffix || hint
           syncPlaceholder(editor, content)
           color(hint.length > 0)
@@ -184,6 +189,8 @@ export default Plugin.define({
           ghost.update(editor, content)
         }
         const keypress = (event: KeyEvent) => {
+          // Hide the hint before the host moves the caret or edits the buffer.
+          indicator.edited(performance.now())
           sync()
           // Read edited text after the host handles the key, without waiting
           // for the fallback poll when no ghost is currently visible.
