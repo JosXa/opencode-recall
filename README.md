@@ -125,8 +125,8 @@ generates a continuation that can include several useful follow-up sentences,
 then caches it as sentences or sections of up to 16 words. Each acceptance shows
 the next cached chunk immediately. Short replies start one background request
 before the first acceptance. Longer replies refill as you use the cached chunks.
-Adding trailing spaces preserves the debounce deadline, active generation, and
-cached chunks. Other edits or dismissal cancel the background request.
+Adding, deleting, or replacing trailing spaces preserves the debounce deadline,
+active generation, and cached chunks. Other edits or dismissal cancel the background request.
 **Alt+F** or
 **Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,

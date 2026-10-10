@@ -354,6 +354,199 @@ test('spaces preserve an in-flight request and align its result with the actual 
   controller.dispose()
 })
 
+test('all trailing-space edits preserve the original deadline and request draft', async () => {
+  vi.useFakeTimers()
+  const request = vi.fn(async () => ({ text: '' }))
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot('Please review   '))
+  for (const text of ['Please review ', 'Please review', 'Please review    ', 'Please review']) {
+    await vi.advanceTimersByTimeAsync(30)
+    controller.update(snapshot(text))
+  }
+  await vi.advanceTimersByTimeAsync(29)
+  expect(request).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: 'Please review   ' }), expect.any(AbortSignal))
+  controller.update(snapshot('Please review '))
+  controller.update(snapshot('Please review'))
+  await vi.advanceTimersByTimeAsync(300)
+  expect(request).toHaveBeenCalledTimes(1)
+  controller.dispose()
+})
+
+test('deleting trailing spaces preserves active generation and its word boundary', async () => {
+  vi.useFakeTimers()
+  const response = Promise.withResolvers<{ text: string; continuations: string[] }>()
+  const signals: AbortSignal[] = []
+  const request = vi.fn(async (_input: SuggestInput, signal: AbortSignal) => {
+    signals.push(signal)
+    return signals.length === 1 ? response.promise : new Promise<never>(() => {})
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot('Please review   '))
+  await vi.advanceTimersByTimeAsync(150)
+  controller.update(snapshot('Please review '))
+  controller.update(snapshot('Please review'))
+  expect(signals[0]?.aborted).toBe(false)
+  response.resolve({ text: 'Please review   the changes.', continuations: [' Check cancellation.', ' Explain any issues.'] })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(controller.suffix).toBe(' the changes.')
+  expect(request).toHaveBeenCalledTimes(1)
+  controller.accepted('Please review the changes.')
+  expect(controller.suffix).toBe(' Check cancellation.')
+  controller.dispose()
+})
+
+test('cached token continuations survive repeated trailing-space undo and redo', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string }>()
+  const signals: AbortSignal[] = []
+  const request = vi.fn(async (_input: SuggestInput, signal: AbortSignal) => {
+    signals.push(signal)
+    if (signals.length === 1) return { text: 'package.json scripts' }
+    if (signals.length === 2) return refill.promise
+    return new Promise<never>(() => {})
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot('package.'))
+  await vi.advanceTimersByTimeAsync(150)
+  for (const text of ['package. ', 'package.   ', 'package. ', 'package.', 'package.  ', 'package.']) {
+    controller.update(snapshot(text))
+    expect(controller.suffix).toBe('json scripts')
+    expect(signals[1]?.aborted).toBe(false)
+  }
+  refill.resolve({ text: 'package.json scripts Check the commands.' })
+  await vi.advanceTimersByTimeAsync(0)
+  controller.update(snapshot('package. '))
+  controller.update(snapshot('package.'))
+  expect(controller.suffix).toBe('json scripts')
+  expect(request).toHaveBeenCalledTimes(2)
+  controller.accepted('package.json scripts')
+  expect(controller.suffix).toBe(' Check the commands.')
+  expect(request).toHaveBeenCalledTimes(3)
+  expect(request.mock.calls[2]?.[0].text).toBe('package.json scripts Check the commands.')
+  controller.dispose()
+})
+
+test('token separators survive focus changes and cache reuse after trailing-space edits', async () => {
+  vi.useFakeTimers()
+  const refill = Promise.withResolvers<{ text: string }>()
+  const request = vi.fn(async (_input: SuggestInput) => {
+    if (request.mock.calls.length === 1) return { text: 'package.json' }
+    if (request.mock.calls.length === 2) return refill.promise
+    return { text: '' }
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(snapshot('package.'))
+  await vi.advanceTimersByTimeAsync(150)
+  controller.update(snapshot('package. '))
+  controller.update(snapshot('package. ', { eligible: false }))
+  controller.update(snapshot('package. '))
+  controller.update(snapshot('package.'))
+  expect(controller.suffix).toBe('json')
+  controller.dispose()
+
+  const pending = Promise.withResolvers<{ text: string }>()
+  const cachedRequest = vi.fn(async (_input: SuggestInput) => {
+    if (cachedRequest.mock.calls.length === 1) return { text: 'package.json' }
+    if (cachedRequest.mock.calls.length === 2) return pending.promise
+    return { text: '' }
+  })
+  const cached = new AutocompleteController(cachedRequest, () => {})
+  cached.update(snapshot('package.'))
+  await vi.advanceTimersByTimeAsync(150)
+  cached.accepted('package.json')
+  cached.update(snapshot('package.json '))
+  pending.resolve({ text: 'package.jsonc' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(cached.suffix).toBe('c')
+  cached.update(snapshot('package.json'))
+  expect(cached.suffix).toBe('c')
+  cached.update(snapshot('different'))
+  cached.update(snapshot('package.json'))
+  expect(cached.suffix).toBe('c')
+  cached.dispose()
+})
+
+test('cached word separators and empty refill outcomes survive space deletion', async () => {
+  vi.useFakeTimers()
+  for (const timing of ['during', 'after']) {
+    const refill = Promise.withResolvers<{ text: string }>()
+    const signals: AbortSignal[] = []
+    const request = vi.fn(async (_input: SuggestInput, signal: AbortSignal) => {
+      signals.push(signal)
+      return signals.length === 1
+        ? { text: 'Please review   the changes.', continuations: [' Check cancellation.'] }
+        : refill.promise
+    })
+    const controller = new AutocompleteController(request, () => {})
+    controller.update(snapshot('Please review   '))
+    await vi.advanceTimersByTimeAsync(150)
+    if (timing === 'during') {
+      controller.update(snapshot('Please review '))
+      controller.update(snapshot('Please review'))
+    }
+    refill.resolve({ text: '' })
+    await vi.advanceTimersByTimeAsync(0)
+    if (timing === 'after') {
+      controller.update(snapshot('Please review '))
+      controller.update(snapshot('Please review'))
+    }
+    expect(controller.suffix).toBe(' the changes.')
+    controller.accepted('Please review the changes.')
+    controller.update(snapshot('Please review the changes.  '))
+    controller.update(snapshot('Please review the changes.'))
+    expect(controller.suffix).toBe(' Check cancellation.')
+    controller.accepted('Please review the changes. Check cancellation.')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(signals[1]?.aborted).toBe(false)
+    controller.dispose()
+  }
+})
+
+test('removing whitespace-only input restores next mode without cancelling the pending action', async () => {
+  vi.useFakeTimers()
+  for (const start of ['', '   ']) {
+    const response = Promise.withResolvers<{ text: string; continuations: string[] }>()
+    const signals: AbortSignal[] = []
+    const request = vi.fn(async (_input: SuggestInput, signal: AbortSignal) => {
+      signals.push(signal)
+      return response.promise
+    })
+    const controller = new AutocompleteController(request, () => {})
+    controller.update(snapshot(start, { mode: start.length === 0 ? 'next' : 'typing' }))
+    await vi.advanceTimersByTimeAsync(start.length === 0 ? 0 : 150)
+    controller.update(snapshot(' '))
+    controller.update(snapshot('', { mode: 'next' }))
+    controller.update(snapshot('  '))
+    controller.update(snapshot('', { mode: 'next' }))
+    expect(signals[0]?.aborted).toBe(false)
+    response.resolve({ text: start + 'Review the changes.', continuations: [' Check the tests.', ' Explain any issues.'] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(controller.suffix).toBe('Review the changes.')
+    expect(request).toHaveBeenCalledTimes(1)
+    controller.dispose()
+  }
+})
+
+test('internal spaces, line breaks and deleted letters still supersede generation', async () => {
+  vi.useFakeTimers()
+  for (const text of ['Please  review', 'Please review\n', 'Please revie']) {
+    let signal: AbortSignal | undefined
+    const request = vi.fn(async (_input: SuggestInput, value: AbortSignal) => {
+      signal = value
+      return new Promise<never>(() => {})
+    })
+    const controller = new AutocompleteController(request, () => {})
+    controller.update(snapshot('Please review '))
+    await vi.advanceTimersByTimeAsync(150)
+    controller.update(snapshot(text))
+    expect(signal?.aborted).toBe(true)
+    controller.dispose()
+  }
+})
+
 test('a space preserves cached chunks and rebases the active refill without restarting it', async () => {
   vi.useFakeTimers()
   const refill = Promise.withResolvers<{ text: string }>()

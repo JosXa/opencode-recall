@@ -18,6 +18,7 @@ export interface PromptSnapshot extends SuggestInput {
 }
 
 type Request = (input: SuggestInput, signal: AbortSignal) => Promise<SuggestOutput>
+type CachedOutput = SuggestOutput & { readonly separator: boolean }
 
 type Candidate = {
   scope: string
@@ -26,10 +27,15 @@ type Candidate = {
   mode: SuggestInput['mode']
   text: string
   ends: readonly number[]
+  separator: boolean
 }
 
-const spaces = /^ +$/u
+const trailingSpaces = / +$/u
 const leadingSpaces = /^ +/u
+
+function separatingSpace(text: string, prefix: string): boolean {
+  return text.charAt(prefix.replace(trailingSpaces, '').length) === ' '
+}
 
 function sameContext(previous: PromptSnapshot | undefined, state: PromptSnapshot): boolean {
   return (
@@ -41,15 +47,21 @@ function sameContext(previous: PromptSnapshot | undefined, state: PromptSnapshot
   )
 }
 
-function rebaseText(text: string, from: string, to: string): string {
-  if (text.length === 0 || !text.startsWith(from)) return text
-  const suffix = text.slice(from.length)
-  const remaining = to.endsWith(' ') ? suffix.replace(leadingSpaces, '') : suffix
-  return to + remaining
+function rebaseText(
+  text: string,
+  from: string,
+  to: string,
+  separator = separatingSpace(text, from),
+): string {
+  if (text.length === 0 || from === to || !text.startsWith(from)) return text
+  const suffix = text.slice(from.length).replace(leadingSpaces, '')
+  // Keep the generated word boundary when the last typed space is deleted.
+  const gap = to.length > 0 && !to.endsWith(' ') && separator && suffix.length > 0 ? ' ' : ''
+  return to + gap + suffix
 }
 
 function rebaseCandidate(candidate: Candidate, from: string, to: string): Candidate {
-  const text = rebaseText(candidate.text, from, to)
+  const text = rebaseText(candidate.text, from, to, candidate.separator)
   const delta = text.length - candidate.text.length
   return {
     ...candidate,
@@ -71,7 +83,11 @@ function requestInput(state: PromptSnapshot): SuggestInput {
   }
 }
 
-function makeCandidate(state: PromptSnapshot, result: SuggestOutput): Candidate {
+function makeCandidate(
+  state: PromptSnapshot,
+  result: SuggestOutput,
+  separator = separatingSpace(result.text, state.text),
+): Candidate {
   const chunks = [result.text, ...(result.continuations ?? [])]
   return {
     scope: state.scope,
@@ -80,6 +96,7 @@ function makeCandidate(state: PromptSnapshot, result: SuggestOutput): Candidate 
     mode: state.mode,
     text: chunks.join(''),
     ends: chunks.map((_chunk, index) => chunks.slice(0, index + 1).join('').length),
+    separator,
   }
 }
 
@@ -93,7 +110,7 @@ export class AutocompleteController {
   #timer: ReturnType<typeof setTimeout> | undefined
   #candidate: Candidate | undefined
   #prefetch: { controller: AbortController; text: string } | undefined
-  readonly #cache = new Map<string, SuggestOutput>()
+  readonly #cache = new Map<string, CachedOutput>()
   #loading = false
   #error: string | undefined
 
@@ -139,13 +156,18 @@ export class AutocompleteController {
       return
     }
     if (this.suffix || this.#prefetch?.text === state.text) {
+      if (
+        this.#candidate &&
+        previous?.text.replace(trailingSpaces, '') !== state.text.replace(trailingSpaces, '')
+      )
+        this.#candidate.separator = separatingSpace(this.#candidate.text, state.text)
       this.#changed()
       return
     }
     const key = cacheKey(state)
     const cached = this.#cache.get(key)
     if (cached) {
-      this.#candidate = makeCandidate(state, cached)
+      this.#candidate = makeCandidate(state, cached, cached.separator)
       this.#changed()
       this.#prefetchMore()
       return
@@ -163,10 +185,14 @@ export class AutocompleteController {
             if (pending.signal.aborted || this.#pending !== pending) return
             this.#remember(state, result)
             const current = this.#snapshot ?? state
-            this.#remember(current, {
-              ...result,
-              text: rebaseText(result.text, state.text, current.text),
-            })
+            this.#remember(
+              current,
+              {
+                ...result,
+                text: rebaseText(result.text, state.text, current.text),
+              },
+              separatingSpace(result.text, state.text),
+            )
             this.#candidate = {
               ...rebaseCandidate(makeCandidate(state, result), state.text, current.text),
               mode: current.mode,
@@ -195,7 +221,11 @@ export class AutocompleteController {
     if (!(this.#snapshot && this.#candidate)) return
     this.#cancel()
     this.#snapshot = { ...this.#snapshot, text, mode: 'typing' }
-    this.#candidate = { ...this.#candidate, mode: 'typing' }
+    this.#candidate = {
+      ...this.#candidate,
+      mode: 'typing',
+      separator: separatingSpace(this.#candidate.text, text),
+    }
     this.#prefetchMore()
     this.#changed()
   }
@@ -215,19 +245,12 @@ export class AutocompleteController {
   }
 
   #carrySpaces(previous: PromptSnapshot | undefined, state: PromptSnapshot): boolean {
-    if (
-      !(
-        previous &&
-        state.eligible &&
-        sameContext(previous, state) &&
-        state.text.startsWith(previous.text) &&
-        spaces.test(state.text.slice(previous.text.length))
-      )
-    )
+    if (!(previous && state.eligible && sameContext(previous, state))) return false
+    const body = previous.text.replace(trailingSpaces, '')
+    if (previous.text === state.text || state.text.replace(trailingSpaces, '') !== body)
       return false
-    if (previous.mode !== state.mode && !(previous.mode === 'next' && previous.text === ''))
-      return false
-    // A trailing space carries the existing pipeline forward, including its deadline.
+    if (previous.mode !== state.mode && body.length > 0) return false
+    // All edits to trailing spaces keep the pipeline and its original deadline.
     this.#carryCached(previous, state)
     this.#snapshot = state
     if (this.#candidate) {
@@ -243,16 +266,25 @@ export class AutocompleteController {
     return true
   }
 
-  #remember(state: PromptSnapshot, result: SuggestOutput): void {
+  #remember(
+    state: PromptSnapshot,
+    result: SuggestOutput,
+    separator = separatingSpace(result.text, state.text),
+  ): void {
     const key = cacheKey(state)
     if (this.#cache.size >= 20 && !this.#cache.has(key))
       this.#cache.delete(this.#cache.keys().next().value ?? '')
-    this.#cache.set(key, result)
+    this.#cache.set(key, { ...result, separator })
   }
 
   #carryCached(from: PromptSnapshot, to: PromptSnapshot): void {
     const cached = this.#cache.get(cacheKey(from))
-    if (cached) this.#remember(to, { ...cached, text: rebaseText(cached.text, from.text, to.text) })
+    if (cached)
+      this.#remember(
+        to,
+        { ...cached, text: rebaseText(cached.text, from.text, to.text, cached.separator) },
+        cached.separator,
+      )
   }
 
   #cancel(): void {
@@ -280,11 +312,22 @@ export class AutocompleteController {
     )
   }
 
-  #append(state: PromptSnapshot, result: SuggestOutput, prefix = state.text): void {
+  #append(
+    state: PromptSnapshot,
+    result: SuggestOutput,
+    prefix = state.text,
+    separator = separatingSpace(result.text, state.text),
+  ): void {
     const current = this.#candidate
     if (!result.text || current?.text !== prefix) return
-    const next = rebaseCandidate(makeCandidate(state, result), state.text, prefix)
-    this.#candidate = { ...next, mode: current.mode, ends: [...current.ends, ...next.ends] }
+    const next = rebaseCandidate(makeCandidate(state, result, separator), state.text, prefix)
+    this.#candidate = {
+      ...next,
+      mode: current.mode,
+      ends: [...current.ends, ...next.ends],
+      // Preserve the original separator while later chunks are still unaccepted.
+      separator: this.#snapshot?.text === prefix ? next.separator : current.separator,
+    }
     this.#error = result.notice
     this.#changed()
   }
@@ -306,7 +349,7 @@ export class AutocompleteController {
     const future: PromptSnapshot = { ...state, text: current.text, mode: 'typing' }
     const cached = this.#cache.get(cacheKey(future))
     if (cached) {
-      this.#append(future, cached)
+      this.#append(future, cached, future.text, cached.separator)
       return
     }
     const task = { controller: new AbortController(), text: current.text }
@@ -321,6 +364,7 @@ export class AutocompleteController {
             ...result,
             text: rebaseText(result.text, future.text, task.text),
           },
+          separatingSpace(result.text, future.text),
         )
         this.#append(future, result, task.text)
       })
