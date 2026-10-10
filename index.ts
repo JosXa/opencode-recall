@@ -75,12 +75,13 @@ export const RecallPlugin = Plugin.define({
     await context.tool.hook('execute.before', (call) => {
       // V2 built-in transforms can append default permissions after third-party agent transforms.
       // Enforce Recall's tool-only sandbox at execution time as the invariant safety boundary.
-      if (
-        String(call.agent) === RECALL_AGENT_NAME &&
-        call.tool !== 'execute' &&
-        !isRecallTool(call.tool)
-      ) {
+      const isRecallAgent = String(call.agent) === RECALL_AGENT_NAME
+      if (isRecallAgent && call.tool !== 'execute' && !isRecallTool(call.tool)) {
         throw new Error('The @recall subagent can only execute OpenCode history tools.')
+      }
+      // History pages stay in the dedicated recall context; other agents delegate to @recall.
+      if (!isRecallAgent && isRecallTool(call.tool)) {
+        throw new Error('OpenCode history tools are only available through the @recall subagent.')
       }
     })
 
@@ -106,6 +107,14 @@ export const RecallPlugin = Plugin.define({
       registerCommand(context, commands, SESSION_SAVE_COMMAND, 'Materialize session to file')
     })
     const configureRecall: Parameters<Plugin.Context['agent']['transform']>[0] = (agents) => {
+      for (const agent of agents.list()) {
+        if (String(agent.id) === RECALL_AGENT_NAME) continue
+        // Deny last so broader agent rules cannot expose history tools outside @recall.
+        agent.permissions = [
+          ...agent.permissions.filter((rule) => !isRecallTool(rule.action)),
+          ...toolPermissions('deny'),
+        ]
+      }
       agents.update(RECALL_AGENT_NAME, (agent) => {
         // Keep an executable user-selected model; stale machine config must not disable Recall.
         if (

@@ -280,7 +280,7 @@ Recall keeps an available configured model when a parent agent uses a different 
 
 ## Tool reference
 
-Recall exposes four history tools through Code Mode. The `recall` subagent provides a dedicated history context; the tools are also available to other agents.
+Recall exposes four history tools through Code Mode. Only the `recall` subagent can call them; Recall denies them for every other agent, so history pages stay out of the parent context.
 
 The history reader detects V1 tables and native V2 session projections. V2 transcripts follow the stored session sequence and retain user text, assistant text, tool inputs/results, attachment metadata, and conversation checkpoints. Recall opens the source database read-only and keeps its search index in a separate database. When both schemas exist, V2 sessions take precedence over older copies with the same session ID.
 

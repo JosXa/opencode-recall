@@ -167,7 +167,7 @@ describe('plugin recall subagent', () => {
     expect(recall.model?.id).toBe('new-model')
   })
 
-  test('keeps the recall subagent sandboxed without hiding history tools from other agents', async () => {
+  test('keeps history tools inside the sandboxed recall subagent', async () => {
     const harness = pluginHarness({ preseedCommands: false })
     await RecallPlugin.setup(harness.context)
 
@@ -192,7 +192,17 @@ describe('plugin recall subagent', () => {
       { action: SESSION_INDEX_COMMAND, resource: '*', effect: 'allow' },
       { action: SESSION_SAVE_COMMAND, resource: '*', effect: 'allow' },
     ])
-    expect(build?.permissions).toEqual([{ action: 'read', resource: '*', effect: 'allow' }])
+    expect(build?.permissions).toEqual([
+      { action: 'read', resource: '*', effect: 'allow' },
+      { action: HISTORY_SEARCH_COMMAND, resource: '*', effect: 'deny' },
+      { action: HISTORY_READ_COMMAND, resource: '*', effect: 'deny' },
+      { action: SESSION_INDEX_COMMAND, resource: '*', effect: 'deny' },
+      { action: SESSION_SAVE_COMMAND, resource: '*', effect: 'deny' },
+    ])
+    expect(() => harness.beforeToolExecute?.({ agent: 'build', tool: HISTORY_READ_COMMAND })).toThrow(
+      'OpenCode history tools are only available through the @recall subagent.',
+    )
+    expect(() => harness.beforeToolExecute?.({ agent: 'build', tool: 'read' })).not.toThrow()
     expect([...harness.commands.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
     expect(() => harness.beforeToolExecute?.({ agent: RECALL_AGENT_NAME, tool: 'read' })).toThrow(
       'The @recall subagent can only execute OpenCode history tools.',
@@ -203,7 +213,7 @@ describe('plugin recall subagent', () => {
     expect(() => harness.beforeToolExecute?.({ agent: RECALL_AGENT_NAME, tool: 'execute' })).not.toThrow()
   })
 
-  test('executes all public history tools directly through the Node worker from a regular agent', async () => {
+  test('executes all public history tools directly through the Node worker', async () => {
     await withRecallEnvAsync(async ({ configDir, root }) => {
       const historyPath = `/tmp/opencode-recall-worker-history-${crypto.randomUUID()}.db`
       const sidecarPath = `/tmp/opencode-recall-worker-sidecar-${crypto.randomUUID()}.db`
@@ -228,19 +238,19 @@ describe('plugin recall subagent', () => {
         await RecallPlugin.setup(harness.context)
         const search = await harness.tools.get(HISTORY_SEARCH_COMMAND)?.execute(
           { q: '', includeCurrentSession: true, n: 5 },
-          toolContext('build'),
+          toolContext(RECALL_AGENT_NAME),
         )
         const read = await harness.tools.get(HISTORY_READ_COMMAND)?.execute(
           { cursor: 'ses_worker', n: 5 },
-          toolContext('build'),
+          toolContext(RECALL_AGENT_NAME),
         )
         const sessions = await harness.tools.get(SESSION_INDEX_COMMAND)?.execute(
           { title: 'Worker', includeCurrentSession: true, n: 5 },
-          toolContext('build'),
+          toolContext(RECALL_AGENT_NAME),
         )
         const saved = await harness.tools.get(SESSION_SAVE_COMMAND)?.execute(
           { cursor: 'ses_worker', path: 'exports/ses_worker.chatml' },
-          toolContext('build'),
+          toolContext(RECALL_AGENT_NAME),
         )
 
         expect(search?.content).toContain('"sid": "ses_worker"')
