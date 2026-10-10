@@ -1,10 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from '@opencode/plugin/tui'
-import type {
-  BoxRenderable,
-  EditBufferRenderable,
-  KeyEvent,
-  TextareaRenderable,
+import {
+  type BoxRenderable,
+  type EditBufferRenderable,
+  type KeyEvent,
+  RGBA,
+  type TextareaRenderable,
 } from '@opentui/core'
 import { onCleanup, onMount } from 'solid-js'
 import {
@@ -13,6 +14,7 @@ import {
   type PromptSnapshot,
 } from './src/autocomplete-controller.js'
 import { AutocompleteGhost } from './src/autocomplete-ghost.js'
+import { generationGray, generationHint } from './src/autocomplete-indicator.js'
 import { Autocomplete, type SuggestOutput } from './src/autocomplete-rpc.js'
 import { submittedText } from './src/prompt-example.js'
 
@@ -85,6 +87,23 @@ export default Plugin.define({
           | { editor: TextareaRenderable; placeholder: TextareaRenderable['placeholder'] }
           | undefined
         let reported: string | undefined
+        let pulseStarted: number | undefined
+        let pulseGray: number | undefined
+        const color = (busy: boolean) => {
+          if (!busy) {
+            pulseStarted = undefined
+            pulseGray = undefined
+            ghost.fg = context.theme.text.muted
+            return
+          }
+          const now = performance.now()
+          pulseStarted ??= now
+          const elapsed = Math.floor((now - pulseStarted) / 100) * 100
+          const gray = generationGray(elapsed, context.theme.text.muted)
+          if (gray === pulseGray) return
+          pulseGray = gray
+          ghost.fg = RGBA.fromInts(gray, gray, gray)
+        }
         const restore = () => {
           if (hidden && !hidden.editor.isDestroyed && !hidden.editor.placeholder)
             hidden.editor.placeholder = hidden.placeholder
@@ -140,21 +159,29 @@ export default Plugin.define({
             eligible: eligible(editor, text, latest?.type === 'assistant' && idle),
           }
         }
-        function sync() {
-          const editor = active()
-          controller.update(snapshot(editor))
+        const syncPlaceholder = (editor: TextareaRenderable | undefined, content: string) => {
           const text = editor?.plainText ?? ''
-          const suffix = controller.suffix
           // The placeholder must be removed rather than painted over, including
           // transparent themes. Ghost text stays outside the edit buffer.
-          if (hidden && (hidden.editor !== editor || !suffix || text)) restore()
-          if (editor && suffix && !text && editor.placeholder && !hidden) {
+          if (hidden && (hidden.editor !== editor || !content || text)) restore()
+          if (editor && content && !text && editor.placeholder && !hidden) {
             hidden = { editor, placeholder: editor.placeholder }
             editor.placeholder = null
           }
-          if (!(editor && suffix && anchor)) return ghost.hide()
-          ghost.fg = context.theme.text.muted
-          ghost.update(editor, suffix)
+        }
+        function sync() {
+          const editor = active()
+          controller.update(snapshot(editor))
+          const suffix = controller.suffix
+          const hint =
+            editor && !suffix && controller.generating
+              ? generationHint(editor.plainText, editor.width - editor.visualCursor.visualCol)
+              : ''
+          const content = suffix || hint
+          syncPlaceholder(editor, content)
+          color(hint.length > 0)
+          if (!(editor && content && anchor)) return ghost.hide()
+          ghost.update(editor, content)
         }
         const keypress = (event: KeyEvent) => {
           sync()

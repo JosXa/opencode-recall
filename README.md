@@ -97,6 +97,8 @@ Recall can show one dim suggestion at the end of the prompt. While you type, Lun
 completes your draft using earlier prompts you wrote after similar assistant
 replies. When a turn ends, the session's model suggests a short next action in
 the empty input. Suggestions stay outside the edit buffer until you accept them.
+While a suggestion is being generated, a small gray `•` pulses after your input.
+Cached suggestions stay visible while the background request runs.
 
 Enable autocomplete in both the server plugin registration (`opencode.json`) and
 the TUI registration (`cli.json`):

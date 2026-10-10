@@ -106,6 +106,9 @@ export class AutocompleteController {
   public get loading(): boolean {
     return this.#loading
   }
+  public get generating(): boolean {
+    return this.#loading || !!this.#prefetch
+  }
   public get error(): string | undefined {
     return this.#error
   }
