@@ -1,6 +1,5 @@
 import { loadConfig } from './config.js'
 import { installHistorySchema } from './history-schema.js'
-import { isHumanPrompt, submittedPrompt } from './prompt-example.js'
 import { Database } from './sqlite.js'
 
 const WHITESPACE_REGEX = /\s+/u
@@ -245,10 +244,9 @@ export class HistoryDatabase {
     return rows
   }
 
-  public mainSessionIds(excludeAutomations = false): string[] {
+  public mainSessionIds(): string[] {
     return this.#db
-      .query<{ id: string }>(`select id from session where parent_id is null
-        ${excludeAutomations ? "and instr(directory || '/', '/shepherd/topic-agent/') = 0 and instr(directory || '/', '/oca/jobs/') = 0" : ''}`)
+      .query<{ id: string }>('select id from session where parent_id is null')
       .all()
       .map((row) => row.id)
   }
@@ -667,69 +665,6 @@ export class HistoryDatabase {
     }
 
     return this.readWindowForSession(sessionId, { mode: 'head', limit: totalMessages })
-  }
-
-  /** Read only the next real user turn; native idle/checkpoint rows are not prompts. */
-  public nextPrompt(messageId: string): string | undefined {
-    const hasNative =
-      this.#db.query("select 1 from main.sqlite_master where name = 'session_message'").get() !==
-      null
-    if (hasNative) {
-      const anchor = this.#db
-        .query<{ session: string; seq: number }, [string]>(
-          'select session_id as session, seq from main.session_message where id = ?',
-        )
-        .get(messageId)
-      if (anchor) {
-        const next = this.#db
-          .query<{ data: string }, [string, number]>(`
-          select json_object('agents', json_extract(data, '$.agents'),
-            'text', json_extract(data, '$.text'), 'metadata', json_extract(data, '$.metadata')) as data
-          from main.session_message where session_id = ? and seq > ? and type = 'user'
-          order by seq limit 1
-        `)
-          .get(anchor.session, anchor.seq)
-        if (!next) return
-        const data = JSON.parse(next.data) as { agents?: unknown; text?: string }
-        // The host composer sends agents, including an empty list. This is an
-        // authorship proxy for old history, not a guarantee about API clients.
-        if (!Array.isArray(data.agents)) return
-        const text = submittedPrompt(next.data, data.text ?? '')
-        return isHumanPrompt(text) ? text : undefined
-      }
-    }
-    return this.#nextLegacyPrompt(messageId)
-  }
-
-  #nextLegacyPrompt(messageId: string): string | undefined {
-    const anchor = this.#db
-      .query<{ session: string; position: number }, [string]>(
-        'select session_id as session, history_order as position from message where id = ?',
-      )
-      .get(messageId)
-    if (!anchor) return
-    // Bind the session before scanning for a user turn; a self-join made SQLite
-    // scan unrelated legacy sessions instead of using the session/time index.
-    const next = this.#db
-      .query<{ id: string; data: string }, [string, number]>(`
-      select m.id, m.data from message m
-      where m.session_id = ? and m.history_order > ?
-        and json_extract(m.data, '$.role') = 'user'
-      order by m.history_order, m.id limit 1
-    `)
-      .get(anchor.session, anchor.position)
-    if (!next) return
-    const parts = readParts(this.#db, [next.id]).flatMap((part) => {
-      const data = JSON.parse(part.data) as {
-        type?: string
-        text?: string
-        synthetic?: boolean
-        ignored?: boolean
-      }
-      return data.type === 'text' && !data.synthetic && !data.ignored ? [data.text ?? ''] : []
-    })
-    const text = submittedPrompt(next.data, parts.join('\n'))
-    return isHumanPrompt(text) ? text : undefined
   }
 
   public readWindow(anchorMessageId: string, options: ReadOptions): WindowRows {

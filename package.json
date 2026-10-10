@@ -1,6 +1,6 @@
 {
   "name": "@josxa/opencode-recall",
-  "version": "1.5.2-opencode-v2",
+  "version": "1.6.0-opencode-v2",
   "description": "OpenCode plugin that adds semantic + lexical recall over your local session history, with cursor-paginated ChatML transcript reads.",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
@@ -15,14 +15,6 @@
     "./sdk": {
       "types": "./dist/src/sdk.d.ts",
       "default": "./dist/src/sdk.js"
-    },
-    "./tui": {
-      "types": "./dist/tui.d.ts",
-      "default": "./dist/tui.js"
-    },
-    "./rpc": {
-      "types": "./dist/src/autocomplete-rpc.d.ts",
-      "default": "./dist/src/autocomplete-rpc.js"
     }
   },
   "publishConfig": {
@@ -55,13 +47,12 @@
   "homepage": "https://github.com/JosXa/opencode-recall#readme",
   "scripts": {
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
-    "build": "pnpm run clean && tsc -p tsconfig.build.json && node scripts/build-tui.mjs",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json",
     "test": "vitest run && pnpm run test:packed-worker",
     "test:packed-worker": "pnpm run build && node --test test/packed-worker.node-test.mjs test/federated-worker.node-test.mjs",
     "eval:real-history": "tsx scripts/evaluate-real-history.ts",
     "eval:embeddings": "tsx scripts/evaluate-embedding-models.ts",
     "benchmark:sync": "tsx scripts/benchmark-sync.ts",
-    "benchmark:autocomplete": "tsx scripts/benchmark-autocomplete.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check --error-on-warnings .",
     "format": "biome check --write .",
@@ -79,33 +70,11 @@
     "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
     "@biomejs/biome": "2.5.1",
-    "@opentui/core": "0.5.17",
-    "@opentui/solid": "0.5.17",
-    "@types/babel__core": "^7.20.5",
     "@types/node": "latest",
-    "babel-preset-solid": "^1.9.12",
     "husky": "latest",
-    "solid-js": "1.9.12",
     "tsx": "latest",
     "typescript": "^7.0.2",
     "vitest": "latest"
-  },
-  "peerDependencies": {
-    "@opentui/core": ">=0.5.17",
-    "@opentui/solid": ">=0.5.17",
-    "solid-js": "1.9.12"
-  },
-  "peerDependenciesMeta": {
-    "@opentui/core": {
-      "optional": true
-    },
-    "@opentui/solid": {
-      "optional": true
-    },
-    "solid-js": {
-      "optional": true
-    }
   }
 }

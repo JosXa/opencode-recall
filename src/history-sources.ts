@@ -9,7 +9,6 @@ import {
 } from './db.js'
 import type { EmbeddingProvider } from './embedding.js'
 import { normalizeWindow } from './normalizer.js'
-import type { PromptExample } from './prompt-example.js'
 import { rankSearchRows } from './search.js'
 import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar.js'
 import {
@@ -31,13 +30,10 @@ interface SearchFeatures {
   readonly semantic: boolean
   readonly sync: boolean
   readonly syncOptions?: SyncOptions | undefined
-  readonly excludeAutomations?: boolean
 }
 
 const LEXICAL_FALLBACK_NOTICE =
   'Semantic search unavailable; showing lexical results only. Install Ollama: https://ollama.com/download.'
-
-const automationDirectory = /\/(?:shepherd\/topic-agent|oca\/jobs)\//u
 
 class EmbeddingUnavailableError extends Error {}
 
@@ -70,52 +66,6 @@ export class HistorySources {
     return combineSync(
       this.#available().map((entry) => this.#index(entry).syncLexicalHistory(entry.history)),
     )
-  }
-
-  public async promptExamples(
-    situation: string,
-    sessionID: string,
-    provider: EmbeddingProvider,
-  ): Promise<PromptExample[]> {
-    if (!situation.trim()) return []
-    // Reuse reply embeddings; a matching reply anchors what the user typed next.
-    const result = await this.search(
-      situation,
-      {
-        limit: 40,
-        excludeSubagents: true,
-        excludeSessionId: sessionID,
-        before: Date.now() - 30_000,
-      },
-      { semantic: true, lexical: false, sync: false, excludeAutomations: true },
-      provider,
-    )
-    // Autocomplete must retry semantic retrieval after a provider recovers.
-    // The history tools can use lexical fallback; don't cache it as a match here.
-    if (result.notice) throw new Error(result.notice)
-    const examples: PromptExample[] = []
-    const seen = new Set<string>()
-    for (const row of result.rows) {
-      if (
-        row.role !== 'assistant' ||
-        row.source === 'session-title' ||
-        automationDirectory.test(`${row.directory}/`)
-      )
-        continue
-      const source =
-        this.#sources.find((candidate) => candidate.id === row.sourceId) ?? this.#sources[0]
-      if (!source) continue
-      const prompt = this.#entry(source).history.nextPrompt(row.messageId)
-      if (!prompt || seen.has(prompt)) continue
-      seen.add(prompt)
-      examples.push({
-        situation: row.text.slice(0, 600),
-        prompt: prompt.slice(0, 600),
-        directory: row.directory,
-      })
-      if (examples.length === 5) break
-    }
-    return examples
   }
 
   public async search(
@@ -210,9 +160,7 @@ export class HistorySources {
     const scoped = {
       ...scopedOptions(options, entry.source.id),
       // Apply the root-session boundary before either lane limits candidates.
-      ...(options.excludeSubagents
-        ? { sessionIds: entry.history.mainSessionIds(features.excludeAutomations) }
-        : {}),
+      ...(options.excludeSubagents ? { sessionIds: entry.history.mainSessionIds() } : {}),
     }
     const lexical = features.lexical ? index.lexicalSearch(query, scoped) : []
     const semantic =
