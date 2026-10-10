@@ -60,15 +60,18 @@ describe('federated history', () => {
       db.exec(`alter table ${table} add column parent_id text`)
       // More children than either retrieval lane's candidate floor. Roots must
       // still be found, even when children are newer and match the same query.
-      for (let i = 0; i < 220; i++) {
-        db.query(`insert into ${table} values (?, 'cobalt', '/children', 1000, 'ses_shared')`).run(`ses_child${i}`)
-        if (table === 'session') {
-          db.query('insert into message values (?, ?, ?, 1000, 1000)').run(`msg_child${i}`, `ses_child${i}`, '{"role":"user"}')
-          db.query('insert into part values (?, ?, ?, ?, 1000)').run(`part_child${i}`, `msg_child${i}`, `ses_child${i}`, '{"type":"text","text":"cobalt"}')
-        } else {
-          db.query('insert into session_message values (?, ?, ?, 1, 1000, 1000, ?)').run(`msg_child${i}`, `ses_child${i}`, 'user', '{"text":"cobalt"}')
+      // Batch fixture writes so disk sync latency does not dominate this test.
+      db.transaction(() => {
+        for (let i = 0; i < 220; i++) {
+          db.query(`insert into ${table} values (?, 'cobalt', '/children', 1000, 'ses_shared')`).run(`ses_child${i}`)
+          if (table === 'session') {
+            db.query('insert into message values (?, ?, ?, 1000, 1000)').run(`msg_child${i}`, `ses_child${i}`, '{"role":"user"}')
+            db.query('insert into part values (?, ?, ?, ?, 1000)').run(`part_child${i}`, `msg_child${i}`, `ses_child${i}`, '{"type":"text","text":"cobalt"}')
+          } else {
+            db.query('insert into session_message values (?, ?, ?, 1, 1000, 1000, ?)').run(`msg_child${i}`, `ses_child${i}`, 'user', '{"text":"cobalt"}')
+          }
         }
-      }
+      })()
     }
     const recall = new DirectOpenCodeRecall({ sources: f.sources, embeddingProvider: f.provider })
     const worker = new OpenCodeRecall({ sources: f.sources })
