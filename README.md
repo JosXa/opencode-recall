@@ -97,7 +97,7 @@ Recall can show one dim suggestion at the end of the prompt. While you type, Lun
 completes your draft using earlier prompts you wrote after similar assistant
 replies. When a turn ends, the session's model suggests a short next action in
 the empty input. Suggestions stay outside the edit buffer until you accept them.
-After 500 ms without typing, a small gray `•` shows if generation is still running.
+After 500 ms without typing, a small gray `•` pulses in brightness while generation runs.
 Its display delay is separate from autocomplete timing, and it leaves the caret
 cell empty even after a typed space.
 Cached suggestions stay visible while the background request runs.
