@@ -98,6 +98,9 @@ completes your draft immediately while Recall finds earlier human prompts with
 similar prefixes. A second Luna call applies those examples of your wording
 when they arrive, while the first suggestion remains usable during refinement.
 Accepting a suggestion cancels refinement so accepted text stays intact.
+If you keep typing along the visible suggestion, Recall refines your updated
+draft after the next typing pause while keeping the suggestion visible.
+Cached suggestions resume unfinished refinement. Completed refinements are reused.
 When a turn ends, the session's model suggests a short next action in
 the empty input. Suggestions stay outside the edit buffer until you accept them.
 After 500 ms without typing, a small gray `•` pulses in brightness while generation runs.

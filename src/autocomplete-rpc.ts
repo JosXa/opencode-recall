@@ -12,6 +12,12 @@ export interface SuggestOutput {
   readonly text: string
   readonly continuations?: readonly string[]
   readonly notice?: string
+  readonly refined?: boolean
+}
+
+export interface RefineInput extends SuggestInput {
+  /** The visible suggestion was carried or cached, so no fresh fast call used these examples. */
+  readonly cachedSuggestion?: boolean
 }
 
 const input = {
@@ -33,6 +39,7 @@ const output = {
     text: { type: 'string' },
     continuations: { type: 'array', maxItems: 7, items: { type: 'string' } },
     notice: { type: 'string' },
+    refined: { type: 'boolean' },
   },
   required: ['text'],
 } as const
@@ -46,6 +53,12 @@ export const Autocomplete = Rpc.define({
       output: { type: 'object', additionalProperties: false },
     },
     suggest: { input, output },
-    refine: { input, output },
+    refine: {
+      input: {
+        ...input,
+        properties: { ...input.properties, cachedSuggestion: { type: 'boolean' } },
+      },
+      output,
+    },
   },
 })

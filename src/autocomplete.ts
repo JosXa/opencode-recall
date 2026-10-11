@@ -4,7 +4,12 @@ import {
   autocompleteVariant,
   constrainAutocompleteRequest,
 } from './autocomplete-format.js'
-import { Autocomplete, type SuggestInput, type SuggestOutput } from './autocomplete-rpc.js'
+import {
+  Autocomplete,
+  type RefineInput,
+  type SuggestInput,
+  type SuggestOutput,
+} from './autocomplete-rpc.js'
 import { executeNodeWorker } from './node-worker-client.js'
 import { type PromptExample, promptPrefix } from './prompt-example.js'
 
@@ -278,13 +283,21 @@ export async function registerAutocomplete(
         },
         { signal },
       )
-      return { ...normalizeSuggestions(result.text, input), ...(notice ? { notice } : {}) }
+      return {
+        ...normalizeSuggestions(result.text, input),
+        ...(matches.length > 0 ? { refined: true } : {}),
+        ...(notice ? { notice } : {}),
+      }
     },
     refine: async (value, call): Promise<SuggestOutput> => {
-      const input = value as SuggestInput
+      const input = value as RefineInput
       if (input.mode !== 'typing' || !promptPrefix(input.text)) return { text: '' }
       // A cache hit already informed the fast call, so don't generate twice.
-      if (examples.get(input.sessionID)?.prefix === promptPrefix(input.text)) return { text: '' }
+      if (
+        !input.cachedSuggestion &&
+        examples.get(input.sessionID)?.prefix === promptPrefix(input.text)
+      )
+        return { text: '' }
       const signal = AbortSignal.any([lifetime.signal, call.signal])
       const matches = await getExamples(input, signal)
       signal.throwIfAborted()
@@ -296,7 +309,11 @@ export async function registerAutocomplete(
         },
         { signal },
       )
-      return { ...normalizeSuggestions(result.text, input), ...(notice ? { notice } : {}) }
+      return {
+        ...normalizeSuggestions(result.text, input),
+        refined: true,
+        ...(notice ? { notice } : {}),
+      }
     },
   })
   return async () => {

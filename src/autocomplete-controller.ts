@@ -1,5 +1,5 @@
 import type { KeyEvent } from '@opentui/core'
-import type { SuggestInput, SuggestOutput } from './autocomplete-rpc.js'
+import type { RefineInput, SuggestInput, SuggestOutput } from './autocomplete-rpc.js'
 
 export function acceptKey(
   event: Pick<KeyEvent, 'name' | 'shift' | 'ctrl' | 'meta'>,
@@ -18,6 +18,7 @@ export interface PromptSnapshot extends SuggestInput {
 }
 
 type Request = (input: SuggestInput, signal: AbortSignal) => Promise<SuggestOutput>
+type Refinement = (input: RefineInput, signal: AbortSignal) => Promise<SuggestOutput>
 type CachedOutput = SuggestOutput & { readonly separator: boolean }
 
 type Candidate = {
@@ -28,6 +29,7 @@ type Candidate = {
   text: string
   ends: readonly number[]
   separator: boolean
+  refined: boolean
 }
 
 const trailingSpaces = / +$/u
@@ -97,13 +99,14 @@ function makeCandidate(
     text: chunks.join(''),
     ends: chunks.map((_chunk, index) => chunks.slice(0, index + 1).join('').length),
     separator,
+    refined: result.refined === true,
   }
 }
 
 /** Owns request cancellation and render-only state; the editor is never passed in. */
 export class AutocompleteController {
   readonly #request: Request
-  readonly #refine: Request | undefined
+  readonly #refine: Refinement | undefined
   readonly #changed: () => void
   readonly #debounce: number
   #snapshot: PromptSnapshot | undefined
@@ -116,7 +119,7 @@ export class AutocompleteController {
   #loading = false
   #error: string | undefined
 
-  public constructor(request: Request, changed: () => void, debounce = 150, refine?: Request) {
+  public constructor(request: Request, changed: () => void, debounce = 150, refine?: Refinement) {
     this.#request = request
     this.#refine = refine
     this.#changed = changed
@@ -164,6 +167,12 @@ export class AutocompleteController {
         previous?.text.replace(trailingSpaces, '') !== state.text.replace(trailingSpaces, '')
       )
         this.#candidate.separator = separatingSpace(this.#candidate.text, state.text)
+      // Continuing to type along a ghost must still refine the newly written draft.
+      this.#resumeRefinement(
+        state,
+        this.#candidate?.refined === true,
+        previous?.text !== state.text,
+      )
       this.#changed()
       return
     }
@@ -171,38 +180,51 @@ export class AutocompleteController {
     const cached = this.#cache.get(key)
     if (cached) {
       this.#candidate = makeCandidate(state, cached, cached.separator)
+      this.#resumeRefinement(state, cached.refined === true)
       this.#changed()
-      this.#prefetchMore()
+      if (!this.#timer) this.#prefetchMore()
       return
     }
     this.#candidate = undefined
+    this.#schedule(state)
+    this.#changed()
+  }
+
+  #resumeRefinement(state: PromptSnapshot, refined: boolean, textChanged = false): void {
+    if (state.mode === 'typing' && this.#refine && (!refined || textChanged))
+      this.#schedule(state, true)
+  }
+
+  #schedule(state: PromptSnapshot, cachedSuggestion = false): void {
     this.#timer = setTimeout(
       () => {
         this.#timer = undefined
-        const pending = new AbortController()
-        this.#pending = pending
-        this.#loading = true
-        this.#changed()
-        void this.#request(requestInput(state), pending.signal)
-          .then((result) => {
-            if (pending.signal.aborted || this.#pending !== pending) return
-            this.#showResult(state, result)
-          })
-          .catch((error: unknown) => {
-            if (!pending.signal.aborted)
-              this.#error = error instanceof Error ? error.message : String(error)
-          })
-          .finally(() => {
-            if (this.#pending !== pending) return
-            this.#pending = undefined
-            this.#loading = false
-            this.#changed()
-            if (!this.#refinement) this.#prefetchMore()
-          })
+        if (!cachedSuggestion) {
+          const pending = new AbortController()
+          this.#pending = pending
+          this.#loading = true
+          this.#changed()
+          void this.#request(requestInput(state), pending.signal)
+            .then((result) => {
+              if (pending.signal.aborted || this.#pending !== pending) return
+              this.#showResult(state, result)
+            })
+            .catch((error: unknown) => {
+              if (!pending.signal.aborted)
+                this.#error = error instanceof Error ? error.message : String(error)
+            })
+            .finally(() => {
+              if (this.#pending !== pending) return
+              this.#pending = undefined
+              this.#loading = false
+              this.#changed()
+              if (!this.#refinement) this.#prefetchMore()
+            })
+        }
         if (state.mode === 'typing' && this.#refine) {
           const refinement = new AbortController()
           this.#refinement = refinement
-          void this.#refine(requestInput(state), refinement.signal)
+          void this.#refine({ ...requestInput(state), cachedSuggestion }, refinement.signal)
             .then((result) => {
               if (refinement.signal.aborted || this.#refinement !== refinement) return
               if (result.notice) this.#error = result.notice
@@ -225,10 +247,10 @@ export class AutocompleteController {
               this.#prefetchMore()
             })
         }
+        this.#changed()
       },
       state.mode === 'next' ? 0 : this.#debounce,
     )
-    this.#changed()
   }
 
   /** Explicit word acceptance carries the remaining next action into typing. */
@@ -362,6 +384,7 @@ export class AutocompleteController {
       ends: [...current.ends, ...next.ends],
       // Preserve the original separator while later chunks are still unaccepted.
       separator: this.#snapshot?.text === prefix ? next.separator : current.separator,
+      refined: current.refined,
     }
     this.#error = result.notice
     this.#changed()

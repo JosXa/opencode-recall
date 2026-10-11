@@ -2,7 +2,7 @@ import { Model, type Plugin, Provider } from '@opencode/plugin'
 import { afterEach, expect, test, vi } from 'vitest'
 import { autocompleteFormat, autocompleteVariant } from '../src/autocomplete-format.js'
 import { registerAutocomplete } from '../src/autocomplete.js'
-import type { SuggestInput, SuggestOutput } from '../src/autocomplete-rpc.js'
+import type { RefineInput, SuggestInput, SuggestOutput } from '../src/autocomplete-rpc.js'
 import { executeNodeWorker } from '../src/node-worker-client.js'
 
 const examples = [{ prompt: '#review then commit' }]
@@ -15,7 +15,7 @@ type Draft = NonNullable<ReturnType<Editor['get']>>
 type HttpEvent = Extract<Parameters<Parameters<Plugin.Context['session']['hook']>[1]>[0], { request: Request }>
 async function harness(providerPackage = '@opencode/ai/providers/openai') {
   vi.mocked(executeNodeWorker).mockResolvedValue(JSON.stringify(examples))
-  let handlers: { suggest: Handler; refine: Handler; prepare: () => Promise<unknown> } | undefined
+  let handlers: { suggest: Handler; refine: (input: RefineInput, call: { signal: AbortSignal }) => Promise<SuggestOutput>; prepare: () => Promise<unknown> } | undefined
   const model = Model.Info.default(Provider.ID.make('openai'), Model.ID.make('gpt-6-luna-fast')) as Draft
   model.body = { service_tier: 'priority' }
   model.variants = [{ id: Model.VariantID.make('low'), settings: { reasoningEffort: 'low' } }]
@@ -76,7 +76,7 @@ test('the first Luna completion finishes while history is still pending', async 
       kind: 'prompt-examples', args: { prefix: 'run' }, context: { sessionID: 'ses_current' },
     }, expect.any(AbortSignal))
     worker.resolve(JSON.stringify(examples))
-    expect(await refined).toEqual({ text: 'run the tests' })
+    expect(await refined).toEqual({ text: 'run the tests', refined: true })
     expect(h.generate.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
       model: { providerID: 'openai', id: 'gpt-6-luna-fast', variant: autocompleteVariant }, prompt: expect.stringContaining('#review then commit'),
     }))
@@ -205,5 +205,15 @@ test('warming invalidates early matches so later refinements see updated history
     await h.refine(input, call())
     expect(queries).toBe(2)
     expect(h.generate.mock.calls[0]?.[0].prompt).toContain('#review then commit')
+  } finally { await h.stop() }
+})
+
+test('a carried suggestion can use cached examples without assuming a new fast call already used them', async () => {
+  const h = await harness()
+  try {
+    await h.refine(input, call())
+    expect(await h.refine({ ...input, cachedSuggestion: true }, call())).toEqual({ text: 'run the tests', refined: true })
+    expect(executeNodeWorker).toHaveBeenCalledOnce()
+    expect(h.generate).toHaveBeenCalledTimes(2)
   } finally { await h.stop() }
 })
