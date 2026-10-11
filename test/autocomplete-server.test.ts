@@ -4,137 +4,143 @@ import { registerAutocomplete } from '../src/autocomplete.js'
 import type { SuggestInput, SuggestOutput } from '../src/autocomplete-rpc.js'
 import { executeNodeWorker } from '../src/node-worker-client.js'
 
-vi.mock('../src/node-worker-client.js', () => ({ executeNodeWorker: vi.fn(async () => JSON.stringify([
-  { situation: 'Tests pass', prompt: '#review then commit', directory: '/project' },
-])) }))
-afterEach(() => {
-  vi.clearAllMocks()
-  vi.mocked(executeNodeWorker).mockReset().mockResolvedValue(JSON.stringify([
-    { situation: 'Tests pass', prompt: '#review then commit', directory: '/project' },
-  ]))
-})
+const examples = [{ prompt: '#review then commit' }]
+vi.mock('../src/node-worker-client.js', () => ({ executeNodeWorker: vi.fn() }))
+afterEach(() => vi.mocked(executeNodeWorker).mockReset())
 
 type Handler = (input: SuggestInput, call: { signal: AbortSignal }) => Promise<SuggestOutput>
 async function harness() {
-  let suggest: Handler | undefined
-  let prepare: (() => Promise<unknown>) | undefined
+  vi.mocked(executeNodeWorker).mockResolvedValue(JSON.stringify(examples))
+  let handlers: { suggest: Handler; refine: Handler; prepare: () => Promise<unknown> } | undefined
   const generate = vi.fn(async (_request: { prompt: string }) => ({ text: '{"continuation":"the tests"}' }))
   const next = vi.fn(async () => ({ text: '{"continuation":"review and commit the changes"}' }))
   const dispose = vi.fn()
   const context = {
     options: {}, generate: { text: generate }, session: { generate: next },
-    rpc: { register: async (_definition: unknown, handlers: { suggest: Handler; prepare: () => Promise<unknown> }) => {
-      suggest = handlers.suggest
-      prepare = handlers.prepare
+    rpc: { register: async (_definition: unknown, value: NonNullable<typeof handlers>) => {
+      handlers = value
       return { dispose }
     } },
   } as unknown as Plugin.Context
   const stop = await registerAutocomplete(context, '/fixture')
-  if (!suggest || !prepare) throw new Error('RPC was not registered')
-  return { suggest, prepare, generate, next, dispose, stop }
+  if (!handlers) throw new Error('RPC was not registered')
+  return { ...handlers, generate, next, dispose, stop }
 }
 const input: SuggestInput = { sessionID: 'ses_current', situation: 'Tests pass', text: 'run ', mode: 'typing' }
+const call = () => ({ signal: new AbortController().signal })
 
-test('typing uses Luna and original history examples; examples are cached across drafts', async () => {
+test('the first Luna completion finishes while history is still pending', async () => {
   const h = await harness()
-  const signal = new AbortController().signal
+  const worker = Promise.withResolvers<string>()
+  vi.mocked(executeNodeWorker).mockReturnValue(worker.promise)
   try {
-    expect(await h.suggest(input, { signal })).toEqual({ text: 'run the tests' })
-    await h.suggest({ ...input, text: 'run the ' }, { signal })
-    expect(executeNodeWorker).toHaveBeenCalledTimes(1)
-    expect(h.generate).toHaveBeenCalledWith(expect.objectContaining({
+    const refined = h.refine(input, call())
+    expect(await h.suggest(input, call())).toEqual({ text: 'run the tests' })
+    expect(h.generate).toHaveBeenCalledTimes(1)
+    expect(h.generate.mock.calls[0]?.[0].prompt).not.toContain('#review then commit')
+    expect(executeNodeWorker).toHaveBeenCalledWith('/fixture', {
+      kind: 'prompt-examples', args: { prefix: 'run' }, context: { sessionID: 'ses_current' },
+    }, expect.any(AbortSignal))
+    worker.resolve(JSON.stringify(examples))
+    expect(await refined).toEqual({ text: 'run the tests' })
+    expect(h.generate.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
       model: { providerID: 'openai', id: 'gpt-6-luna-fast' }, prompt: expect.stringContaining('#review then commit'),
-    }), { signal: expect.any(AbortSignal) })
-    expect(h.next).not.toHaveBeenCalled()
+    }))
   } finally { await h.stop() }
-  expect(h.dispose).toHaveBeenCalledOnce()
 })
 
-test('turn-end uses the session model with transient generation', async () => {
+test('cached prefix examples inform the fast call without a second paid generation', async () => {
   const h = await harness()
   try {
-    expect(await h.suggest({ ...input, text: '', mode: 'next' }, { signal: new AbortController().signal }))
-      .toEqual({ text: 'review and commit the changes' })
-    expect(h.next).toHaveBeenCalledWith(expect.objectContaining({ sessionID: 'ses_current' }), expect.anything())
-    expect(h.generate).not.toHaveBeenCalled()
+    await h.refine(input, call())
+    await h.suggest({ ...input, text: 'run    ' }, call())
+    expect(await h.refine({ ...input, text: 'run    ' }, call())).toEqual({ text: '' })
+    expect(executeNodeWorker).toHaveBeenCalledTimes(1)
+    expect(h.generate).toHaveBeenCalledTimes(2)
+    expect(h.generate.mock.calls[1]?.[0].prompt).toContain('#review then commit')
+    await h.suggest({ ...input, text: 'run the ' }, call())
+    expect(h.generate.mock.calls[2]?.[0].prompt).toContain('#review then commit')
+    await h.refine({ ...input, text: 'run the ' }, call())
+    expect(executeNodeWorker).toHaveBeenCalledTimes(2)
+    const long = { ...input, text: 'x'.repeat(256) + 'first' }
+    await h.refine(long, call())
+    await h.refine({ ...long, text: 'x'.repeat(256) + 'second' }, call())
+    expect(executeNodeWorker).toHaveBeenCalledTimes(3)
   } finally { await h.stop() }
 })
 
-test('an aborted draft does not start paid generation after retrieval completes', async () => {
+test('turn-end uses the session model and empty drafts never retrieve style', async () => {
+  const h = await harness()
+  try {
+    expect(await h.suggest({ ...input, text: '', mode: 'next' }, call())).toEqual({ text: 'review and commit the changes' })
+    expect(await h.refine({ ...input, text: '', mode: 'next' }, call())).toEqual({ text: '' })
+    expect(await h.refine({ ...input, text: '   ' }, call())).toEqual({ text: '' })
+    expect(h.next).toHaveBeenCalledOnce()
+    expect(h.generate).not.toHaveBeenCalled()
+    expect(executeNodeWorker).not.toHaveBeenCalled()
+  } finally { await h.stop() }
+})
+
+test('an aborted refinement does not start paid generation after retrieval', async () => {
   const h = await harness()
   const controller = new AbortController()
   controller.abort()
   try {
+    await expect(h.refine(input, { signal: controller.signal })).rejects.toThrow()
     await expect(h.suggest(input, { signal: controller.signal })).rejects.toThrow()
     expect(h.generate).not.toHaveBeenCalled()
   } finally { await h.stop() }
 })
 
-test('history failure is visible while Luna can still complete the draft', async () => {
-  vi.mocked(executeNodeWorker).mockRejectedValueOnce(new Error('history offline'))
+test('empty or failed retrieval keeps the fast completion and skips styled generation', async () => {
   const h = await harness()
   try {
-    expect(await h.suggest(input, { signal: new AbortController().signal })).toEqual({
-      text: 'run the tests', notice: 'Recall history: history offline',
-    })
-    expect(await h.suggest(input, { signal: new AbortController().signal })).toEqual({ text: 'run the tests' })
+    vi.mocked(executeNodeWorker).mockRejectedValueOnce(new Error('history offline'))
+    expect(await h.refine(input, call())).toEqual({ text: '', notice: 'Recall history: history offline' })
+    expect(await h.suggest(input, call())).toEqual({ text: 'run the tests', notice: 'Recall history: history offline' })
+    vi.mocked(executeNodeWorker).mockResolvedValueOnce('[]')
+    expect(await h.refine(input, call())).toEqual({ text: '' })
+    expect(await h.refine(input, call())).toEqual({ text: '' })
+    expect(h.generate).toHaveBeenCalledOnce()
     expect(executeNodeWorker).toHaveBeenCalledTimes(2)
   } finally { await h.stop() }
 })
 
-test('RPC cancellation stops superseded home-screen retrieval workers', async () => {
-  const calls: { signal: AbortSignal; result: ReturnType<typeof Promise.withResolvers<string>> }[] = []
-  vi.mocked(executeNodeWorker).mockImplementation((_directory, _request, signal) => {
-    if (!signal) throw new Error('Worker cancellation signal is required')
-    const result = Promise.withResolvers<string>()
-    signal.addEventListener('abort', () => result.reject(new Error('aborted')), { once: true })
-    calls.push({ signal, result })
-    return result.promise
-  })
+test('superseded drafts cancel retrieval; disposal bounds and cancels remaining workers', async () => {
   const h = await harness()
-  const controller = new AbortController()
-  const first = h.suggest({ ...input, situation: '' }, { signal: controller.signal })
-  controller.abort()
-  await expect(first).rejects.toThrow()
-  expect(calls[0]?.signal.aborted).toBe(true)
-  const second = h.suggest({ ...input, situation: '', text: 'run the ' }, { signal: new AbortController().signal })
-  calls[1]?.result.resolve('[]')
-  await second
-  await h.stop()
-})
-
-test('concurrent retrieval is bounded and all remaining workers stop on disposal', async () => {
   const signals: AbortSignal[] = []
   vi.mocked(executeNodeWorker).mockImplementation((_directory, _request, signal) => {
     if (!signal) throw new Error('Worker cancellation signal is required')
     signals.push(signal)
     return new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
   })
-  const h = await harness()
-  const results = Promise.allSettled(Array.from({ length: 9 }, (_, index) =>
-    h.suggest({ ...input, sessionID: `ses_${index}` }, { signal: new AbortController().signal })))
-  expect(signals[0]?.aborted).toBe(true)
+  const controller = new AbortController()
+  const superseded = h.refine(input, { signal: controller.signal })
+  controller.abort()
+  await expect(superseded).rejects.toThrow()
+  const results = Promise.allSettled(Array.from({ length: 9 }, (_, index) => h.refine({ ...input, sessionID: `ses_${index}` }, call())))
+  expect(signals[1]?.aborted).toBe(true)
   await h.stop()
-  expect(signals.every((signal) => signal.aborted)).toBe(true)
-  expect((await results).every((result) => result.status === 'rejected')).toBe(true)
+  expect(signals.every(signal => signal.aborted)).toBe(true)
+  expect((await results).every(result => result.status === 'rejected')).toBe(true)
+  expect(h.dispose).toHaveBeenCalledOnce()
 })
 
-test('history becomes available after warming instead of caching early empty results', async () => {
+test('warming invalidates early matches so later refinements see updated history', async () => {
+  const h = await harness()
   const warm = Promise.withResolvers<string>()
   let queries = 0
   vi.mocked(executeNodeWorker).mockImplementation(async (_directory, request) => {
     if (request.kind === 'prompt-examples' && request.args.sync) return warm.promise
-    return ++queries === 1 ? '[]' : JSON.stringify([{ situation: 'Tests pass', prompt: '#review then commit', directory: '/project' }])
+    return ++queries === 1 ? '[]' : JSON.stringify(examples)
   })
-  const h = await harness()
   try {
     await h.prepare()
-    await h.suggest(input, { signal: new AbortController().signal })
-    expect(h.generate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ prompt: expect.not.stringContaining('#review') }))
+    await h.refine(input, call())
     warm.resolve('[]')
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    await h.suggest({ ...input, text: 'run the ' }, { signal: new AbortController().signal })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    await h.refine(input, call())
     expect(queries).toBe(2)
-    expect(h.generate).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: expect.stringContaining('#review') }), expect.anything())
+    expect(h.generate.mock.calls[0]?.[0].prompt).toContain('#review then commit')
   } finally { await h.stop() }
 })

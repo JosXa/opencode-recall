@@ -405,6 +405,7 @@ export class RecallSidecarIndex {
             and (? is null or directory = ?)
             and (? is null or session_id != ?)
             and (? is null or session_id in (select value from json_each(?)))
+            and (? is null or role = ?)
           order by score desc, time_created desc, rowid
           limit ?
         )
@@ -429,6 +430,8 @@ export class RecallSidecarIndex {
         options.excludeSessionId ?? null,
         options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
         options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
+        options.role ?? null,
+        options.role ?? null,
         Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT),
       )
   }

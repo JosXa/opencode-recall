@@ -40,7 +40,7 @@ test('generation preserves typed text and keeps next actions short', () => {
   expect(suggestionPrompt(next, [])).not.toContain('A new request needs evidence in the draft')
   expect(normalizeSuggestion('  commit and push the changes\n', next)).toBe('commit and push the changes')
   expect(normalizeSuggestion('one two three four five six seven eight nine', next)).toBe('')
-  expect(suggestionPrompt(input, [{ situation: 'Ready', prompt: 'ship it', directory: '/project' }])).toContain('ship it')
+  expect(suggestionPrompt(input, [{ prompt: 'ship it' }])).toContain('ship it')
 })
 
 test('a complete generated continuation becomes cached sentences without rewriting the draft', () => {
@@ -776,16 +776,17 @@ test('native history finds original human prompts through synthetic turns and fe
   const history = new HistorySources({ sources: [{ id: 'fixture', path, indexPath: join(root, 'index.db') }] })
   const provider = { model: 'fixture', embed: async (texts: readonly string[]) => texts.map(() => new Float32Array([1, 0])) }
   try {
-    expect(db.nextPrompt('msg_reply')).toBe('#review then commit')
-    expect(db.nextPrompt('msg_auto_reply')).toBeUndefined()
+    expect(db.humanPrompt('msg_user')).toBe('#review then commit')
+    expect(db.humanPrompt('msg_auto_user')).toBeUndefined()
+    expect(db.humanPrompt('msg_reply')).toBeUndefined()
     await history.sync(provider)
     const ordinary = await history.search('Tests pass', { limit: 40, excludeSubagents: true }, { semantic: true, lexical: false, sync: false }, provider)
     expect(ordinary.rows.some(row => row.sessionId === 'ses_job')).toBe(true)
-    await expect(history.promptExamples('Tests pass', 'fixture::ses_current', {
+    await expect(history.promptExamples('#review', 'fixture::ses_current', {
       model: provider.model, embed: async () => { throw new Error('Ollama unavailable') },
     })).rejects.toThrow(/lexical/i)
-    expect(await history.promptExamples('Tests pass', 'fixture::ses_current', provider)).toEqual([
-      { situation: 'Tests pass', prompt: '#review then commit', directory: '/project' },
+    expect(await history.promptExamples('#review', 'fixture::ses_current', provider)).toEqual([
+      { prompt: '#review then commit' },
     ])
   } finally { history.close(); db.close(); source.close(); rmSync(root, { recursive: true, force: true }) }
 })
@@ -805,8 +806,8 @@ test('legacy history excludes synthetic parts and automation prompts', () => {
   `)
   const history = new HistoryDatabase(path)
   try {
-    expect(history.nextPrompt('msg_reply')).toBe('commit and push')
+    expect(history.humanPrompt('msg_user')).toBe('commit and push')
     source.exec(`update part set data = '{"type":"text","text":"Reply exactly OK"}' where id = 'part_user'`)
-    expect(history.nextPrompt('msg_reply')).toBeUndefined()
+    expect(history.humanPrompt('msg_user')).toBeUndefined()
   } finally { history.close(); source.close(); rmSync(root, { recursive: true, force: true }) }
 })

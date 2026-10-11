@@ -41,6 +41,13 @@ test('native candidates preserve boosts, scopes, ties and zero-vector scores', (
     // The next search must not reuse the previous query's keyword boosts.
     const next = index.searchWithEmbedding('', options, 'test', new Float32Array([1, 0]))
     expect(next[0]?.sessionId).toBe('newer')
+    // Filter roles before assistant matches consume the candidate cap.
+    for (let i = 0; i < 100; i++) {
+      add(`assistant-${i}`, [1, 0], 'über testing', 9)
+      db.query("update chunk set role = 'assistant' where chunk_id = ?").run(`assistant-${i}`)
+    }
+    const human = index.searchWithEmbedding('über testing', { ...options, role: 'user' }, 'test', new Float32Array([1, 0]))
+    expect(human.map(row => row.sessionId)).toEqual(['boosted', 'newer', 'semantic', 'zero'])
   } finally {
     db.close()
     index.close()

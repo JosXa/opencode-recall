@@ -1,7 +1,12 @@
 export interface PromptExample {
-  readonly situation: string
   readonly prompt: string
-  readonly directory: string
+}
+
+const whitespace = /\s+/gu
+
+/** Query the start of the human draft, matching the prefixes already embedded in history. */
+export function promptPrefix(text: string): string {
+  return text.replace(whitespace, ' ').trim().slice(0, 256).trimEnd()
 }
 
 const automation =

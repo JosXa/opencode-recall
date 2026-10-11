@@ -103,10 +103,12 @@ function makeCandidate(
 /** Owns request cancellation and render-only state; the editor is never passed in. */
 export class AutocompleteController {
   readonly #request: Request
+  readonly #refine: Request | undefined
   readonly #changed: () => void
   readonly #debounce: number
   #snapshot: PromptSnapshot | undefined
   #pending: AbortController | undefined
+  #refinement: AbortController | undefined
   #timer: ReturnType<typeof setTimeout> | undefined
   #candidate: Candidate | undefined
   #prefetch: { controller: AbortController; text: string } | undefined
@@ -114,8 +116,9 @@ export class AutocompleteController {
   #loading = false
   #error: string | undefined
 
-  public constructor(request: Request, changed: () => void, debounce = 150) {
+  public constructor(request: Request, changed: () => void, debounce = 150, refine?: Request) {
     this.#request = request
+    this.#refine = refine
     this.#changed = changed
     this.#debounce = debounce
   }
@@ -124,7 +127,7 @@ export class AutocompleteController {
     return this.#loading
   }
   public get generating(): boolean {
-    return this.#loading || !!this.#prefetch
+    return this.#loading || !!this.#prefetch || !!this.#refinement
   }
   public get error(): string | undefined {
     return this.#error
@@ -183,21 +186,7 @@ export class AutocompleteController {
         void this.#request(requestInput(state), pending.signal)
           .then((result) => {
             if (pending.signal.aborted || this.#pending !== pending) return
-            this.#remember(state, result)
-            const current = this.#snapshot ?? state
-            this.#remember(
-              current,
-              {
-                ...result,
-                text: rebaseText(result.text, state.text, current.text),
-              },
-              separatingSpace(result.text, state.text),
-            )
-            this.#candidate = {
-              ...rebaseCandidate(makeCandidate(state, result), state.text, current.text),
-              mode: current.mode,
-            }
-            this.#error = result.notice
+            this.#showResult(state, result)
           })
           .catch((error: unknown) => {
             if (!pending.signal.aborted)
@@ -208,8 +197,34 @@ export class AutocompleteController {
             this.#pending = undefined
             this.#loading = false
             this.#changed()
-            this.#prefetchMore()
+            if (!this.#refinement) this.#prefetchMore()
           })
+        if (state.mode === 'typing' && this.#refine) {
+          const refinement = new AbortController()
+          this.#refinement = refinement
+          void this.#refine(requestInput(state), refinement.signal)
+            .then((result) => {
+              if (refinement.signal.aborted || this.#refinement !== refinement) return
+              if (result.notice) this.#error = result.notice
+              if (!result.text) return
+              // Replace only unaccepted suggestions; acceptance cancels refinement.
+              this.#cancelPrefetch()
+              this.#pending?.abort()
+              this.#pending = undefined
+              this.#loading = false
+              this.#showResult(state, result)
+            })
+            .catch((error: unknown) => {
+              if (!refinement.signal.aborted)
+                this.#error = error instanceof Error ? error.message : String(error)
+            })
+            .finally(() => {
+              if (this.#refinement !== refinement) return
+              this.#refinement = undefined
+              this.#changed()
+              this.#prefetchMore()
+            })
+        }
       },
       state.mode === 'next' ? 0 : this.#debounce,
     )
@@ -277,6 +292,24 @@ export class AutocompleteController {
     this.#cache.set(key, { ...result, separator })
   }
 
+  #showResult(state: PromptSnapshot, result: SuggestOutput): void {
+    this.#remember(state, result)
+    const current = this.#snapshot ?? state
+    this.#remember(
+      current,
+      {
+        ...result,
+        text: rebaseText(result.text, state.text, current.text),
+      },
+      separatingSpace(result.text, state.text),
+    )
+    this.#candidate = {
+      ...rebaseCandidate(makeCandidate(state, result), state.text, current.text),
+      mode: current.mode,
+    }
+    this.#error = result.notice
+  }
+
   #carryCached(from: PromptSnapshot, to: PromptSnapshot): void {
     const cached = this.#cache.get(cacheKey(from))
     if (cached)
@@ -292,6 +325,8 @@ export class AutocompleteController {
     this.#timer = undefined
     this.#pending?.abort()
     this.#pending = undefined
+    this.#refinement?.abort()
+    this.#refinement = undefined
     this.#loading = false
   }
 

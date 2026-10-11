@@ -73,19 +73,20 @@ export class HistorySources {
   }
 
   public async promptExamples(
-    situation: string,
+    prefix: string,
     sessionID: string,
     provider: EmbeddingProvider,
   ): Promise<PromptExample[]> {
-    if (!situation.trim()) return []
-    // Reuse reply embeddings; a matching reply anchors what the user typed next.
+    if (!prefix.trim()) return []
+    // Match the human's partial prompt against earlier human prompt prefixes.
     const result = await this.search(
-      situation,
+      prefix,
       {
         limit: 40,
         excludeSubagents: true,
         excludeSessionId: sessionID,
         before: Date.now() - 30_000,
+        role: 'user',
       },
       { semantic: true, lexical: false, sync: false, excludeAutomations: true },
       provider,
@@ -97,7 +98,7 @@ export class HistorySources {
     const seen = new Set<string>()
     for (const row of result.rows) {
       if (
-        row.role !== 'assistant' ||
+        row.role !== 'user' ||
         row.source === 'session-title' ||
         automationDirectory.test(`${row.directory}/`)
       )
@@ -105,13 +106,11 @@ export class HistorySources {
       const source =
         this.#sources.find((candidate) => candidate.id === row.sourceId) ?? this.#sources[0]
       if (!source) continue
-      const prompt = this.#entry(source).history.nextPrompt(row.messageId)
+      const prompt = this.#entry(source).history.humanPrompt(row.messageId)
       if (!prompt || seen.has(prompt)) continue
       seen.add(prompt)
       examples.push({
-        situation: row.text.slice(0, 600),
         prompt: prompt.slice(0, 600),
-        directory: row.directory,
       })
       if (examples.length === 5) break
     }

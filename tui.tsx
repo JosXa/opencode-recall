@@ -128,6 +128,8 @@ export default Plugin.define({
               })
             }
           },
+          150,
+          async (input, signal) => (await rpc.refine(input, { signal })) as SuggestOutput,
         )
         const snapshot = (editor: TextareaRenderable | undefined): PromptSnapshot => {
           const sessionID = footer.sessionID ?? ''

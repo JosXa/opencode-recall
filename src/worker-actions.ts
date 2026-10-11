@@ -30,7 +30,7 @@ export async function executeWorkerRequest(request: HistoryWorkerRequest): Promi
       if (request.args.sync) await history.sync(provider)
       return JSON.stringify(
         await history.promptExamples(
-          request.args.situation,
+          request.args.prefix,
           currentSessionCursor(request.context.sessionID, request.args),
           provider,
         ),

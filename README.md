@@ -94,8 +94,11 @@ Register the built directory in your V2 config. Replace the example path with th
 ## Prompt autocomplete (opt in)
 
 Recall can show one dim suggestion at the end of the prompt. While you type, Luna
-completes your draft using earlier prompts you wrote after similar assistant
-replies. When a turn ends, the session's model suggests a short next action in
+completes your draft immediately while Recall finds earlier human prompts with
+similar prefixes. A second Luna call applies those examples of your wording
+when they arrive, while the first suggestion remains usable during refinement.
+Accepting a suggestion cancels refinement so accepted text stays intact.
+When a turn ends, the session's model suggests a short next action in
 the empty input. Suggestions stay outside the edit buffer until you accept them.
 After 500 ms without typing, a small gray `•` pulses in brightness while generation runs.
 Its display delay is separate from autocomplete timing, and it leaves the caret
@@ -136,8 +139,10 @@ Suggestions wrap across up to three display rows inside the prompt card. Recall
 temporarily reserves extra input height within OpenCode's limit and restores it
 when the suggestion hides. Longer suggestions are clipped at that limit.
 
-Recall uses its existing local embeddings to find similar replies and the user's
-next original prompt, including text before snippet expansion. It excludes
+Recall embeds the first 256 normalized characters of the draft and searches
+existing embeddings of human prompts, then reads original wording before snippet
+expansion. Retrieval runs alongside the first Luna call and never delays it.
+Cached examples inform the first call without a second generation. It excludes
 subagents, the active session, and known automated prompts. Typing generation
 sends the draft, preceding user message, recent assistant reply, and selected
 examples to the configured provider.
