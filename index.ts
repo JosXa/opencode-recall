@@ -2,7 +2,11 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Plugin } from '@opencode/plugin'
+import { Plugin as EffectPlugin } from '@opencode/plugin/effect'
+import { fromPromise } from '@opencode/plugin/promise/adapter'
+import { Effect } from 'effect'
 import { registerAutocomplete } from './src/autocomplete.js'
+import { autocompleteGeneration } from './src/autocomplete-generation.js'
 
 import {
   HISTORY_READ_COMMAND,
@@ -372,4 +376,28 @@ function isRecallTool(tool: string): tool is (typeof TOOL_NAMES)[number] {
   return TOOL_NAMES.some((name) => name === tool)
 }
 
-export default RecallPlugin
+export default EffectPlugin.define({
+  id: RecallPlugin.id,
+  effect: (native) =>
+    Effect.gen(function* () {
+      const runtime = yield* Effect.context<unknown>()
+      const generation = autocompleteGeneration(
+        { text: native.generate.text, session: native.session.generate },
+        runtime,
+      )
+      // OpenCode's Promise API adapter drops request options, including signal.
+      // Run only autocomplete generation through the cancellable native Effects.
+      yield* fromPromise({
+        ...RecallPlugin,
+        setup: (context) =>
+          RecallPlugin.setup({
+            ...context,
+            generate: { text: generation.text },
+            session: {
+              ...context.session,
+              generate: generation.session,
+            },
+          }),
+      }).effect(native)
+    }),
+})

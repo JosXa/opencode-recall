@@ -103,9 +103,9 @@ draft after the next typing pause while keeping the suggestion visible.
 Cached suggestions resume unfinished refinement. Completed refinements are reused.
 When a turn ends, the session's model suggests a short next action in
 the empty input. Suggestions stay outside the edit buffer until you accept them.
-After 500 ms without typing, a small gray `•` pulses in brightness while generation runs.
-Its display delay is separate from autocomplete timing, and it leaves the caret
-cell empty even after a typed space.
+After 500 ms without typing, a small gray `•` pulses inside the caret cell while
+generation, refinement, or background refill runs, including when a suggestion
+is already visible. Its display delay is separate from autocomplete timing.
 Edits to trailing spaces keep the dot visible and preserve its display deadline.
 Cached suggestions stay visible while the background request runs.
 
@@ -134,6 +134,8 @@ the next cached chunk immediately. Short replies start one background request
 before the first acceptance. Longer replies refill as you use the cached chunks.
 Adding, deleting, or replacing trailing spaces preserves the debounce deadline,
 active generation, and cached chunks. Other edits or dismissal cancel the background request.
+Superseded generations close their provider connections, including a slower
+initial call when refinement finishes first.
 **Alt+F** or
 **Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,

@@ -1,10 +1,5 @@
 import type { RGBA } from '@opentui/core'
 
-/** Reserve the caret cell even when the user already typed a trailing space. */
-export function generationHint(columns: number): string {
-  return columns >= 2 ? ' •' : ''
-}
-
 export const indicatorDebounceMs = 500
 const trailingSpaces = / +$/u
 
@@ -17,7 +12,7 @@ export class GenerationIndicator {
     this.#editedAt = now
   }
 
-  update(text: string, columns: number, generating: boolean, now: number): string {
+  update(text: string, generating: boolean, now: number): boolean {
     if (text !== this.#text) {
       // Trailing-space edits preserve both a visible pulse and its pending deadline.
       if (
@@ -27,8 +22,7 @@ export class GenerationIndicator {
         this.edited(now)
       this.#text = text
     }
-    if (!generating || now - this.#editedAt < indicatorDebounceMs) return ''
-    return generationHint(columns)
+    return generating && now - this.#editedAt >= indicatorDebounceMs
   }
 }
 

@@ -49,7 +49,9 @@ export class AutocompleteGhost extends TextRenderable {
     this.left = editor.x - (this.parent?.x ?? 0)
     this.top = editor.y + start.row - (this.parent?.y ?? 0)
     this.width = width
-    if (suffix !== this.plainText) this.content = suffix
+    // Keep the first unaccepted glyph clear of the caret and its status dot.
+    const content = suffix.startsWith(' ') ? suffix : ` ${suffix}`
+    if (content !== this.plainText) this.content = content
     if (start.column !== this._firstLineOffset) {
       this._firstLineOffset = start.column
       this.textBufferView.setFirstLineOffset(start.column)

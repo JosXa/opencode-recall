@@ -8,6 +8,7 @@ import {
   type TextareaRenderable,
 } from '@opentui/core'
 import { onCleanup, onMount } from 'solid-js'
+import { AutocompleteCaret } from './src/autocomplete-caret.js'
 import {
   AutocompleteController,
   acceptKey,
@@ -83,6 +84,17 @@ export default Plugin.define({
           selectable: false,
           zIndex: 50,
         })
+        const caret = new AutocompleteCaret(context.renderer, {
+          id: 'recall-autocomplete-caret',
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          content: '•',
+          visible: false,
+          fg: context.theme.text.muted,
+          selectable: false,
+          zIndex: 51,
+        })
         let hidden:
           | { editor: TextareaRenderable; placeholder: TextareaRenderable['placeholder'] }
           | undefined
@@ -94,7 +106,7 @@ export default Plugin.define({
           if (!busy) {
             pulseStarted = undefined
             pulseGray = undefined
-            ghost.fg = context.theme.text.muted
+            caret.fg = context.theme.text.muted
             return
           }
           const now = performance.now()
@@ -103,7 +115,7 @@ export default Plugin.define({
           const gray = generationGray(elapsed, context.theme.text.muted)
           if (gray === pulseGray) return
           pulseGray = gray
-          ghost.fg = RGBA.fromInts(gray, gray, gray)
+          caret.fg = RGBA.fromInts(gray, gray, gray)
         }
         const restore = () => {
           if (hidden && !hidden.editor.isDestroyed && !hidden.editor.placeholder)
@@ -177,18 +189,13 @@ export default Plugin.define({
           controller.update(snapshot(editor))
           const suffix = controller.suffix
           const hint = editor
-            ? indicator.update(
-                editor.plainText,
-                editor.width - editor.visualCursor.visualCol,
-                controller.generating && !suffix,
-                performance.now(),
-              )
-            : ''
-          const content = suffix || hint
-          syncPlaceholder(editor, content)
-          color(hint.length > 0)
-          if (!(editor && content && anchor)) return ghost.hide()
-          ghost.update(editor, content)
+            ? indicator.update(editor.plainText, controller.generating, performance.now())
+            : false
+          syncPlaceholder(editor, suffix || (hint ? '•' : ''))
+          color(hint)
+          caret.update(editor, hint && !!anchor)
+          if (!(editor && suffix && anchor)) return ghost.hide()
+          ghost.update(editor, suffix)
         }
         const keypress = (event: KeyEvent) => {
           const editor = active()
@@ -226,6 +233,7 @@ export default Plugin.define({
           context.renderer.keyInput.removeListener('keypress', keypress)
           controller.dispose()
           ghost.destroy()
+          caret.destroy()
           restore()
         })
         return (
@@ -233,6 +241,7 @@ export default Plugin.define({
             ref={(box) => {
               anchor = box
               box.add(ghost)
+              box.add(caret)
             }}
             width={0}
             height={0}

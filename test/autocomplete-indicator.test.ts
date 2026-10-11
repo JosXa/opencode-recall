@@ -1,80 +1,72 @@
 import { expect, test } from 'vitest'
-import { GenerationIndicator, generationGray, generationHint } from '../src/autocomplete-indicator.js'
-
-test('the bullet always leaves the caret cell empty and never wraps', () => {
-  expect(generationHint(2)).toBe(' •')
-  expect(generationHint(1)).toBe('')
-  expect(generationHint(0)).toBe('')
-})
+import { GenerationIndicator, generationGray } from '../src/autocomplete-indicator.js'
 
 test('display waits for 500ms of idle typing independently of generation start', () => {
   const indicator = new GenerationIndicator()
-  expect(indicator.update('Review', 20, false, 0)).toBe('')
-  expect(indicator.update('Review', 20, true, 150)).toBe('')
-  expect(indicator.update('Review', 20, true, 499)).toBe('')
-  expect(indicator.update('Review', 20, true, 500)).toBe(' •')
-  expect(indicator.update('Review', 20, false, 501)).toBe('')
+  expect(indicator.update('Review', false, 0)).toBe(false)
+  expect(indicator.update('Review', true, 150)).toBe(false)
+  expect(indicator.update('Review', true, 499)).toBe(false)
+  expect(indicator.update('Review', true, 500)).toBe(true)
+  expect(indicator.update('Review', false, 501)).toBe(false)
 })
 
 test('trailing-space edits preserve the pending display deadline', () => {
   const indicator = new GenerationIndicator()
-  indicator.update('Review', 20, true, 0)
-  expect(indicator.update('Review ', 20, true, 300)).toBe('')
-  expect(indicator.update('Review   ', 20, true, 400)).toBe('')
-  expect(indicator.update('Review', 20, true, 499)).toBe('')
-  expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
+  indicator.update('Review', true, 0)
+  expect(indicator.update('Review ', true, 300)).toBe(false)
+  expect(indicator.update('Review   ', true, 400)).toBe(false)
+  expect(indicator.update('Review', true, 499)).toBe(false)
+  expect(indicator.update('Review ', true, 500)).toBe(true)
 })
 
-test('adding, deleting and replacing trailing spaces keep a visible hint', () => {
+test('adding, deleting and replacing trailing spaces keep a visible pulse', () => {
   const indicator = new GenerationIndicator()
-  indicator.update('Review ', 20, true, 0)
-  expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
+  indicator.update('Review ', true, 0)
+  expect(indicator.update('Review ', true, 500)).toBe(true)
   for (const text of ['Review   ', 'Review ', 'Review', 'Review  ', 'Review'])
-    expect(indicator.update(text, 20, true, 600)).toBe(' •')
-  expect(indicator.update('Review ', 1, true, 601)).toBe('')
-  expect(indicator.update('Review', 20, true, 602)).toBe(' •')
+    expect(indicator.update(text, true, 600)).toBe(true)
 })
 
 test('whitespace-only drafts preserve the display deadline in both directions', () => {
   const indicator = new GenerationIndicator()
-  indicator.update('', 20, true, 0)
-  expect(indicator.update('   ', 20, true, 499)).toBe('')
-  expect(indicator.update('', 20, true, 500)).toBe(' •')
-  expect(indicator.update(' ', 20, true, 501)).toBe(' •')
-  expect(indicator.update('', 20, true, 502)).toBe(' •')
+  indicator.update('', true, 0)
+  expect(indicator.update('   ', true, 499)).toBe(false)
+  expect(indicator.update('', true, 500)).toBe(true)
+  expect(indicator.update(' ', true, 501)).toBe(true)
+  expect(indicator.update('', true, 502)).toBe(true)
 })
 
 test('letter edits, internal spaces and line breaks still reset the display deadline', () => {
   for (const text of ['Review it', 'Revie', 'Re view', 'Review\n', 'Review\t']) {
     const indicator = new GenerationIndicator()
-    indicator.update('Review ', 20, true, 0)
-    expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
-    expect(indicator.update(text, 20, true, 600)).toBe('')
-    expect(indicator.update(text, 20, true, 1099)).toBe('')
-    expect(indicator.update(text, 20, true, 1100)).toBe(' •')
+    indicator.update('Review ', true, 0)
+    expect(indicator.update('Review ', true, 500)).toBe(true)
+    expect(indicator.update(text, true, 600)).toBe(false)
+    expect(indicator.update(text, true, 1099)).toBe(false)
+    expect(indicator.update(text, true, 1100)).toBe(true)
   }
 })
 
 test('a key without a text edit restarts the display deadline', () => {
   const indicator = new GenerationIndicator()
-  indicator.update('Review ', 20, true, 0)
-  expect(indicator.update('Review ', 20, true, 500)).toBe(' •')
+  indicator.update('Review ', true, 0)
+  expect(indicator.update('Review ', true, 500)).toBe(true)
   indicator.edited(600)
-  expect(indicator.update('Review ', 20, true, 600)).toBe('')
-  expect(indicator.update('Review ', 20, true, 1099)).toBe('')
-  expect(indicator.update('Review ', 20, true, 1100)).toBe(' •')
+  expect(indicator.update('Review ', true, 600)).toBe(false)
+  expect(indicator.update('Review ', true, 1099)).toBe(false)
+  expect(indicator.update('Review ', true, 1100)).toBe(true)
 })
 
-test('cached suggestions and completed work suppress the hint without affecting its timing', () => {
+test('the pulse follows pending work independently of cached suggestions', () => {
   const indicator = new GenerationIndicator()
-  indicator.update('Review', 20, false, 0)
-  expect(indicator.update('Review', 20, false, 600)).toBe('')
-  expect(indicator.update('Review', 20, true, 601)).toBe(' •')
-  expect(indicator.update('Review', 1, true, 602)).toBe('')
-  expect(indicator.update('Review', 20, false, 603)).toBe('')
+  indicator.update('Review', false, 0)
+  expect(indicator.update('Review', false, 600)).toBe(false)
+  expect(indicator.update('Review', true, 601)).toBe(true)
+  expect(indicator.update('Review', false, 602)).toBe(false)
+  expect(indicator.update('Review', true, 603)).toBe(true)
 })
 
-test('brightness visibly pulses in grayscale without changing the glyph or its size', () => {
+test('brightness visibly pulses in grayscale', () => {
   const muted = { r: 120 / 255, g: 120 / 255, b: 120 / 255 }
   expect(generationGray(0, muted)).toBe(48)
   expect(generationGray(300, muted)).toBe(84)
@@ -83,6 +75,5 @@ test('brightness visibly pulses in grayscale without changing the glyph or its s
   for (let elapsed = 0; elapsed <= 1200; elapsed += 100) {
     expect(generationGray(elapsed, muted)).toBeGreaterThanOrEqual(48)
     expect(generationGray(elapsed, muted)).toBeLessThanOrEqual(120)
-    expect(generationHint(2)).toBe(' •')
   }
 })

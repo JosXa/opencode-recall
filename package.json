@@ -76,6 +76,8 @@
   ],
   "dependencies": {
     "@opencode/plugin": "2.0.5",
+    "@opencode/schema": "2.0.5",
+    "effect": "4.0.0-rc.112",
     "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
