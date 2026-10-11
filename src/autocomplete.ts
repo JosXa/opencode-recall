@@ -1,4 +1,9 @@
-import type { Plugin } from '@opencode/plugin'
+import { Model, type Plugin } from '@opencode/plugin'
+import {
+  autocompleteFormat,
+  autocompleteVariant,
+  constrainAutocompleteRequest,
+} from './autocomplete-format.js'
 import { Autocomplete, type SuggestInput, type SuggestOutput } from './autocomplete-rpc.js'
 import { executeNodeWorker } from './node-worker-client.js'
 import { type PromptExample, promptPrefix } from './prompt-example.js'
@@ -82,8 +87,9 @@ export function normalizeSuggestions(raw: string, input: SuggestInput): SuggestO
   const parsed = (() => {
     try {
       return JSON.parse(raw) as unknown
-    } catch {
-      return undefined
+    } catch (error) {
+      // A malformed response is a generation failure, never a cacheable empty suggestion.
+      throw new Error('Autocomplete model returned invalid JSON.', { cause: error })
     }
   })()
   if (
@@ -92,7 +98,7 @@ export function normalizeSuggestions(raw: string, input: SuggestInput): SuggestO
     !('continuation' in parsed) ||
     typeof parsed.continuation !== 'string'
   )
-    return { text: '' }
+    throw new Error('Autocomplete model returned an invalid continuation object.')
   const continuation = parsed.continuation.trimEnd()
   if (
     !continuation.trim() ||
@@ -209,6 +215,40 @@ export async function registerAutocomplete(
   const configured = context.options['autocompleteModel']
   const model = typeof configured === 'string' ? configured : 'openai/gpt-6-luna-fast'
   const slash = model.indexOf('/')
+  const selected: { providerID: string; id: string; variant?: string } = {
+    providerID: model.slice(0, slash),
+    id: model.slice(slash + 1),
+  }
+  // Transient generation accepts a model variant, whose body enforces JSON decoding.
+  const formatting = await context.model.transform((editor) => {
+    delete selected.variant
+    if (!editor.get(selected.providerID, selected.id)) return
+    editor.update(selected.providerID, selected.id, (value) => {
+      const providerPackage =
+        value.package ?? editor.provider.get(selected.providerID)?.provider.package
+      if (providerPackage !== '@opencode/ai/providers/openai') return
+      value.variants = [
+        ...value.variants.filter((variant) => String(variant.id) !== autocompleteVariant),
+        {
+          id: Model.VariantID.make(autocompleteVariant),
+          body: { text: { format: autocompleteFormat } },
+        },
+      ]
+      selected.variant = autocompleteVariant
+    })
+  })
+  await context.model.list()
+  const nextPrompts = new Set<{ sessionID: string; prompt: string }>()
+  // Session generation keeps its selected model and context; format only our own request.
+  const sessionFormatting = await context.session.hook('http.request', async (event) => {
+    if (event.kind !== 'generate') return
+    event.request = await constrainAutocompleteRequest(
+      event.request,
+      [...nextPrompts]
+        .filter((pending) => pending.sessionID === event.sessionID)
+        .map((pending) => pending.prompt),
+    )
+  })
   const registration = await context.rpc.register(Autocomplete, {
     prepare: async () => {
       void prepare()
@@ -219,10 +259,11 @@ export async function registerAutocomplete(
       const signal = AbortSignal.any([lifetime.signal, call.signal])
       if (input.mode === 'next') {
         if (!input.sessionID) return { text: '' }
-        const result = await context.session.generate(
-          { sessionID: input.sessionID, prompt: suggestionPrompt(input, []) },
-          { signal },
-        )
+        const pending = { sessionID: input.sessionID, prompt: suggestionPrompt(input, []) }
+        nextPrompts.add(pending)
+        const result = await context.session
+          .generate(pending, { signal })
+          .finally(() => nextPrompts.delete(pending))
         return { ...normalizeSuggestions(result.text, input), ...(notice ? { notice } : {}) }
       }
       // The first completion never waits for retrieval; reuse style only when ready.
@@ -232,7 +273,7 @@ export async function registerAutocomplete(
       signal.throwIfAborted()
       const result = await context.generate.text(
         {
-          model: { providerID: model.slice(0, slash), id: model.slice(slash + 1) },
+          model: selected,
           prompt: suggestionPrompt(input, matches),
         },
         { signal },
@@ -250,7 +291,7 @@ export async function registerAutocomplete(
       if (matches.length === 0) return { text: '', ...(notice ? { notice } : {}) }
       const result = await context.generate.text(
         {
-          model: { providerID: model.slice(0, slash), id: model.slice(slash + 1) },
+          model: selected,
           prompt: suggestionPrompt(input, matches),
         },
         { signal },
@@ -261,6 +302,8 @@ export async function registerAutocomplete(
   return async () => {
     lifetime.abort()
     await registration.dispose()
+    await sessionFormatting.dispose()
+    await formatting.dispose()
     await Promise.allSettled([...(warming ? [warming] : []), ...jobs.values()])
   }
 }

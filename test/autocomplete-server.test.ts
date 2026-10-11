@@ -1,5 +1,6 @@
-import type { Plugin } from '@opencode/plugin'
+import { Model, type Plugin, Provider } from '@opencode/plugin'
 import { afterEach, expect, test, vi } from 'vitest'
+import { autocompleteFormat, autocompleteVariant } from '../src/autocomplete-format.js'
 import { registerAutocomplete } from '../src/autocomplete.js'
 import type { SuggestInput, SuggestOutput } from '../src/autocomplete-rpc.js'
 import { executeNodeWorker } from '../src/node-worker-client.js'
@@ -9,14 +10,46 @@ vi.mock('../src/node-worker-client.js', () => ({ executeNodeWorker: vi.fn() }))
 afterEach(() => vi.mocked(executeNodeWorker).mockReset())
 
 type Handler = (input: SuggestInput, call: { signal: AbortSignal }) => Promise<SuggestOutput>
-async function harness() {
+type Editor = Parameters<Parameters<Plugin.Context['model']['transform']>[0]>[0]
+type Draft = NonNullable<ReturnType<Editor['get']>>
+type HttpEvent = Extract<Parameters<Parameters<Plugin.Context['session']['hook']>[1]>[0], { request: Request }>
+async function harness(providerPackage = '@opencode/ai/providers/openai') {
   vi.mocked(executeNodeWorker).mockResolvedValue(JSON.stringify(examples))
   let handlers: { suggest: Handler; refine: Handler; prepare: () => Promise<unknown> } | undefined
+  const model = Model.Info.default(Provider.ID.make('openai'), Model.ID.make('gpt-6-luna-fast')) as Draft
+  model.body = { service_tier: 'priority' }
+  model.variants = [{ id: Model.VariantID.make('low'), settings: { reasoningEffort: 'low' } }]
+  const provider = { provider: { ...Provider.Info.empty(Provider.ID.make('openai')), package: providerPackage }, models: new Map() }
+  const editor: Editor = {
+    get: () => model, list: () => [model], remove: () => {},
+    update: (_provider, _model, update) => update(model),
+    default: { get: () => undefined, set: () => {} },
+    provider: { get: () => provider, list: () => [provider] },
+  }
+  let transform: Parameters<Plugin.Context['model']['transform']>[0] = () => {}
+  let httpHook: (event: HttpEvent) => Promise<void> | void = () => {}
+  const requests: Request[] = []
+  const formattingDispose = vi.fn(async () => {})
+  const hookDispose = vi.fn(async () => {})
   const generate = vi.fn(async (_request: { prompt: string }) => ({ text: '{"continuation":"the tests"}' }))
-  const next = vi.fn(async () => ({ text: '{"continuation":"review and commit the changes"}' }))
+  const next = vi.fn(async (input: { sessionID: string; prompt: string }) => {
+    const event = { sessionID: input.sessionID, kind: 'generate', request: new Request('https://example.com/v1/responses', {
+      method: 'POST', body: JSON.stringify({ input: [{ role: 'user', content: input.prompt }] }),
+    }) } as HttpEvent
+    await httpHook(event)
+    requests.push(event.request)
+    return { text: '{"continuation":"review and commit the changes"}' }
+  })
   const dispose = vi.fn()
   const context = {
-    options: {}, generate: { text: generate }, session: { generate: next },
+    options: {}, generate: { text: generate },
+    model: {
+      transform: async (callback: typeof transform) => { transform = callback; return { dispose: formattingDispose } },
+      list: async () => { transform(editor); return { data: [model] } },
+    },
+    session: { generate: next, hook: async (name: string, callback: typeof httpHook) => {
+      expect(name).toBe('http.request'); httpHook = callback; return { dispose: hookDispose }
+    } },
     rpc: { register: async (_definition: unknown, value: NonNullable<typeof handlers>) => {
       handlers = value
       return { dispose }
@@ -24,7 +57,8 @@ async function harness() {
   } as unknown as Plugin.Context
   const stop = await registerAutocomplete(context, '/fixture')
   if (!handlers) throw new Error('RPC was not registered')
-  return { ...handlers, generate, next, dispose, stop }
+  return { ...handlers, generate, next, dispose, stop, model, requests, httpHook,
+    replay: () => transform(editor), formattingDispose, hookDispose }
 }
 const input: SuggestInput = { sessionID: 'ses_current', situation: 'Tests pass', text: 'run ', mode: 'typing' }
 const call = () => ({ signal: new AbortController().signal })
@@ -44,7 +78,7 @@ test('the first Luna completion finishes while history is still pending', async 
     worker.resolve(JSON.stringify(examples))
     expect(await refined).toEqual({ text: 'run the tests' })
     expect(h.generate.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-      model: { providerID: 'openai', id: 'gpt-6-luna-fast' }, prompt: expect.stringContaining('#review then commit'),
+      model: { providerID: 'openai', id: 'gpt-6-luna-fast', variant: autocompleteVariant }, prompt: expect.stringContaining('#review then commit'),
     }))
   } finally { await h.stop() }
 })
@@ -76,9 +110,36 @@ test('turn-end uses the session model and empty drafts never retrieve style', as
     expect(await h.refine({ ...input, text: '', mode: 'next' }, call())).toEqual({ text: '' })
     expect(await h.refine({ ...input, text: '   ' }, call())).toEqual({ text: '' })
     expect(h.next).toHaveBeenCalledOnce()
+    expect((await h.requests[0]?.json()).text.format).toEqual(autocompleteFormat)
     expect(h.generate).not.toHaveBeenCalled()
     expect(executeNodeWorker).not.toHaveBeenCalled()
   } finally { await h.stop() }
+})
+
+test('schema variant preserves model defaults and existing variants across registry rebuilds', async () => {
+  const h = await harness()
+  h.replay()
+  expect(h.model.body).toEqual({ service_tier: 'priority' })
+  expect(h.model.variants).toEqual([
+    { id: 'low', settings: { reasoningEffort: 'low' } },
+    { id: autocompleteVariant, body: { text: { format: autocompleteFormat } } },
+  ])
+  await h.stop()
+})
+
+test('other provider protocols retain their configured model selection', async () => {
+  const h = await harness('@opencode/ai/providers/anthropic')
+  await h.suggest(input, { signal: new AbortController().signal })
+  expect(h.model.variants).toHaveLength(1)
+  expect(h.generate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ model: { providerID: 'openai', id: 'gpt-6-luna-fast' } }))
+  await h.stop()
+})
+
+test('malformed output rejects the RPC instead of returning an empty continuation', async () => {
+  const h = await harness()
+  h.generate.mockResolvedValueOnce({ text: ' do you mean the part where the RPC returned an empty suggestion?"}' })
+  await expect(h.suggest(input, { signal: new AbortController().signal })).rejects.toThrow('invalid JSON')
+  await h.stop()
 })
 
 test('an aborted refinement does not start paid generation after retrieval', async () => {
@@ -124,6 +185,8 @@ test('superseded drafts cancel retrieval; disposal bounds and cancels remaining 
   expect(signals.every(signal => signal.aborted)).toBe(true)
   expect((await results).every(result => result.status === 'rejected')).toBe(true)
   expect(h.dispose).toHaveBeenCalledOnce()
+  expect(h.formattingDispose).toHaveBeenCalledOnce()
+  expect(h.hookDispose).toHaveBeenCalledOnce()
 })
 
 test('warming invalidates early matches so later refinements see updated history', async () => {

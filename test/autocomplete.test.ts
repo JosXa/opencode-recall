@@ -51,8 +51,33 @@ test('a complete generated continuation becomes cached sentences without rewriti
   expect(normalizeSuggestions('{"continuation":"json scripts"}', snapshot('package.'))).toEqual({ text: 'package.json scripts' })
   expect(normalizeSuggestions('{"continuation":"review the diff. Run the tests."}', snapshot('', { mode: 'next' })))
     .toEqual({ text: 'review the diff.', continuations: [' Run the tests.'] })
-  for (const raw of ['garbage', '{"continuation":""}', '{"continuation":"NONE"}', '{"continuation":"a\\nb"}', '{"continuation":42}'])
+  for (const raw of ['{"continuation":""}', '{"continuation":"NONE"}', '{"continuation":"a\\nb"}'])
     expect(normalizeSuggestions(raw, snapshot())).toEqual({ text: '' })
+})
+
+test('malformed model output is reported instead of being cached as an empty continuation', async () => {
+  vi.useFakeTimers()
+  const raw = ' caused autocomplete to stop—the model returning an empty response, or the response being rejected during validation?'
+  const state = snapshot('which part of it exactly ')
+  expect(() => normalizeSuggestions(raw, state)).toThrow('invalid JSON')
+  expect(() => normalizeSuggestions('{"continuation":42}', state)).toThrow('invalid continuation object')
+  const valid = JSON.stringify({ continuation: raw })
+  const request = vi.fn(async (input: SuggestInput) => {
+    if (request.mock.calls.length === 1) return normalizeSuggestions(raw, input)
+    if (input.text === state.text) return normalizeSuggestions(valid, input)
+    return new Promise<never>(() => {})
+  })
+  const controller = new AutocompleteController(request, () => {})
+  controller.update(state)
+  await vi.advanceTimersByTimeAsync(150)
+  expect(controller.error).toBe('Autocomplete model returned invalid JSON.')
+  expect(controller.suffix).toBe('')
+  controller.update({ ...state, eligible: false })
+  controller.update(state)
+  await vi.advanceTimersByTimeAsync(150)
+  expect(controller.suffix).toBe(normalizeSuggestions(valid, state).text.slice(state.text.length))
+  expect(controller.error).toBeUndefined()
+  controller.dispose()
 })
 
 test('long sentences produce bounded word chunks and keep every prepared word', () => {
