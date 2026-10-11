@@ -195,7 +195,7 @@ export default Plugin.define({
           color(hint)
           caret.update(editor, hint && !!anchor)
           if (!(editor && suffix && anchor)) return ghost.hide()
-          ghost.update(editor, suffix)
+          ghost.update(editor, suffix, hint)
         }
         const keypress = (event: KeyEvent) => {
           const editor = active()

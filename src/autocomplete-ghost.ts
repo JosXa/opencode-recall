@@ -37,7 +37,7 @@ export class AutocompleteGhost extends TextRenderable {
     space.editor.requestRender()
   }
 
-  update(editor: TextareaRenderable, suffix: string) {
+  update(editor: TextareaRenderable, suffix: string, caretVisible = false) {
     if (this.#space?.editor !== editor) this.#restore()
     const node = editor.getLayoutNode()
     const minimum = this.#space?.minimum ?? node.getMinHeight()
@@ -49,8 +49,8 @@ export class AutocompleteGhost extends TextRenderable {
     this.left = editor.x - (this.parent?.x ?? 0)
     this.top = editor.y + start.row - (this.parent?.y ?? 0)
     this.width = width
-    // Keep the first unaccepted glyph clear of the caret and its status dot.
-    const content = suffix.startsWith(' ') ? suffix : ` ${suffix}`
+    // Reserve a cell only for a visible dot on this row, never for an idle caret.
+    const content = caretVisible && !start.extra && !suffix.startsWith(' ') ? ` ${suffix}` : suffix
     if (content !== this.plainText) this.content = content
     if (start.column !== this._firstLineOffset) {
       this._firstLineOffset = start.column

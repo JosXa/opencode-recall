@@ -24,7 +24,7 @@ vi.mock('@opentui/core', () => ({
 }))
 import { AutocompleteGhost } from '../src/autocomplete-ghost.js'
 
-function fixture() {
+function fixture(text?: string) {
   const node = {
     minimum: { unit: 1, value: 1 },
     getMinHeight() {
@@ -36,6 +36,7 @@ function fixture() {
     },
   }
   const editor = {
+    plainText: text ?? '',
     ctx: { height: 30 },
     width: 61,
     height: 2,
@@ -45,7 +46,7 @@ function fixture() {
     x: 5,
     y: 10,
     isDestroyed: false,
-    visualCursor: { visualCol: 19, visualRow: 0 },
+    visualCursor: { visualCol: text?.length ?? 19, visualRow: 0 },
     getLayoutNode: () => node,
     requestRender: vi.fn(),
     set minHeight(value: number) {
@@ -53,10 +54,13 @@ function fixture() {
     },
   }
   const ghost = new AutocompleteGhost({} as RenderContext, {})
+  const buffer = { pushScissorRect: vi.fn(), drawTextBuffer: vi.fn(), popScissorRect: vi.fn() }
   return {
     node,
     editor,
+    nativeEditor: editor as unknown as TextareaRenderable,
     ghost,
+    buffer,
     update: () => ghost.update(editor as unknown as TextareaRenderable, ' next sentence.'),
   }
 }
@@ -109,4 +113,47 @@ describe('wrapped ghost layout', () => {
     f.editor.height = 1
     expect(f.ghost.hasRoom).toBe(false)
   })
+})
+
+test('a completed next-action suggestion starts at the empty input left edge', () => {
+  const { editor, nativeEditor, ghost, buffer } = fixture('')
+  const suggestion = 'Please implement the actual rendering indicator.'
+  ghost.update(nativeEditor, suggestion)
+  ghost.render(buffer as unknown as OptimizedBuffer)
+  expect(ghost.plainText).toBe(suggestion)
+  expect(buffer.drawTextBuffer.mock.calls[0]?.slice(1)).toEqual([editor.screenX, editor.screenY])
+  expect(editor.plainText).toBe('')
+})
+
+test('a typed trailing space does not acquire another display-only space', () => {
+  const { editor, nativeEditor, ghost } = fixture('Review ')
+  ghost.update(nativeEditor, 'the changes.')
+  expect(ghost.plainText).toBe('the changes.')
+  expect(editor.plainText).toBe('Review ')
+})
+
+test('the temporary dot cell disappears as soon as generation ends', () => {
+  const { editor, nativeEditor, ghost } = fixture('')
+  ghost.update(nativeEditor, 'Please review the changes.', true)
+  expect(ghost.plainText).toBe(' Please review the changes.')
+  ghost.update(nativeEditor, 'Please review the changes.', false)
+  expect(ghost.plainText).toBe('Please review the changes.')
+  expect(editor.plainText).toBe('')
+})
+
+test('a continuation keeps its actual word separator while the dot is visible', () => {
+  const { nativeEditor, ghost } = fixture('Review')
+  for (const busy of [true, false]) {
+    ghost.update(nativeEditor, ' the changes.', busy)
+    expect(ghost.plainText).toBe(' the changes.')
+  }
+})
+
+test('a wrapped continuation does not reserve a dot cell on the next row', () => {
+  const { editor, nativeEditor, ghost, buffer } = fixture('x'.repeat(61))
+  editor.height = 3
+  ghost.update(nativeEditor, 'the changes.', true)
+  ghost.render(buffer as unknown as OptimizedBuffer)
+  expect(ghost.plainText).toBe('the changes.')
+  expect(buffer.drawTextBuffer.mock.calls[0]?.slice(1)).toEqual([editor.screenX, editor.screenY + 1])
 })
