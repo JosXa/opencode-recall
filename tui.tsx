@@ -189,7 +189,7 @@ export default Plugin.define({
           controller.update(snapshot(editor))
           const suffix = controller.suffix
           const hint = editor
-            ? indicator.update(editor.plainText, controller.generating, performance.now())
+            ? indicator.update(editor.plainText, controller.generating, performance.now(), !!suffix)
             : false
           syncPlaceholder(editor, suffix || (hint ? '•' : ''))
           color(hint)

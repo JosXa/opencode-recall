@@ -12,7 +12,7 @@ export class GenerationIndicator {
     this.#editedAt = now
   }
 
-  update(text: string, generating: boolean, now: number): boolean {
+  update(text: string, generating: boolean, now: number, hasSuggestion: boolean): boolean {
     if (text !== this.#text) {
       // Trailing-space edits preserve both a visible pulse and its pending deadline.
       if (
@@ -22,7 +22,8 @@ export class GenerationIndicator {
         this.edited(now)
       this.#text = text
     }
-    return generating && now - this.#editedAt >= indicatorDebounceMs
+    // Refinement and refill can stay pending after an acceptable suggestion arrives.
+    return generating && !hasSuggestion && now - this.#editedAt >= indicatorDebounceMs
   }
 }
 

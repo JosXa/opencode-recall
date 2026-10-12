@@ -104,8 +104,9 @@ Cached suggestions resume unfinished refinement. Completed refinements are reuse
 When a turn ends, the session's model suggests a short next action in
 the empty input. Suggestions stay outside the edit buffer until you accept them.
 After 500 ms without typing, a small gray `•` pulses inside the caret cell while
-generation, refinement, or background refill runs, including when a suggestion
-is already visible. Its display delay is separate from autocomplete timing.
+generation runs without an available suggestion. The dot hides as soon as a
+suggestion appears, including during refinement or background refill.
+Its display delay is separate from autocomplete timing.
 Edits to trailing spaces keep the dot visible and preserve its display deadline.
 Cached suggestions stay visible while the background request runs.
 
