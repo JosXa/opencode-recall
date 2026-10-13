@@ -153,27 +153,29 @@ export class AutocompleteController {
       : ''
   }
 
-  /** Preview every prepared sentence while acceptance advances only one sentence. */
+  /** Preview at most three upcoming sentences while acceptance advances only one. */
   public get preview(): string {
-    const state = this.#snapshot
-    return state?.eligible && this.#candidate && this.#compatible(state)
-      ? this.#candidate.text.slice(state.text.length)
-      : ''
+    return this.#continuation(3)
   }
 
   public get sentence(): string {
+    return this.#continuation(1)
+  }
+
+  #continuation(limit: number): string {
     const state = this.#snapshot
-    if (!state) return ''
-    const preview = this.preview
-    if (!preview) return ''
-    const text = state.text + preview
+    const candidate = this.#candidate
+    if (!(state?.eligible && candidate && this.#compatible(state))) return ''
+    const text = candidate.text
+    let count = 0
     for (const part of sentences.segment(text)) {
       const end = part.index + part.segment.trimEnd().length
       // Do not split URL query strings or identifiers at punctuation inside a token.
-      if (end > state.text.length && (end === text.length || wordBoundary.test(text.charAt(end))))
-        return text.slice(state.text.length, end)
+      if (end <= state.text.length || (end !== text.length && !wordBoundary.test(text.charAt(end))))
+        continue
+      if (++count === limit) return text.slice(state.text.length, end)
     }
-    return preview
+    return text.slice(state.text.length)
   }
 
   public update(state: PromptSnapshot): void {

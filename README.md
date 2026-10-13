@@ -128,8 +128,9 @@ the TUI registration (`cli.json`):
 Restart the server and TUI after changing these settings. Omit `autocomplete` or
 set it to `false` to use Recall without automatic generation.
 
-The preview shows the full cached continuation. **Tab**, **Right**, **Ctrl+E**, or
-**Ctrl+F** accepts one sentence at a time, leaving the remaining sentences visible.
+The preview shows up to three upcoming sentences from the cached continuation.
+**Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts one sentence at a time,
+revealing the next cached sentence as space becomes available.
 Long sentences are accepted together, even if stored as several internal chunks.
 Short replies start one background request before the first acceptance.
 Longer replies refill as you use the cached chunks.

@@ -82,3 +82,37 @@ test('URL punctuation stays intact during sentence acceptance', async () => {
   expect(controller.sentence).toBe(first)
   controller.dispose()
 })
+
+test('preview caps upcoming sentences at three and reveals the next one after acceptance', async () => {
+  vi.useFakeTimers()
+  const continuation = ' the changes. Check cancellation. Explain issues. Add tests. Report results.'
+  const controller = new AutocompleteController(async input => input.text === 'Review'
+    ? normalizeSuggestions(JSON.stringify({ continuation }), input)
+    : new Promise<never>(() => {}), () => {})
+  controller.update(snapshot('Review'))
+  await vi.advanceTimersByTimeAsync(150)
+  expect(controller.preview).toBe(' the changes. Check cancellation. Explain issues.')
+  expect(controller.sentence).toBe(' the changes.')
+  controller.accepted('Review the changes.')
+  expect(controller.preview).toBe(' Check cancellation. Explain issues. Add tests.')
+  expect(controller.sentence).toBe(' Check cancellation.')
+  controller.accepted('Review the changes. Check cancellation.')
+  expect(controller.preview).toBe(' Explain issues. Add tests. Report results.')
+  controller.dispose()
+})
+
+test('preview counts only upcoming sentences and preserves dots inside URLs and numbers', async () => {
+  vi.useFakeTimers()
+  const draft = 'Tests pass. Please'
+  const first = ' open https://example.com/?page=2 and check version 1.2.'
+  const controller = new AutocompleteController(async input => input.text === draft
+    ? { text: draft + first, continuations: [' Check redirects.', ' Add tests.', ' Report results.'] }
+    : new Promise<never>(() => {}), () => {})
+  controller.update(snapshot(draft))
+  await vi.advanceTimersByTimeAsync(150)
+  expect(controller.preview).toBe(first + ' Check redirects. Add tests.')
+  expect(controller.sentence).toBe(first)
+  controller.update(snapshot(draft + ' '))
+  expect(controller.preview).toBe(first.trimStart() + ' Check redirects. Add tests.')
+  controller.dispose()
+})
