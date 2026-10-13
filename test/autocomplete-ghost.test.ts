@@ -66,6 +66,19 @@ function fixture(text?: string) {
 }
 
 describe('wrapped ghost layout', () => {
+  test('uses the available host rows to preview more than three lines', () => {
+    const f = fixture('')
+    view.measureForDimensions.mockReturnValueOnce({ lineCount: 5, widthColsMax: 61 })
+    f.ghost.update(f.nativeEditor, 'First sentence. Second sentence. Third sentence.')
+    expect(f.node.minimum.value).toBe(5)
+    expect(view.measureForDimensions).toHaveBeenLastCalledWith(61, 6)
+    f.editor.height = 5
+    f.ghost.render(f.buffer as unknown as OptimizedBuffer)
+    expect(view.setViewport).toHaveBeenLastCalledWith(0, 1, 61, 4)
+    expect(f.editor.plainText).toBe('')
+    f.ghost.hide()
+    expect(f.node.minimum.value).toBe(1)
+  })
   test('reserves display rows and restores the original constraint on hide', () => {
     const f = fixture()
     f.update()

@@ -34,6 +34,8 @@ type Candidate = {
 
 const trailingSpaces = / +$/u
 const leadingSpaces = /^ +/u
+const wordBoundary = /\s/u
+const sentences = new Intl.Segmenter(undefined, { granularity: 'sentence' })
 
 function separatingSpace(text: string, prefix: string): boolean {
   return text.charAt(prefix.replace(trailingSpaces, '').length) === ' '
@@ -144,6 +146,29 @@ export class AutocompleteController {
           candidate.ends.find((end) => end > state.text.length) ?? state.text.length,
         )
       : ''
+  }
+
+  /** Preview every prepared sentence while acceptance advances only one sentence. */
+  public get preview(): string {
+    const state = this.#snapshot
+    return state?.eligible && this.#candidate && this.#compatible(state)
+      ? this.#candidate.text.slice(state.text.length)
+      : ''
+  }
+
+  public get sentence(): string {
+    const state = this.#snapshot
+    if (!state) return ''
+    const preview = this.preview
+    if (!preview) return ''
+    const text = state.text + preview
+    for (const part of sentences.segment(text)) {
+      const end = part.index + part.segment.trimEnd().length
+      // Do not split URL query strings or identifiers at punctuation inside a token.
+      if (end > state.text.length && (end === text.length || wordBoundary.test(text.charAt(end))))
+        return text.slice(state.text.length, end)
+    }
+    return preview
   }
 
   public update(state: PromptSnapshot): void {

@@ -187,7 +187,7 @@ export default Plugin.define({
         function sync() {
           const editor = active()
           controller.update(snapshot(editor))
-          const suffix = controller.suffix
+          const suffix = controller.preview
           const hint = editor
             ? indicator.update(editor.plainText, controller.generating, performance.now(), !!suffix)
             : false
@@ -218,8 +218,9 @@ export default Plugin.define({
           if (!accept) {
             return
           }
-          const suffix = controller.suffix
-          const chunk = accept === 'word' ? (suffix.match(wordChunk)?.[0] ?? suffix) : suffix
+          const suffix = controller.preview
+          const chunk =
+            accept === 'word' ? (suffix.match(wordChunk)?.[0] ?? suffix) : controller.sentence
           editor.insertText(chunk)
           controller.accepted(editor.plainText)
           event.preventDefault()

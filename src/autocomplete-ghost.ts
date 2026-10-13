@@ -58,13 +58,15 @@ export class AutocompleteGhost extends TextRenderable {
       this.updateTextInfo()
     }
     this.textBufferView.setWrapWidth(width)
+    const maximumHeight = maximum.unit === Yoga.Unit.Point ? maximum.value : editor.ctx.height
+    const available = Math.max(1, maximumHeight - editor.virtualLineCount + 1 - start.extra)
     const lines = Math.min(
-      3 - start.extra,
-      this.textBufferView.measureForDimensions(width, 3)?.lineCount ?? 1,
+      available,
+      this.textBufferView.measureForDimensions(width, available)?.lineCount ?? 1,
     )
     // Reserve display rows inside the card, without inserting newlines into the prompt.
     const reserved = Math.min(
-      maximum.unit === Yoga.Unit.Point ? maximum.value : editor.ctx.height,
+      maximumHeight,
       Math.max(
         minimum.unit === Yoga.Unit.Point ? minimum.value : 1,
         editor.virtualLineCount + lines - 1 + start.extra,
@@ -87,7 +89,7 @@ export class AutocompleteGhost extends TextRenderable {
     const editor = this.#space?.editor
     if (!(editor && this.hasRoom)) return
     const start = origin(editor)
-    const height = Math.min(3 - start.extra, editor.height - start.row)
+    const height = editor.height - start.row
     // Read coordinates after layout because reserving rows can move the prompt.
     // First-line offset controls wrapping, not painting. Subsequent rows start
     // at the input's left edge. This overlay must not capture mouse selections.

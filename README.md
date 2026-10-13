@@ -128,11 +128,11 @@ the TUI registration (`cli.json`):
 Restart the server and TUI after changing these settings. Omit `autocomplete` or
 set it to `false` to use Recall without automatic generation.
 
-**Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts the visible chunk. Recall
-generates a continuation that can include several useful follow-up sentences,
-then caches it as sentences or sections of up to 16 words. Each acceptance shows
-the next cached chunk immediately. Short replies start one background request
-before the first acceptance. Longer replies refill as you use the cached chunks.
+The preview shows the full cached continuation. **Tab**, **Right**, **Ctrl+E**, or
+**Ctrl+F** accepts one sentence at a time, leaving the remaining sentences visible.
+Long sentences are accepted together, even if stored as several internal chunks.
+Short replies start one background request before the first acceptance.
+Longer replies refill as you use the cached chunks.
 Adding, deleting, or replacing trailing spaces preserves the debounce deadline,
 active generation, and cached chunks. Other edits or dismissal cancel the background request.
 Superseded generations close their provider connections, including a slower
@@ -141,7 +141,7 @@ initial call when refinement finishes first.
 **Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,
 moving away from the end, using shell mode, or opening snippets and native menus.
-Suggestions wrap across up to three display rows inside the prompt card. Recall
+Suggestions wrap inside the prompt card using the available rows. Recall
 temporarily reserves extra input height within OpenCode's limit and restores it
 when the suggestion hides. Longer suggestions are clipped at that limit.
 
