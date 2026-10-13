@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test, vi } from 'vitest'
 import { acceptKey, AutocompleteController, type PromptSnapshot } from '../src/autocomplete-controller.js'
-import type { SuggestInput } from '../src/autocomplete-rpc.js'
+import { autocompleteErrorMessage, type SuggestInput } from '../src/autocomplete-rpc.js'
 import { normalizeSuggestion, normalizeSuggestions, suggestionPrompt } from '../src/autocomplete.js'
 import { HistoryDatabase } from '../src/db.js'
 import { HistorySources } from '../src/history-sources.js'
@@ -15,6 +15,33 @@ const snapshot = (text = 'run ', extra: Partial<PromptSnapshot> = {}): PromptSna
 })
 
 afterEach(() => vi.useRealTimers())
+
+test('native RPC errors retain their message and identify unavailable server support', () => {
+  expect(autocompleteErrorMessage({ type: 'rpc.internal', message: 'Model unavailable' })).toBe('Model unavailable')
+  expect(autocompleteErrorMessage(new Error('Connection closed'))).toBe('Connection closed')
+  expect(autocompleteErrorMessage('Request failed')).toBe('Request failed')
+  expect(autocompleteErrorMessage({})).toBe('Recall autocomplete request failed.')
+  expect(autocompleteErrorMessage({ type: 'rpc.unavailable', message: 'RPC is unavailable: josxa.recall.autocomplete' }))
+    .toContain('not enabled on the connected server')
+})
+
+test.each(['suggest', 'refine', 'prefetch'] as const)('%s displays serialized RPC failures', async (phase) => {
+  vi.useFakeTimers()
+  const failure = { type: 'rpc.internal', message: 'Autocomplete provider unavailable' }
+  let calls = 0
+  const request = vi.fn(async () => {
+    calls++
+    if (phase === 'refine') return new Promise<never>(() => {})
+    if (phase === 'suggest' || (phase === 'prefetch' && calls > 1)) throw failure
+    return { text: 'run the tests.' }
+  })
+  const refine = phase === 'refine' ? async () => { throw failure } : undefined
+  const controller = new AutocompleteController(request, () => {}, 150, refine)
+  controller.update(snapshot())
+  await vi.advanceTimersByTimeAsync(150)
+  expect(controller.error).toBe(failure.message)
+  controller.dispose()
+})
 
 test('Tab accepts a suggestion while modified Tab stays with the host', () => {
   const key = { name: 'tab', shift: false, ctrl: false, meta: false }

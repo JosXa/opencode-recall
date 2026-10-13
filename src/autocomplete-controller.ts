@@ -1,5 +1,10 @@
 import type { KeyEvent } from '@opentui/core'
-import type { RefineInput, SuggestInput, SuggestOutput } from './autocomplete-rpc.js'
+import {
+  autocompleteErrorMessage,
+  type RefineInput,
+  type SuggestInput,
+  type SuggestOutput,
+} from './autocomplete-rpc.js'
 
 export function acceptKey(
   event: Pick<KeyEvent, 'name' | 'shift' | 'ctrl' | 'meta'>,
@@ -235,8 +240,7 @@ export class AutocompleteController {
               this.#showResult(state, result)
             })
             .catch((error: unknown) => {
-              if (!pending.signal.aborted)
-                this.#error = error instanceof Error ? error.message : String(error)
+              if (!pending.signal.aborted) this.#error = autocompleteErrorMessage(error)
             })
             .finally(() => {
               if (this.#pending !== pending) return
@@ -262,8 +266,7 @@ export class AutocompleteController {
               this.#showResult(state, result)
             })
             .catch((error: unknown) => {
-              if (!refinement.signal.aborted)
-                this.#error = error instanceof Error ? error.message : String(error)
+              if (!refinement.signal.aborted) this.#error = autocompleteErrorMessage(error)
             })
             .finally(() => {
               if (this.#refinement !== refinement) return
@@ -453,7 +456,7 @@ export class AutocompleteController {
       })
       .catch((error: unknown) => {
         if (task.controller.signal.aborted) return
-        this.#error = error instanceof Error ? error.message : String(error)
+        this.#error = autocompleteErrorMessage(error)
         this.#changed()
       })
       .finally(() => {
