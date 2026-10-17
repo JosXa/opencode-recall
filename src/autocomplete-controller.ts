@@ -9,12 +9,9 @@ import {
 export function acceptKey(
   event: Pick<KeyEvent, 'name' | 'shift' | 'ctrl' | 'meta'>,
 ): 'word' | 'all' | undefined {
-  if (event.shift) return
-  const name = event.name.toLowerCase()
-  if (name === 'tab' && !event.ctrl && !event.meta) return 'all'
-  if (name === 'right') return event.ctrl || event.meta ? 'word' : 'all'
-  if (name === 'f' && event.meta) return 'word'
-  if (event.ctrl && (name === 'e' || name === 'f')) return 'all'
+  // Only the Right arrow accepts; OpenCode reserves Tab and the Emacs-style keys.
+  if (event.shift || event.name.toLowerCase() !== 'right') return
+  return event.ctrl || event.meta ? 'word' : 'all'
 }
 
 export interface PromptSnapshot extends SuggestInput {

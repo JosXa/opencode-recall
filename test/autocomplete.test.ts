@@ -43,14 +43,16 @@ test.each(['suggest', 'refine', 'prefetch'] as const)('%s displays serialized RP
   controller.dispose()
 })
 
-test('Tab accepts a suggestion while modified Tab stays with the host', () => {
-  const key = { name: 'tab', shift: false, ctrl: false, meta: false }
+test('only the Right arrow accepts a suggestion', () => {
+  const key = { name: 'right', shift: false, ctrl: false, meta: false }
   expect(acceptKey(key)).toBe('all')
+  expect(acceptKey({ ...key, ctrl: true })).toBe('word')
+  expect(acceptKey({ ...key, meta: true })).toBe('word')
   expect(acceptKey({ ...key, shift: true })).toBeUndefined()
-  expect(acceptKey({ ...key, ctrl: true })).toBeUndefined()
-  expect(acceptKey({ ...key, meta: true })).toBeUndefined()
-  expect(acceptKey({ ...key, name: 'right' })).toBe('all')
-  expect(acceptKey({ ...key, name: 'right', ctrl: true })).toBe('word')
+  expect(acceptKey({ ...key, name: 'tab' })).toBeUndefined()
+  expect(acceptKey({ ...key, name: 'e', ctrl: true })).toBeUndefined()
+  expect(acceptKey({ ...key, name: 'f', ctrl: true })).toBeUndefined()
+  expect(acceptKey({ ...key, name: 'f', meta: true })).toBeUndefined()
 })
 
 test('generation preserves typed text and keeps next actions short', () => {
@@ -158,7 +160,7 @@ test('real server normalization prepares multiple immediate Tabs beyond the firs
   controller.dispose()
 })
 
-test('Tab acceptance reveals cached chunks immediately while one bounded refill runs', async () => {
+test('acceptance reveals cached chunks immediately while one bounded refill runs', async () => {
   vi.useFakeTimers()
   const refill = Promise.withResolvers<{ text: string; continuations: string[] }>()
   const request = vi.fn(async (input: { text: string }) => input.text === 'run '

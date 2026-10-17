@@ -129,7 +129,7 @@ Restart the server and TUI after changing these settings. Omit `autocomplete` or
 set it to `false` to use Recall without automatic generation.
 
 The preview shows up to three upcoming sentences from the cached continuation.
-**Tab**, **Right**, **Ctrl+E**, or **Ctrl+F** accepts one sentence at a time,
+**Right** accepts one sentence at a time,
 revealing the next cached sentence as space becomes available.
 Long sentences are accepted together, even if stored as several internal chunks.
 Short replies start one background request before the first acceptance.
@@ -138,8 +138,7 @@ Adding, deleting, or replacing trailing spaces preserves the debounce deadline,
 active generation, and cached chunks. Other edits or dismissal cancel the background request.
 Superseded generations close their provider connections, including a slower
 initial call when refinement finishes first.
-**Alt+F** or
-**Ctrl+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
+**Ctrl+Right** or **Alt+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
 the text you have typed or accepted. Suggestions hide while selecting text,
 moving away from the end, using shell mode, or opening snippets and native menus.
 Suggestions wrap inside the prompt card using the available rows. Recall
