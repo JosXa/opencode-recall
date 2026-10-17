@@ -10,7 +10,7 @@
       "*.ts",
       "tui.tsx",
       "src/**/*.ts",
-      "scripts/build-tui.mjs",
+      "scripts/build.mjs",
       "*.json",
       "*.md",
       ".husky/*"

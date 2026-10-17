@@ -54,8 +54,7 @@
   },
   "homepage": "https://github.com/JosXa/opencode-recall#readme",
   "scripts": {
-    "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\"",
-    "build": "pnpm run clean && tsc -p tsconfig.build.json && node scripts/build-tui.mjs",
+    "build": "node scripts/build.mjs",
     "test": "vitest run && pnpm run test:packed-worker",
     "test:packed-worker": "pnpm run build && node --test test/packed-worker.node-test.mjs test/federated-worker.node-test.mjs test/autocomplete-tui.node-test.mjs",
     "eval:real-history": "tsx scripts/evaluate-real-history.ts",
