@@ -81,6 +81,11 @@ export interface HistoryEventCursor {
 // V2 stamps time_updated before its write transaction commits. Re-read this
 // window so a slow commit with an older stamp is never skipped.
 const PROJECTION_OVERLAP_MS = 60 * 1000
+// session_message has no time_updated index, and scanning it reads gigabytes
+// from a cold cache. A message stops changing once its turn ends, which takes
+// under a day, so incremental reads go through the time_created index from
+// this far before the cursor. Every message in the window costs a random read.
+const PROJECTION_MESSAGE_LIFETIME_MS = 2 * 24 * 60 * 60 * 1000
 
 export interface HistoryIndexChanges {
   readonly mode: 'full' | 'incremental' | 'legacy'
@@ -412,26 +417,28 @@ export class HistoryDatabase {
 
   #readProjectionChanges(cursor: HistoryEventCursor | undefined): HistoryIndexChanges {
     if (!this.#hasTable('session_message')) return { mode: 'legacy', sessionIds: [], rows: [] }
-    const latest = this.#readProjectionWatermark()
     if (cursor?.updatedAt === undefined) {
       return {
         mode: 'full',
-        cursor: { rowId: 0, eventId: '', updatedAt: latest },
+        cursor: { rowId: 0, eventId: '', updatedAt: this.#readProjectionWatermark(0) },
         sessionIds: [],
         rows: this.readTextPartsForIndex(undefined),
       }
     }
+    const since = Math.max(0, cursor.updatedAt - PROJECTION_OVERLAP_MS)
+    const createdSince = Math.max(0, since - PROJECTION_MESSAGE_LIFETIME_MS)
+    const latest = this.#readProjectionWatermark(createdSince)
     // Raw projection tables keep this to two narrow scans; the session view
     // would compute a per-session max over every transcript.
-    const since = Math.max(0, cursor.updatedAt - PROJECTION_OVERLAP_MS)
     const sessionIds = this.#db
-      .query<{ readonly sessionId: string }, [number, number]>(`
+      .query<{ readonly sessionId: string }, [number, number, number]>(`
         select id as sessionId from session_v2 where time_updated >= ?
         union
-        select session_id as sessionId from session_message where time_updated >= ?
+        select session_id as sessionId from session_message
+        where time_created >= ? and time_updated >= ?
         order by sessionId
       `)
-      .all(since, since)
+      .all(since, createdSince, since)
       .map((row) => row.sessionId)
     return {
       mode: 'incremental',
@@ -441,15 +448,15 @@ export class HistoryDatabase {
     }
   }
 
-  #readProjectionWatermark(): number {
+  #readProjectionWatermark(createdSince: number): number {
     const row = this.#db
-      .query<{ readonly value: number }, []>(`
+      .query<{ readonly value: number }, [number]>(`
         select max(
           coalesce((select max(time_updated) from session_v2), 0),
-          coalesce((select max(time_updated) from session_message), 0)
+          coalesce((select max(time_updated) from session_message where time_created >= ?), 0)
         ) as value
       `)
-      .get()
+      .get(createdSince)
     return row?.value ?? 0
   }
 
