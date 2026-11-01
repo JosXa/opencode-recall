@@ -8,33 +8,20 @@ const view = vi.hoisted(() => ({
   measureForDimensions: vi.fn(() => ({ lineCount: 2, widthColsMax: 61 })),
 }))
 vi.mock('@opentui/core', () => ({
-  Yoga: { Unit: { Point: 1 } },
-  TextRenderable: class {
-    textBufferView = view
-    _firstLineOffset = 0
+  Yoga: { Unit: { Point: 1, Percent: 2 } },
+  parseColor: (color: unknown) => color,
+  TextBuffer: { create: () => ({ setText: vi.fn(), setDefaultFg: vi.fn(), destroy: vi.fn() }) },
+  TextBufferView: { create: () => ({ ...view, setWrapMode: vi.fn(), destroy: vi.fn() }) },
+  Renderable: class {
     visible = false
-    content = ''
-    get plainText() {
-      return this.content
-    }
-    updateTextInfo() {}
-    markClean() {}
+    requestRender() {}
     destroy() {}
   },
 }))
 import { AutocompleteGhost } from '../src/autocomplete-ghost.js'
 
 function fixture(text?: string) {
-  const node = {
-    minimum: { unit: 1, value: 1 },
-    getMinHeight() {
-      return this.minimum
-    },
-    getMaxHeight: () => ({ unit: 1, value: 6 }),
-    setMinHeight(value: { unit: number; value: number }) {
-      this.minimum = value
-    },
-  }
+  const node = { minimum: { unit: 1, value: 1 } }
   const editor = {
     plainText: text ?? '',
     ctx: { height: 30 },
@@ -47,13 +34,14 @@ function fixture(text?: string) {
     y: 10,
     isDestroyed: false,
     visualCursor: { visualCol: text?.length ?? 19, visualRow: 0 },
-    getLayoutNode: () => node,
+    getMinHeight: () => node.minimum,
+    getMaxHeight: () => ({ unit: 1, value: 6 }),
     requestRender: vi.fn(),
     set minHeight(value: number) {
       node.minimum = { unit: 1, value }
     },
   }
-  const ghost = new AutocompleteGhost({} as RenderContext, {})
+  const ghost = new AutocompleteGhost({ nativeScene: {} } as RenderContext, { fg: '#808080' })
   const buffer = { pushScissorRect: vi.fn(), drawTextBuffer: vi.fn(), popScissorRect: vi.fn() }
   return {
     node,
@@ -73,7 +61,7 @@ describe('wrapped ghost layout', () => {
     expect(f.node.minimum.value).toBe(5)
     expect(view.measureForDimensions).toHaveBeenLastCalledWith(61, 6)
     f.editor.height = 5
-    f.ghost.render(f.buffer as unknown as OptimizedBuffer)
+    f.ghost.renderSelf(f.buffer as unknown as OptimizedBuffer)
     expect(view.setViewport).toHaveBeenLastCalledWith(0, 1, 61, 4)
     expect(f.editor.plainText).toBe('')
     f.ghost.hide()
@@ -100,7 +88,7 @@ describe('wrapped ghost layout', () => {
     const f = fixture()
     f.update()
     const buffer = { pushScissorRect: vi.fn(), popScissorRect: vi.fn(), drawTextBuffer: vi.fn() }
-    f.ghost.render(buffer as unknown as OptimizedBuffer)
+    f.ghost.renderSelf(buffer as unknown as OptimizedBuffer)
     expect(buffer.pushScissorRect).toHaveBeenCalledWith(24, 10, 42, 1)
     expect(buffer.drawTextBuffer.mock.calls.map((call) => call.slice(1))).toEqual([
       [24, 10],
@@ -117,7 +105,7 @@ describe('wrapped ghost layout', () => {
     expect(f.node.minimum.value).toBe(3)
     f.editor.height = 3
     const buffer = { pushScissorRect: vi.fn(), popScissorRect: vi.fn(), drawTextBuffer: vi.fn() }
-    f.ghost.render(buffer as unknown as OptimizedBuffer)
+    f.ghost.renderSelf(buffer as unknown as OptimizedBuffer)
     expect(buffer.pushScissorRect).toHaveBeenCalledWith(5, 11, 61, 1)
     expect(buffer.drawTextBuffer.mock.calls.map((call) => call.slice(1))).toEqual([
       [5, 11],
@@ -132,7 +120,7 @@ test('a completed next-action suggestion starts at the empty input left edge', (
   const { editor, nativeEditor, ghost, buffer } = fixture('')
   const suggestion = 'Please implement the actual rendering indicator.'
   ghost.update(nativeEditor, suggestion)
-  ghost.render(buffer as unknown as OptimizedBuffer)
+  ghost.renderSelf(buffer as unknown as OptimizedBuffer)
   expect(ghost.plainText).toBe(suggestion)
   expect(buffer.drawTextBuffer.mock.calls[0]?.slice(1)).toEqual([editor.screenX, editor.screenY])
   expect(editor.plainText).toBe('')
@@ -166,7 +154,7 @@ test('a wrapped continuation does not reserve a dot cell on the next row', () =>
   const { editor, nativeEditor, ghost, buffer } = fixture('x'.repeat(61))
   editor.height = 3
   ghost.update(nativeEditor, 'the changes.', true)
-  ghost.render(buffer as unknown as OptimizedBuffer)
+  ghost.renderSelf(buffer as unknown as OptimizedBuffer)
   expect(ghost.plainText).toBe('the changes.')
   expect(buffer.drawTextBuffer.mock.calls[0]?.slice(1)).toEqual([editor.screenX, editor.screenY + 1])
 })

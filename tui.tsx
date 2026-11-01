@@ -108,8 +108,6 @@ function mountAutocomplete(context: Plugin.Context) {
         height: 1,
         visible: false,
         fg: context.theme.text.muted,
-        wrapMode: 'word',
-        selectable: false,
         zIndex: 50,
       })
       const caret = new AutocompleteCaret(context.renderer, {

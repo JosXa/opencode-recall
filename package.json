@@ -55,7 +55,8 @@
   "homepage": "https://github.com/JosXa/opencode-recall#readme",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "vitest run && pnpm run test:packed-worker",
+    "test": "vitest run && pnpm run test:render && pnpm run test:packed-worker",
+    "test:render": "bun test ./test/autocomplete-render.bun-test.ts",
     "test:packed-worker": "pnpm run build && node --test test/packed-worker.node-test.mjs test/federated-worker.node-test.mjs test/autocomplete-tui.node-test.mjs",
     "eval:real-history": "tsx scripts/evaluate-real-history.ts",
     "eval:embeddings": "tsx scripts/evaluate-embedding-models.ts",
@@ -74,17 +75,18 @@
     "schema"
   ],
   "dependencies": {
-    "@opencode/plugin": "2.0.30",
-    "@opencode/schema": "2.0.30",
-    "effect": "4.0.1",
+    "@opencode/plugin": "2.2.5",
+    "@opencode/schema": "2.2.5",
+    "effect": "4.0.6",
     "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
     "@biomejs/biome": "2.5.1",
-    "@opentui/core": "0.5.17",
-    "@opentui/solid": "0.5.17",
+    "@opentui/core": "0.8.1",
+    "@opentui/solid": "0.8.1",
     "@types/babel__core": "^7.20.5",
+    "@types/bun": "^1.4.4",
     "@types/node": "latest",
     "babel-preset-solid": "^1.9.12",
     "husky": "latest",
@@ -94,8 +96,8 @@
     "vitest": "latest"
   },
   "peerDependencies": {
-    "@opentui/core": ">=0.5.17",
-    "@opentui/solid": ">=0.5.17",
+    "@opentui/core": ">=0.8.0",
+    "@opentui/solid": ">=0.8.0",
     "solid-js": "1.9.12"
   },
   "peerDependenciesMeta": {

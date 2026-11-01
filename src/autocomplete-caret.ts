@@ -13,7 +13,7 @@ export class AutocompleteCaret extends TextRenderable {
     this.requestRender()
   }
 
-  override render(buffer: OptimizedBuffer) {
+  override renderSelf(buffer: OptimizedBuffer) {
     const editor = this.#editor
     if (!(this.visible && editor) || editor.isDestroyed) return
     const cursor = editor.visualCursor
@@ -26,6 +26,5 @@ export class AutocompleteCaret extends TextRenderable {
       editor.screenY + cursor.visualRow,
       this.fg,
     )
-    this.markClean()
   }
 }
