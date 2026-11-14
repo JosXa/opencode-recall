@@ -301,7 +301,7 @@ describe('plugin recall subagent', () => {
         const harness = pluginHarness(root)
         await RecallPlugin.setup(harness.context)
         const search = await harness.tools.get(HISTORY_SEARCH_COMMAND)?.execute(
-          { q: '', includeCurrentSession: true, n: 5 },
+          { q: '', currentSession: 'include', n: 5 },
           toolContext(RECALL_AGENT_NAME),
         )
         const read = await harness.tools.get(HISTORY_READ_COMMAND)?.execute(
@@ -309,7 +309,7 @@ describe('plugin recall subagent', () => {
           toolContext(RECALL_AGENT_NAME),
         )
         const sessions = await harness.tools.get(SESSION_INDEX_COMMAND)?.execute(
-          { title: 'Worker', includeCurrentSession: true, n: 5 },
+          { title: 'Worker', currentSession: 'include', n: 5 },
           toolContext(RECALL_AGENT_NAME),
         )
         const saved = await harness.tools.get(SESSION_SAVE_COMMAND)?.execute(
@@ -517,7 +517,7 @@ describe('recall without a working decision model', () => {
         expect(harness.decisions).toHaveLength(callsAfterOutage)
 
         const search = await harness.tools.get(HISTORY_SEARCH_COMMAND)?.execute(
-          { q: 'invoices', includeCurrentSession: true, n: 5 },
+          { q: 'invoices', currentSession: 'include', n: 5 },
           toolContext(RECALL_AGENT_NAME),
         )
         expect(search?.content).toContain('"sid": "ses_worker"')
@@ -550,7 +550,167 @@ describe('recall without a working decision model', () => {
       }
     })
   }, 30_000)
+
+  test('history_search and session_index scope the calling session with currentSession', async () => {
+    await withRecallEnvAsync(async ({ configDir, root }) => {
+      const scoped = await currentSessionHistory(configDir)
+      try {
+        const harness = pluginHarness({ directory: root, parentIDs: { ses_current: 'ses_caller' } })
+        await RecallPlugin.setup(harness.context)
+        const run = async (tool: string, input: Record<string, unknown>) =>
+          sessionIdsIn((await harness.tools.get(tool)?.execute(input, toolContext(RECALL_AGENT_NAME)))?.content)
+
+        expect(await run(HISTORY_SEARCH_COMMAND, { q: 'invoices', n: 10 })).toEqual(['ses_other'])
+        expect(await run(HISTORY_SEARCH_COMMAND, { q: 'invoices', n: 10, currentSession: 'include' })).toEqual([
+          'ses_caller',
+          'ses_other',
+        ])
+        expect(await run(HISTORY_SEARCH_COMMAND, { q: 'invoices', n: 10, currentSession: 'only' })).toEqual([
+          'ses_caller',
+        ])
+        expect(await run(HISTORY_SEARCH_COMMAND, { q: '', n: 10, currentSession: 'only' })).toEqual(['ses_caller'])
+        expect(await run(SESSION_INDEX_COMMAND, { n: 10 })).toEqual(['ses_other'])
+        expect(await run(SESSION_INDEX_COMMAND, { n: 10, currentSession: 'include' })).toEqual([
+          'ses_caller',
+          'ses_other',
+        ])
+        expect(await run(SESSION_INDEX_COMMAND, { n: 10, currentSession: 'only' })).toEqual(['ses_caller'])
+      } finally {
+        scoped.close()
+      }
+    })
+  }, 30_000)
+
+  test('history_find scopes the calling session with currentSession', async () => {
+    await withJudgeConfig(async ({ configDir, root }) => {
+      const scoped = await currentSessionHistory(configDir, { judge: { model: 'typesafe-ai/jev-latest', timeoutMs: 1_000 } })
+      try {
+        const harness = pluginHarness({
+          directory: root,
+          decisionModels: [JEV],
+          decide: answerEveryQuestion(0.9),
+          parentIDs: { ses_current: 'ses_caller' },
+        })
+        await RecallPlugin.setup(harness.context)
+        await harness.startTurn()
+        const find = async (currentSession?: string) =>
+          String(
+            (
+              await harness.tools.get(HISTORY_FIND_COMMAND)?.execute(
+                {
+                  queries: ['invoices'],
+                  criteria: ['the session mentions invoices'],
+                  ...(currentSession === undefined ? {} : { currentSession }),
+                },
+                toolContext(RECALL_AGENT_NAME),
+              )
+            )?.content,
+          )
+
+        const only = await find('only')
+        const judged = JSON.stringify(harness.decisions)
+        expect(only).toContain('ses_caller')
+        expect(only).not.toContain('ses_other')
+        expect(only).not.toContain('ses_current')
+        expect(judged).toContain('caller invoices notes')
+        expect(judged).not.toContain('other invoices notes')
+        expect(judged).not.toContain('recall invoices question')
+
+        const excluded = await find()
+        expect(excluded).toContain('ses_other')
+        expect(excluded).not.toContain('ses_caller')
+        expect(excluded).not.toContain('ses_current')
+
+        const included = await find('include')
+        expect(included).toContain('ses_other')
+        expect(included).toContain('ses_caller')
+        expect(included).not.toContain('ses_current')
+      } finally {
+        scoped.close()
+      }
+    })
+  }, 30_000)
+
+  test('history_find only falls back to a plain read of the calling session when the judge is down', async () => {
+    await withJudgeConfig(async ({ configDir, root }) => {
+      const scoped = await currentSessionHistory(configDir, { judge: { model: 'typesafe-ai/jev-latest', timeoutMs: 1_000 } })
+      try {
+        const harness = pluginHarness({
+          directory: root,
+          decisionModels: [JEV],
+          decide: () => Promise.reject(new Error('HTTP 402: no available credits')),
+          parentIDs: { ses_current: 'ses_caller' },
+        })
+        await RecallPlugin.setup(harness.context)
+        await harness.startTurn()
+        const staleFind = harness.tools.get(HISTORY_FIND_COMMAND)
+        const read = async () =>
+          String(
+            (
+              await staleFind?.execute(
+                { queries: ['invoices'], criteria: ['the session mentions invoices'], currentSession: 'only' },
+                toolContext(RECALL_AGENT_NAME),
+              )
+            )?.content,
+          )
+
+        for (const content of [await read(), await read()]) {
+          expect(content).toContain('judge unavailable: ')
+          expect(content).toContain('<hist sid="ses_caller"')
+          expect(content).toContain('caller invoices notes')
+          expect(content).not.toContain('ses_other')
+        }
+        const standard = async (currentSession: string) =>
+          sessionIdsIn(
+            (
+              await staleFind?.execute(
+                { queries: ['invoices'], criteria: ['the session mentions invoices'], currentSession },
+                toolContext(RECALL_AGENT_NAME),
+              )
+            )?.content,
+          )
+        expect(await standard('exclude')).toEqual(['ses_other'])
+        expect(await standard('include')).toEqual(['ses_caller', 'ses_other'])
+      } finally {
+        scoped.close()
+      }
+    })
+  }, 30_000)
 })
+
+async function currentSessionHistory(configDir: string, extra: Record<string, unknown> = {}) {
+  const historyPath = `/tmp/opencode-recall-scope-history-${crypto.randomUUID()}.db`
+  const sidecarPath = `/tmp/opencode-recall-scope-sidecar-${crypto.randomUUID()}.db`
+  const db = new Database(historyPath)
+  db.exec(`
+    create table session (id text primary key, title text, directory text, time_updated integer);
+    create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+    create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+  `)
+  const now = Date.now()
+  insertTextPart(db, 'ses_other', 'Other chat', 'msg_other', 'part_other', 1, 'other invoices notes')
+  insertTextPart(db, 'ses_caller', 'Caller chat', 'msg_caller', 'part_caller', now, 'caller invoices notes')
+  insertTextPart(db, 'ses_current', 'Recall chat', 'msg_recall', 'part_recall', now, 'recall invoices question')
+  writeFileSync(
+    `${configDir}/recall.jsonc`,
+    JSON.stringify({
+      database: { path: historyPath, indexPath: sidecarPath },
+      embeddings: { ollamaUrl: await fakeOllama(), model: 'worker-model' },
+      ...extra,
+    }),
+  )
+  return {
+    close() {
+      db.close()
+      removeSqliteFiles(historyPath)
+      removeSqliteFiles(sidecarPath)
+    },
+  }
+}
+
+function sessionIdsIn(content: unknown): string[] {
+  return [...new Set([...String(content).matchAll(/"sid": "(ses_[a-z_]+)"/g)].map((match) => match[1] ?? ''))].sort()
+}
 
 describe('config file loading', () => {
   test('follows native host database selection while preserving explicit historical overrides', () => {
@@ -1045,10 +1205,14 @@ describe('current session exclusion', () => {
       try {
         const results = history.lexicalSearch('invoices cli', {
           limit: 10,
-          excludeSessionId: 'ses_current',
+          excludeSessionIds: ['ses_current'],
         })
 
         expect(results.map((row) => row.sessionId)).toEqual(['ses_old'])
+        const only = { limit: 10, onlySessionId: 'ses_current' }
+        expect(history.lexicalSearch('invoices cli', only).map((row) => row.sessionId)).toEqual(['ses_current'])
+        expect(history.recent(only).map((row) => row.sessionId)).toEqual(['ses_current'])
+        expect(history.sessionIndex({ ...only, excludeSubagents: false }).map((row) => row.sessionId)).toEqual(['ses_current'])
       } finally {
         history.close()
       }
@@ -1183,9 +1347,11 @@ describe('current session exclusion', () => {
       )
       const excluded = index.lexicalSearch('invoices cli', {
         limit: 10,
-        excludeSessionId: 'ses_current',
+        excludeSessionIds: ['ses_current'],
       })
       expect(excluded.map((row) => row.sessionId)).toEqual(['ses_old'])
+      const only = index.lexicalSearch('invoices cli', { limit: 10, onlySessionId: 'ses_old' })
+      expect(only.map((row) => row.sessionId)).toEqual(['ses_old'])
     } finally {
       index.close()
       removeSqliteFiles(path)
@@ -1205,13 +1371,15 @@ describe('current session exclusion', () => {
       await index.sync(() => rows, provider, () => rows.map((row) => row.partId))
       const excluded = await index.search(
         'invoices cli',
-        { limit: 10, excludeSessionId: 'ses_current' },
+        { limit: 10, excludeSessionIds: ['ses_current'] },
         provider,
       )
       const included = await index.search('invoices cli', { limit: 10 }, provider)
 
       expect(excluded.map((row) => row.sessionId)).toEqual(['ses_old'])
       expect(included.map((row) => row.sessionId)).toContain('ses_current')
+      const only = await index.search('invoices cli', { limit: 10, onlySessionId: 'ses_current' }, provider)
+      expect(only.map((row) => row.sessionId)).toEqual(['ses_current'])
     } finally {
       index.close()
       removeSqliteFiles(path)
@@ -2010,6 +2178,7 @@ function pluginHarness(
         decisionModels?: TestModel[]
         decide?: TestDecide | 'missing'
         decisionListing?: () => Promise<void>
+        parentIDs?: Record<string, string>
       } = {},
 ) {
   const options = typeof input === 'string' ? { directory: input } : input
@@ -2154,8 +2323,8 @@ function pluginHarness(
       async prompt(input: unknown) {
         prompts.push(input)
       },
-      async get() {
-        return { location: { directory } }
+      async get({ sessionID }: { sessionID: string }) {
+        return { location: { directory }, parentID: options.parentIDs?.[sessionID] }
       },
     },
   }

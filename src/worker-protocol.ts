@@ -1,5 +1,12 @@
 import type { SourceOptions } from './sources.js'
 
+export type CurrentSessionScope = 'exclude' | 'include' | 'only'
+
+export interface SessionScopeContext {
+  readonly sessionID: string
+  readonly recallSessionID?: string | undefined
+}
+
 export interface HistorySearchWorkerArgs extends SourceOptions {
   readonly excludeSubagents?: boolean | undefined
   readonly q?: string | undefined
@@ -8,7 +15,7 @@ export interface HistorySearchWorkerArgs extends SourceOptions {
   readonly n?: number | undefined
   readonly maxSearchLimit?: number | undefined
   readonly directory?: string | undefined
-  readonly includeCurrentSession?: boolean | undefined
+  readonly currentSession?: CurrentSessionScope | undefined
   readonly excludeSessionId?: string | undefined
   readonly after?: string | undefined
   readonly before?: string | undefined
@@ -33,7 +40,7 @@ export interface SessionIndexWorkerArgs extends SourceOptions {
   readonly n?: number | undefined
   readonly title?: string | undefined
   readonly directory?: string | undefined
-  readonly includeCurrentSession?: boolean | undefined
+  readonly currentSession?: CurrentSessionScope | undefined
   readonly excludeSessionId?: string | undefined
   readonly after?: string | undefined
   readonly before?: string | undefined
@@ -71,6 +78,7 @@ export interface SessionScanWorkerArgs extends SourceOptions {
   readonly promptSamples: number
   readonly sessionsPerDirectory: number
   readonly excludeDirectories: readonly string[]
+  readonly currentSession?: CurrentSessionScope | undefined
 }
 
 export interface FocusTranscriptsWorkerArgs extends SourceOptions {
@@ -83,7 +91,7 @@ export type HistoryWorkerRequest =
   | {
       readonly kind: 'scan-sessions'
       readonly args: SessionScanWorkerArgs
-      readonly context: { readonly sessionID: string }
+      readonly context: SessionScopeContext
     }
   | {
       readonly kind: 'focus-transcripts'
@@ -105,16 +113,12 @@ export type HistoryWorkerRequest =
   | {
       readonly kind: 'search'
       readonly args: HistorySearchWorkerArgs
-      readonly context: {
-        readonly sessionID: string
-      }
+      readonly context: SessionScopeContext
     }
   | {
       readonly kind: 'session-index'
       readonly args: SessionIndexWorkerArgs
-      readonly context: {
-        readonly sessionID: string
-      }
+      readonly context: SessionScopeContext
     }
   | {
       readonly kind: 'session-save'

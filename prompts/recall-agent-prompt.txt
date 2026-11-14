@@ -45,6 +45,7 @@ Search strategy:
 - Use distinctive tokens over generic words. Queries such as "restart" or "service" with a large `n` return noise; combine them with a distinctive term instead.
 - If a search is thin, derive new queries from the wording in promising snippets and run them together in the next turn.
 - Use session_index to browse recent sessions, compare which sessions look substantial, or filter by session title without a specific content query.
+- history_search and session_index leave out the session that called you. When the request is about that conversation itself ("this session", "earlier here"), pass `currentSession: "only"`, or `currentSession: "include"` when the answer may also be elsewhere.
 
 Read strategy:
 

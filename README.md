@@ -254,7 +254,7 @@ Set `judge.model` to a decision model such as `typesafe-ai/jev-latest` to give t
 }
 ```
 
-`history_find({ queries, criteria, withinDays?, after?, before?, directory? })` runs all queries through one lexical and semantic search. With a time window, or with no queries, it also has the decision model score compact digests of every main session in the window, so sessions described only by a screenshot or a file name still surface. It judges every candidate session against each criterion, reads the whole transcript of the best sessions in segments (tool calls included) and returns the matching sessions with their best segments and passages, cursors and probabilities. Verdicts, segment scores and matching sessions are kept for the rest of the recall run, so a second call is cheap; `judge.maxRunTokens` caps the decision-model input per run. `history_read` gains a `criteria` option that returns only the matching segments of the containing session.
+`history_find({ queries, criteria, withinDays?, after?, before?, directory?, currentSession? })` runs all queries through one lexical and semantic search. With a time window, or with no queries, it also has the decision model score compact digests of every main session in the window, so sessions described only by a screenshot or a file name still surface. It judges every candidate session against each criterion, reads the whole transcript of the best sessions in segments (tool calls included) and returns the matching sessions with their best segments and passages, cursors and probabilities. Verdicts, segment scores and matching sessions are kept for the rest of the recall run, so a second call is cheap; `judge.maxRunTokens` caps the decision-model input per run. `history_read` gains a `criteria` option that returns only the matching segments of the containing session. `currentSession` works as in `history_search`; with `only`, `history_find` skips search and scan and judges the segments of the calling session directly, or returns a plain window of it when the judge is down.
 
 With a working judge, the recall agent sees `history_find`, `history_read` and `session_save`. Without one, the agent keeps the four original history tools and prompt. The first line of every judged tool result reports decision-model usage as `[jev calls=<n> input_tokens=<t> ms=<wall>]`.
 
@@ -375,7 +375,8 @@ When V1 and V2 history live in separate files, configure named `database.sources
 | `title`  | string   | Case-insensitive session title filter.                                                                |
 | `directory` | string   | Exact OpenCode session directory filter.                                                               |
 | `after`  | ISO date | Only sessions updated at or after this timestamp.                                                      |
-| `before` | ISO date | Only sessions updated at or before this timestamp. Defaults to *now - 30 s* to exclude the live chat.  |
+| `before` | ISO date | Only sessions updated at or before this timestamp. With `currentSession: exclude`, defaults to *now - 30 s*.  |
+| `currentSession` | `exclude` \| `include` \| `only` | The session that called recall. `exclude` (default) leaves it out, `include` searches it with all others, `only` looks only inside it. The recall subagent's own session is always left out. |
 
 Returns newest-first session rows with a `ses_...` cursor for `history_read` and quick usefulness signals:
 
@@ -433,7 +434,8 @@ The destination is always overwritten and must stay inside the active workspace.
 | `n`      | number   | Max hits (default `8`, max `25`).                                                                      |
 | `directory` | string   | Exact OpenCode session directory filter.                                                               |
 | `after`  | ISO date | Only messages at or after this timestamp.                                                              |
-| `before` | ISO date | Only messages at or before this timestamp. Defaults to *now − 30 s* to exclude the live conversation.  |
+| `before` | ISO date | Only messages at or before this timestamp. With `currentSession: exclude`, defaults to *now − 30 s*.  |
+| `currentSession` | `exclude` \| `include` \| `only` | The session that called recall. `exclude` (default) leaves it out, `include` searches it with all others, `only` looks only inside it. The recall subagent's own session is always left out. |
 
 Returns a JSON array of compact hits:
 

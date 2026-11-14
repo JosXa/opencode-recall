@@ -4,13 +4,13 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 import { ChatmlRenderer } from './chatml-renderer.js'
 import { decodeCursor, qualifyCursor } from './cursor.js'
-import type { SessionIndexRow } from './db.js'
+import type { SessionIndexRow, SessionScope } from './db.js'
 import { OllamaEmbeddingProvider } from './embedding.js'
 import { readFocusTranscripts } from './focus-transcript.js'
 import { HistorySources } from './history-sources.js'
 import { parseReadMode } from './read-mode.js'
 import { formatSearchResult, formatSearchResults } from './search.js'
-import { currentSessionCursor } from './sources.js'
+import { currentSessionCursor, type SourceOptions } from './sources.js'
 import {
   DEFAULT_READ_LIMIT,
   DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS,
@@ -21,7 +21,12 @@ import {
   MAX_SESSION_INDEX_LIMIT,
 } from './tool-defaults.js'
 import type { TranscriptMessage, TranscriptPart, TranscriptWindow } from './transcript.js'
-import type { HistoryWorkerRequest, SessionSaveWorkerArgs } from './worker-protocol.js'
+import type {
+  CurrentSessionScope,
+  HistoryWorkerRequest,
+  SessionSaveWorkerArgs,
+  SessionScopeContext,
+} from './worker-protocol.js'
 
 export async function executeWorkerRequest(request: HistoryWorkerRequest): Promise<string> {
   if (request.kind === 'prompt-examples') {
@@ -121,8 +126,8 @@ function executeSessionScan(
   const { args } = request
   const history = new HistorySources(args)
   try {
-    const window = resolveWindow(history, args, request.context.sessionID)
-    const excludeSessionId = currentSessionCursor(request.context.sessionID, args)
+    const scope = sessionScope(args, request.context)
+    const window = resolveWindow(history, args, scope.before)
     return JSON.stringify({
       ...history.scanSessions({
         maxSessions: args.maxSessions,
@@ -135,7 +140,7 @@ function executeSessionScan(
         ...(args.directory === undefined || args.directory.length === 0
           ? {}
           : { directory: args.directory }),
-        ...(excludeSessionId.length === 0 ? {} : { excludeSessionId }),
+        ...scope.filters,
       }),
       ...window,
     })
@@ -153,13 +158,8 @@ function resolveWindow(
     readonly before?: string | undefined
     readonly withinDays?: number | undefined
   },
-  sessionID: string,
+  before: number | undefined,
 ): { after?: number; before?: number } {
-  const before = searchBeforeFilter(
-    optionalDateFilterValue('before', args.before),
-    false,
-    sessionID,
-  ).before
   const after = optionalDateFilterValue('after', args.after)
   const anchor = Math.min(before ?? Date.now(), history.newestActivity() ?? Date.now())
   const windowStart =
@@ -216,21 +216,15 @@ async function executeSessionSave(
 function executeSessionIndex(
   request: Extract<HistoryWorkerRequest, { readonly kind: 'session-index' }>,
 ): string {
-  const includeCurrentSession = request.args.includeCurrentSession === true
-  const before = optionalDateFilterValue('before', request.args.before)
-  const excludeSessionId = currentSessionExclusion(
-    includeCurrentSession,
-    currentSessionCursor(request.context.sessionID, request.args),
-    request.args.excludeSessionId,
-  )
+  const scope = sessionScope(request.args, request.context)
   const options = {
     limit: clampNumber(request.args.n, DEFAULT_SESSION_INDEX_LIMIT, 1, MAX_SESSION_INDEX_LIMIT),
-    excludeSubagents: request.args.excludeSubagents === true,
+    excludeSubagents: excludeSubagentsInScope(request.args.excludeSubagents, scope),
     ...optionalStringFilter('directory', request.args.directory),
     ...optionalStringFilter('title', request.args.title),
-    ...(excludeSessionId === undefined ? {} : { excludeSessionId }),
+    ...scope.filters,
     ...optionalDateFilter('after', request.args.after),
-    ...searchBeforeFilter(before, includeCurrentSession, request.context.sessionID),
+    ...(scope.before === undefined ? {} : { before: scope.before }),
   }
   const db = new HistorySources(request.args)
 
@@ -245,29 +239,23 @@ async function executeHistorySearch(
   request: Extract<HistoryWorkerRequest, { readonly kind: 'search' }>,
 ): Promise<string> {
   const query = request.args.q ?? ''
-  const includeCurrentSession = request.args.includeCurrentSession === true
   const semanticEnabled = request.args.semantic !== false
   const lexicalEnabled = request.args.lexical !== false
   const shouldSync = (semanticEnabled || lexicalEnabled) && request.args.sync !== false
-  const before = optionalDateFilterValue('before', request.args.before)
-  const excludeSessionId = currentSessionExclusion(
-    includeCurrentSession,
-    currentSessionCursor(request.context.sessionID, request.args),
-    request.args.excludeSessionId,
-  )
+  const scope = sessionScope(request.args, request.context)
   const maxSearchLimit = request.args.maxSearchLimit ?? MAX_SEARCH_LIMIT
   const db = new HistorySources(request.args)
   const options = {
     limit: clampNumber(request.args.n, DEFAULT_SEARCH_LIMIT, 1, maxSearchLimit),
-    excludeSubagents: request.args.excludeSubagents === true,
+    excludeSubagents: excludeSubagentsInScope(request.args.excludeSubagents, scope),
     ...optionalStringFilter('directory', request.args.directory),
-    ...(excludeSessionId === undefined ? {} : { excludeSessionId }),
+    ...scope.filters,
     ...(request.args.withinDays === undefined
       ? {
           ...optionalDateFilter('after', request.args.after),
-          ...searchBeforeFilter(before, includeCurrentSession, request.context.sessionID),
+          ...(scope.before === undefined ? {} : { before: scope.before }),
         }
-      : resolveWindow(db, request.args, request.context.sessionID)),
+      : resolveWindow(db, request.args, scope.before)),
   }
 
   try {
@@ -363,33 +351,48 @@ function optionalStringFilter<TName extends string>(name: TName, value: string |
   return { [name]: value }
 }
 
-function currentSessionExclusion(
-  includeCurrentSession: boolean | undefined,
-  sessionID: string,
-  excludeSessionId: string | undefined,
-): string | undefined {
-  if (includeCurrentSession === true) {
-    return excludeSessionId
-  }
-
-  const effective = excludeSessionId ?? sessionID
-  return effective.length === 0 ? undefined : effective
+interface SessionScopeResult {
+  readonly filters: SessionScope
+  readonly before: number | undefined
 }
 
-function searchBeforeFilter(
-  before: number | undefined,
-  includeCurrentSession: boolean,
-  currentSessionId: string,
-) {
-  if (before !== undefined) {
-    return { before }
+function sessionScope(
+  args: SourceOptions & {
+    readonly currentSession?: CurrentSessionScope | undefined
+    readonly excludeSessionId?: string | undefined
+    readonly before?: string | undefined
+  },
+  context: SessionScopeContext,
+): SessionScopeResult {
+  const mode = args.currentSession ?? 'exclude'
+  const current = currentSessionCursor(context.sessionID, args)
+  const recall =
+    context.recallSessionID === undefined || context.recallSessionID === context.sessionID
+      ? ''
+      : currentSessionCursor(context.recallSessionID, args)
+  const explicitBefore = optionalDateFilterValue('before', args.before)
+  const excluded = [
+    mode === 'exclude' ? (args.excludeSessionId ?? current) : (args.excludeSessionId ?? ''),
+    mode === 'only' ? '' : recall,
+  ].filter((id) => id.length > 0)
+  return {
+    filters: {
+      ...(excluded.length === 0 ? {} : { excludeSessionIds: excluded }),
+      ...(mode === 'only' ? { onlySessionId: current } : {}),
+    },
+    before:
+      explicitBefore ??
+      (mode === 'exclude' && current.length > 0
+        ? Date.now() - DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS
+        : undefined),
   }
+}
 
-  if (includeCurrentSession || currentSessionId.length === 0) {
-    return {}
-  }
-
-  return { before: Date.now() - DEFAULT_SEARCH_FRESHNESS_EXCLUSION_MS }
+function excludeSubagentsInScope(
+  excludeSubagents: boolean | undefined,
+  scope: SessionScopeResult,
+): boolean {
+  return excludeSubagents === true && scope.filters.onlySessionId === undefined
 }
 
 function formatSearchResponse(

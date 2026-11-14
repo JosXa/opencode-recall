@@ -74,7 +74,7 @@ describe('native V2 history projection', () => {
       expect(window.messages[1]?.parts[3]).toMatchObject({ status: 'failed', output: '{"message":"intentional failure"}' })
       expect(db.readWindow('msg_z', { mode: 'next', limit: 1 }).messages.map(m => m.messageId)).toEqual(['msg_a'])
       expect(db.readWindow('msg_a', { mode: 'prev', limit: 1 }).messages.map(m => m.messageId)).toEqual(['msg_z'])
-      expect(db.lexicalSearch('needle', { limit: 10, excludeSessionId: 'ses_parent' }).map(r => r.sessionId)).toEqual(['ses_child'])
+      expect(db.lexicalSearch('needle', { limit: 10, excludeSessionIds: ['ses_parent'] }).map(r => r.sessionId)).toEqual(['ses_child'])
       expect(db.recent({ limit: 10, directory: '/child' }).map(r => r.messageId)).toEqual(['msg_child'])
       expect(db.sessionIndex({ limit: 10, title: 'child' }).map(r => r.sessionId)).toEqual(['ses_child'])
       const old = db.readTextPartsForIndex(0)

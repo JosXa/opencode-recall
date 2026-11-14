@@ -29,7 +29,7 @@ test('native candidates preserve boosts, scopes, ties and zero-vector scores', (
     add('future', [1, 0], '', 20)
     add('other-model', [1, 0], '', 5, '/project', 'other')
     add('other-dimensions', [1, 0, 0])
-    const options = { limit: 3, after: 3, before: 10, directory: '/project', excludeSessionId: 'excluded' }
+    const options = { limit: 3, after: 3, before: 10, directory: '/project', excludeSessionIds: ['excluded'] }
     const result = index.searchWithEmbedding('über testing', options, 'test', new Float32Array([1, 0]))
     expect(result.map(r => r.sessionId)).toEqual(['boosted', 'newer', 'semantic', 'zero'])
     expect(result[0]?.score).toBeCloseTo(1.1, 5)

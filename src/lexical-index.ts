@@ -47,7 +47,8 @@ export interface Filters {
   readonly after?: number
   readonly before?: number
   readonly directory?: string
-  readonly excludeSessionId?: string
+  readonly excludeSessionIds?: readonly string[]
+  readonly onlySessionId?: string
 }
 
 // FTS5-backed lexical retrieval lane co-located with the sidecar database.
@@ -146,9 +147,10 @@ export class LexicalIndex {
       ...(options.after === undefined ? {} : { after: options.after }),
       ...(options.before === undefined ? {} : { before: options.before }),
       ...(options.directory === undefined ? {} : { directory: options.directory }),
-      ...(options.excludeSessionId === undefined
+      ...(options.excludeSessionIds === undefined
         ? {}
-        : { excludeSessionId: options.excludeSessionId }),
+        : { excludeSessionIds: options.excludeSessionIds }),
+      ...(options.onlySessionId === undefined ? {} : { onlySessionId: options.onlySessionId }),
     }
 
     // Callers that list every match, such as all-terms lookups, ask for more than the default cap.
@@ -756,9 +758,13 @@ function buildFilterClauses(
     clauses.push(`${alias}.directory = ?`)
     params.push(filters.directory)
   }
-  if (filters.excludeSessionId !== undefined) {
-    clauses.push(`${alias}.session_id != ?`)
-    params.push(filters.excludeSessionId)
+  if (filters.excludeSessionIds !== undefined && filters.excludeSessionIds.length > 0) {
+    clauses.push(`${alias}.session_id not in (select value from json_each(?))`)
+    params.push(JSON.stringify(filters.excludeSessionIds))
+  }
+  if (filters.onlySessionId !== undefined) {
+    clauses.push(`${alias}.session_id = ?`)
+    params.push(filters.onlySessionId)
   }
   return clauses.length === 0 ? '' : ` and ${clauses.join(' and ')}`
 }

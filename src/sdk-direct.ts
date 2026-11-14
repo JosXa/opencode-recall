@@ -273,7 +273,7 @@ function normalizeSearchOptions(options: RecallSearchOptions): SearchOptions {
     ...optionalTimestampFilter('after', options.after),
     ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
     ...(options.directory === undefined ? {} : { directory: options.directory }),
-    ...(excluded === undefined ? {} : { excludeSessionId: excluded }),
+    ...(excluded === undefined ? {} : { excludeSessionIds: [excluded] }),
     ...(options.matchAll === undefined ? {} : { matchAll: options.matchAll }),
   }
 }
@@ -288,7 +288,7 @@ function normalizeSessionIndexOptions(options: RecallSessionIndexOptions): Sessi
     ...optionalTimestampFilter('before', options.before ?? defaultBefore(options)),
     ...(options.directory === undefined ? {} : { directory: options.directory }),
     ...(options.title === undefined ? {} : { title: options.title }),
-    ...(excluded === undefined ? {} : { excludeSessionId: excluded }),
+    ...(excluded === undefined ? {} : { excludeSessionIds: [excluded] }),
   }
 }
 

@@ -430,7 +430,8 @@ export class RecallSidecarIndex {
             and (? is null or time_created >= ?)
             and (? is null or time_created <= ?)
             and (? is null or directory = ?)
-            and (? is null or session_id != ?)
+            and (? is null or session_id not in (select value from json_each(?)))
+            and (? is null or session_id = ?)
             and (? is null or session_id in (select value from json_each(?)))
             and (? is null or role = ?)
           order by score desc, time_created desc, rowid
@@ -453,8 +454,10 @@ export class RecallSidecarIndex {
         options.before ?? null,
         options.directory ?? null,
         options.directory ?? null,
-        options.excludeSessionId ?? null,
-        options.excludeSessionId ?? null,
+        excludedSessionsParam(options),
+        excludedSessionsParam(options),
+        options.onlySessionId ?? null,
+        options.onlySessionId ?? null,
         options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
         options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
         options.role ?? null,
@@ -487,7 +490,8 @@ export class RecallSidecarIndex {
             and (? is null or time_created >= ?)
             and (? is null or time_created <= ?)
             and (? is null or directory = ?)
-            and (? is null or session_id != ?)
+            and (? is null or session_id not in (select value from json_each(?)))
+            and (? is null or session_id = ?)
             and (? is null or session_id in (select value from json_each(?)))
             and (? is null or role = ?)
         ), candidates as materialized (
@@ -509,8 +513,10 @@ export class RecallSidecarIndex {
         options.before ?? null,
         options.directory ?? null,
         options.directory ?? null,
-        options.excludeSessionId ?? null,
-        options.excludeSessionId ?? null,
+        excludedSessionsParam(options),
+        excludedSessionsParam(options),
+        options.onlySessionId ?? null,
+        options.onlySessionId ?? null,
         options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
         options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
         options.role ?? null,
@@ -969,6 +975,12 @@ export class RecallSidecarIndex {
       `)
       .run(key, value)
   }
+}
+
+function excludedSessionsParam(options: SearchOptions): string | null {
+  return options.excludeSessionIds === undefined || options.excludeSessionIds.length === 0
+    ? null
+    : JSON.stringify(options.excludeSessionIds)
 }
 
 function normalizeIndexText(text: string): string {

@@ -4,7 +4,12 @@ import type { FocusedReadDependencies } from './focus.js'
 import type { FocusTranscript } from './focus-transcript.js'
 import { executeNodeWorker } from './node-worker-client.js'
 import type { SessionDigest } from './passages.js'
-import type { HistorySearchWorkerArgs, SessionScanWorkerArgs } from './worker-protocol.js'
+import type {
+  CurrentSessionScope,
+  HistorySearchWorkerArgs,
+  SessionScanWorkerArgs,
+  SessionScopeContext,
+} from './worker-protocol.js'
 
 export type HistoryWorkerDependencies = Pick<
   FindDependencies,
@@ -14,7 +19,8 @@ export type HistoryWorkerDependencies = Pick<
 
 export interface HistoryWorkerScope {
   readonly workerDir: string
-  readonly sessionID: string
+  readonly context: SessionScopeContext
+  readonly currentSession?: CurrentSessionScope | undefined
   readonly directory?: string | undefined
   readonly signal: AbortSignal
 }
@@ -25,7 +31,7 @@ export function historyWorkers(
 ): HistoryWorkerDependencies {
   const worker = (payload: Parameters<typeof executeNodeWorker>[1]) =>
     executeNodeWorker(scope.workerDir, payload, scope.signal)
-  const context = { sessionID: scope.sessionID }
+  const context = scope.context
   return {
     search: async (queries, window) => {
       const count = judge.find.searchShards
@@ -38,6 +44,7 @@ export function historyWorkers(
             maxSearchLimit: judge.find.queryHits,
             excludeSubagents: true,
             directory: scope.directory,
+            currentSession: scope.currentSession,
             ...window,
             sync: false,
             format: 'json',
@@ -60,6 +67,7 @@ export function historyWorkers(
         promptSamples: judge.scan.promptSamples,
         sessionsPerDirectory: judge.scan.sessionsPerDirectory,
         excludeDirectories: judge.scan.excludeDirectories,
+        currentSession: scope.currentSession,
       } as SessionScanWorkerArgs
       return JSON.parse(await worker({ kind: 'scan-sessions', args, context })) as FindScanResult
     },

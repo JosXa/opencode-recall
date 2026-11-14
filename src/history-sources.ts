@@ -6,6 +6,7 @@ import {
   type SearchRow,
   type SessionIndexOptions,
   type SessionIndexRow,
+  type SessionScope,
 } from './db.js'
 import type { EmbeddingProvider } from './embedding.js'
 import { normalizeWindow } from './normalizer.js'
@@ -38,7 +39,8 @@ export interface SessionScanOptions {
   readonly after?: number | undefined
   readonly before?: number | undefined
   readonly directory?: string | undefined
-  readonly excludeSessionId?: string | undefined
+  readonly excludeSessionIds?: readonly string[] | undefined
+  readonly onlySessionId?: string | undefined
 }
 
 export interface SessionScanResult {
@@ -110,7 +112,7 @@ export class HistorySources {
       {
         limit: 40,
         excludeSubagents: true,
-        excludeSessionId: sessionID,
+        excludeSessionIds: [sessionID],
         before: Date.now() - 30_000,
         role: 'user',
       },
@@ -197,12 +199,8 @@ export class HistorySources {
       const index = this.#index(entry)
       if (options.after !== undefined && (index.newestActivity(undefined) ?? 0) < options.after)
         continue
-      const scoped = {
-        ...scopedOptions(options, entry.source.id),
-        ...(options.excludeSubagents
-          ? { sessionIds: entry.history.mainSessionIds(features.excludeAutomations) }
-          : {}),
-      }
+      const scoped = searchScope(entry, options, features.excludeAutomations)
+      if (scoped === undefined) continue
       const semantic =
         embeddings === undefined || provider === undefined
           ? []
@@ -257,11 +255,9 @@ export class HistorySources {
   }
 
   public recent(options: SearchOptions): SearchRow[] {
-    return this.#available()
-      .flatMap((entry) =>
-        entry.history
-          .recent(scopedOptions(options, entry.source.id))
-          .map((row) => this.#provenance(row, entry.source)),
+    return this.#scopedSources(options)
+      .flatMap(({ entry, scoped }) =>
+        entry.history.recent(scoped).map((row) => this.#provenance(row, entry.source)),
       )
       .sort((a, b) => b.timeCreated - a.timeCreated || a.sessionId.localeCompare(b.sessionId))
       .slice(0, options.limit)
@@ -275,14 +271,9 @@ export class HistorySources {
     provider: EmbeddingProvider | undefined,
     queryEmbedding: Float32Array | undefined,
   ): SearchRow[] {
+    const scoped = searchScope(entry, options, features.excludeAutomations)
+    if (scoped === undefined) return []
     const index = this.#index(entry)
-    const scoped = {
-      ...scopedOptions(options, entry.source.id),
-      // Apply the root-session boundary before either lane limits candidates.
-      ...(options.excludeSubagents
-        ? { sessionIds: entry.history.mainSessionIds(features.excludeAutomations) }
-        : {}),
-    }
     const lexical = features.lexical ? index.lexicalSearch(query, scoped) : []
     const semantic =
       features.semantic && provider !== undefined
@@ -292,11 +283,9 @@ export class HistorySources {
   }
 
   public sessionIndex(options: SessionIndexOptions): SessionIndexRow[] {
-    return this.#available()
-      .flatMap((entry) =>
-        entry.history
-          .sessionIndex(scopedOptions(options, entry.source.id))
-          .map((row) => this.#provenance(row, entry.source)),
+    return this.#scopedSources(options)
+      .flatMap(({ entry, scoped }) =>
+        entry.history.sessionIndex(scoped).map((row) => this.#provenance(row, entry.source)),
       )
       .sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
       .slice(0, options.limit)
@@ -336,21 +325,9 @@ export class HistorySources {
   }
 
   public scanSessions(options: SessionScanOptions): SessionScanResult {
-    const headers = this.#available()
-      .flatMap((entry) => {
-        const filters = scopedOptions(
-          {
-            limit: options.maxSessions,
-            sessionIds: entry.history.mainSessionIds(true),
-            ...(options.after === undefined ? {} : { after: options.after }),
-            ...(options.before === undefined ? {} : { before: options.before }),
-            ...(options.directory === undefined ? {} : { directory: options.directory }),
-            ...(options.excludeSessionId === undefined
-              ? {}
-              : { excludeSessionId: options.excludeSessionId }),
-          },
-          entry.source.id,
-        )
+    const headers = this.#scopedSources(scanFilters(options))
+      .flatMap(({ entry, scoped: local }) => {
+        const filters = { ...local, sessionIds: entry.history.mainSessionIds(true) }
         const scoped = options.directory !== undefined
         return this.#index(entry)
           .sessionHeaders(
@@ -444,6 +421,13 @@ export class HistorySources {
     return this.#sources.filter(sourceAvailable).map((source) => this.#entry(source))
   }
 
+  #scopedSources<T extends SessionScope>(options: T): { entry: OpenSource; scoped: T }[] {
+    return this.#available().flatMap((entry) => {
+      const scoped = scopedOptions(options, entry.source.id)
+      return scoped === undefined ? [] : [{ entry, scoped }]
+    })
+  }
+
   #entry(source: ResolvedSource): OpenSource {
     const existing = this.#open.get(source.id)
     if (existing !== undefined) return existing
@@ -497,17 +481,52 @@ async function embedQuery(
   return embedding
 }
 
-function scopedOptions<T extends SearchOptions>(options: T, sourceId: string): T {
-  const excluded = options.excludeSessionId
-  if (excluded === undefined || !excluded.includes('::')) return options
-  const cursor = decodeCursor(excluded)
-  const { excludeSessionId: _excluded, ...rest } = options
+function scopedOptions<T extends SessionScope>(options: T, sourceId: string): T | undefined {
+  const only =
+    options.onlySessionId === undefined
+      ? undefined
+      : sourceLocalSessionId(options.onlySessionId, sourceId)
+  if (options.onlySessionId !== undefined && only === undefined) return undefined
   return {
-    ...rest,
-    ...(cursor.sourceId === sourceId && cursor.sessionId !== undefined
-      ? { excludeSessionId: cursor.sessionId }
-      : {}),
-  } as T
+    ...options,
+    ...(options.excludeSessionIds === undefined
+      ? {}
+      : {
+          excludeSessionIds: options.excludeSessionIds.flatMap(
+            (value) => sourceLocalSessionId(value, sourceId) ?? [],
+          ),
+        }),
+    ...(only === undefined ? {} : { onlySessionId: only }),
+  }
+}
+
+function searchScope(
+  entry: OpenSource,
+  options: SearchOptions,
+  excludeAutomations: boolean | undefined,
+): SearchOptions | undefined {
+  const scoped = scopedOptions(options, entry.source.id)
+  if (scoped === undefined || !options.excludeSubagents) return scoped
+  return { ...scoped, sessionIds: entry.history.mainSessionIds(excludeAutomations) }
+}
+
+function scanFilters(options: SessionScanOptions): SearchOptions {
+  return {
+    limit: options.maxSessions,
+    ...(options.after === undefined ? {} : { after: options.after }),
+    ...(options.before === undefined ? {} : { before: options.before }),
+    ...(options.directory === undefined ? {} : { directory: options.directory }),
+    ...(options.excludeSessionIds === undefined
+      ? {}
+      : { excludeSessionIds: options.excludeSessionIds }),
+    ...(options.onlySessionId === undefined ? {} : { onlySessionId: options.onlySessionId }),
+  }
+}
+
+function sourceLocalSessionId(value: string, sourceId: string): string | undefined {
+  if (!value.includes('::')) return value
+  const cursor = decodeCursor(value)
+  return cursor.sourceId === sourceId ? cursor.sessionId : undefined
 }
 
 function combineSync(results: readonly SyncResult[]): SyncResult {

@@ -127,6 +127,21 @@ describe('federated history', () => {
     } finally { recall.close(); f.cleanup() }
   })
 
+  test('scopes worker searches to the calling session across sources', async () => {
+    const f = fixture()
+    try {
+      const run = async (kind: 'search' | 'session-index', currentSession: 'exclude' | 'include' | 'only') => {
+        const args = { sources: f.sources, q: 'cobalt', semantic: false, lexical: true, format: 'json' as const, currentSession }
+        const content = await executeWorkerRequest({ kind, args, context: { sessionID: 'v1::ses_shared', recallSessionID: 'v2::ses_shared' } })
+        return [...new Set([...String(content).matchAll(/"(v[12])::/g)].map(match => match[1]))].sort()
+      }
+      expect(await run('search', 'only')).toEqual(['v1'])
+      expect(await run('session-index', 'only')).toEqual(['v1'])
+      expect(await run('search', 'include')).toEqual(['v1'])
+      expect(await run('search', 'exclude')).toEqual([])
+    } finally { f.cleanup() }
+  })
+
   test('ranks globally without collapsing same IDs and routes reads, navigation and saved sessions', async () => {
     const f = fixture()
     const recall = new OpenCodeRecall({ sources: f.sources, embeddingProvider: f.provider })

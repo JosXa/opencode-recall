@@ -13,7 +13,8 @@ export interface SearchOptions {
   readonly after?: number
   readonly before?: number
   readonly directory?: string
-  readonly excludeSessionId?: string
+  readonly excludeSessionIds?: readonly string[]
+  readonly onlySessionId?: string
   /** Semantic only: filter roles before the candidate limit. */
   readonly role?: 'user' | 'assistant'
   /** Lexical only: every term must occur in the session, as a word prefix. */
@@ -27,8 +28,11 @@ export interface SessionIndexOptions {
   readonly before?: number
   readonly directory?: string
   readonly title?: string
-  readonly excludeSessionId?: string
+  readonly excludeSessionIds?: readonly string[]
+  readonly onlySessionId?: string
 }
+
+export type SessionScope = Pick<SearchOptions, 'excludeSessionIds' | 'onlySessionId'>
 
 export interface SessionIndexRow {
   readonly sourceId?: string
@@ -156,14 +160,14 @@ export class HistoryDatabase {
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
       ...(options.directory === undefined ? [] : ['s.directory = ?']),
-      ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
+      ...sessionScopeConditions(options),
     ].join(' and ')
     const params = [
       ...terms.map((term) => `%${escapeLikeTerm(term)}%`),
       ...(options.after === undefined ? [] : [options.after]),
       ...(options.before === undefined ? [] : [options.before]),
       ...(options.directory === undefined ? [] : [options.directory]),
-      ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
+      ...sessionScopeParams(options),
       options.limit,
     ]
     const rows = this.#db
@@ -207,7 +211,7 @@ export class HistoryDatabase {
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
       ...(options.directory === undefined ? [] : ['s.directory = ?']),
-      ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
+      ...sessionScopeConditions(options),
     ].join(' and ')
     const termParams = terms.flatMap((term) => {
       const pattern = `%${escapeLikeTerm(term)}%`
@@ -218,7 +222,7 @@ export class HistoryDatabase {
       ...(options.after === undefined ? [] : [options.after]),
       ...(options.before === undefined ? [] : [options.before]),
       ...(options.directory === undefined ? [] : [options.directory]),
-      ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
+      ...sessionScopeParams(options),
       candidateLimit,
     ]
     const rows = this.#db
@@ -263,13 +267,13 @@ export class HistoryDatabase {
       ...(options.after === undefined ? [] : ['m.time_created >= ?']),
       ...(options.before === undefined ? [] : ['m.time_created <= ?']),
       ...(options.directory === undefined ? [] : ['s.directory = ?']),
-      ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
+      ...sessionScopeConditions(options),
     ].join(' and ')
     const params = [
       ...(options.after === undefined ? [] : [options.after]),
       ...(options.before === undefined ? [] : [options.before]),
       ...(options.directory === undefined ? [] : [options.directory]),
-      ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
+      ...sessionScopeParams(options),
       options.limit,
     ]
 
@@ -306,7 +310,7 @@ export class HistoryDatabase {
       ...(options.before === undefined ? [] : ['coalesce(s.time_updated, 0) <= ?']),
       ...(options.directory === undefined ? [] : ['s.directory = ?']),
       ...(options.title === undefined ? [] : ["lower(coalesce(s.title, '')) like ? escape '\\'"]),
-      ...(options.excludeSessionId === undefined ? [] : ['s.id != ?']),
+      ...sessionScopeConditions(options),
     ]
     const where = conditions.length === 0 ? '' : `where ${conditions.join(' and ')}`
     const params = [
@@ -314,7 +318,7 @@ export class HistoryDatabase {
       ...(options.before === undefined ? [] : [options.before]),
       ...(options.directory === undefined ? [] : [options.directory]),
       ...(options.title === undefined ? [] : [`%${escapeLikeTerm(options.title.toLowerCase())}%`]),
-      ...(options.excludeSessionId === undefined ? [] : [options.excludeSessionId]),
+      ...sessionScopeParams(options),
       options.limit,
     ]
 
@@ -869,6 +873,24 @@ function tokenizeQuery(query: string): string[] {
     .map((term) => term.trim())
     .filter((term) => term.length > 0)
     .slice(0, 8)
+}
+
+function sessionScopeConditions(scope: SessionScope): string[] {
+  return [
+    ...(scope.excludeSessionIds === undefined || scope.excludeSessionIds.length === 0
+      ? []
+      : ['s.id not in (select value from json_each(?))']),
+    ...(scope.onlySessionId === undefined ? [] : ['s.id = ?']),
+  ]
+}
+
+function sessionScopeParams(scope: SessionScope): string[] {
+  return [
+    ...(scope.excludeSessionIds === undefined || scope.excludeSessionIds.length === 0
+      ? []
+      : [JSON.stringify(scope.excludeSessionIds)]),
+    ...(scope.onlySessionId === undefined ? [] : [scope.onlySessionId]),
+  ]
 }
 
 function escapeLikeTerm(term: string): string {

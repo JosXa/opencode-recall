@@ -33,10 +33,12 @@ import {
   DEFAULT_SESSION_INDEX_LIMIT,
 } from './src/tool-defaults.js'
 import type {
+  CurrentSessionScope,
   HistoryReadWorkerArgs,
   HistorySearchWorkerArgs,
   SessionIndexWorkerArgs,
   SessionSaveWorkerArgs,
+  SessionScopeContext,
 } from './src/worker-protocol.js'
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
@@ -71,6 +73,12 @@ const OBJECT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
 } as const
+const CURRENT_SESSION_SCHEMA = {
+  type: 'string',
+  enum: ['exclude', 'include', 'only'],
+  description:
+    'The session that called recall. exclude (default): leave it out. include: search it along with all others. only: look only inside it.',
+}
 
 export const RecallPlugin = Plugin.define({
   id: 'josxa.opencode-recall',
@@ -213,12 +221,17 @@ export const RecallPlugin = Plugin.define({
       judgeRetryAt = Date.now() + JUDGE_RETRY_MS
       void refreshSurface(async () => judgeChanged()).catch(() => undefined)
     }
+    const callerScope = async (sessionID: string): Promise<SessionScopeContext> => {
+      const session = await context.session.get({ sessionID }).catch(() => undefined)
+      return { sessionID: session?.parentID ?? sessionID, recallSessionID: sessionID }
+    }
     const standardHistory = async (
-      sessionID: string,
+      scopeContext: SessionScopeContext,
       request: {
         readonly queries: readonly string[]
         readonly window: FindWindow
         readonly directory?: string | undefined
+        readonly currentSession: CurrentSessionScope
       },
       signal: AbortSignal,
     ) => {
@@ -231,11 +244,12 @@ export const RecallPlugin = Plugin.define({
             : new Date(Date.now() - request.window.withinDays * DAY_MS).toISOString()),
         before: request.window.before,
         excludeSubagents: true,
+        currentSession: request.currentSession,
       }
       if (request.queries.length === 0) {
         return executeNodeWorker(
           WORKER_DIR,
-          { kind: 'session-index', args: scope as SessionIndexWorkerArgs, context: { sessionID } },
+          { kind: 'session-index', args: scope as SessionIndexWorkerArgs, context: scopeContext },
           signal,
         )
       }
@@ -247,7 +261,7 @@ export const RecallPlugin = Plugin.define({
               {
                 kind: 'search',
                 args: { ...scope, q } as HistorySearchWorkerArgs,
-                context: { sessionID },
+                context: scopeContext,
               },
               signal,
             )}`,
@@ -284,10 +298,7 @@ export const RecallPlugin = Plugin.define({
               },
               n: { type: 'number', description: `Max hits. Default ${DEFAULT_SEARCH_LIMIT}.` },
               directory: { type: 'string', description: 'Session directory.' },
-              includeCurrentSession: {
-                type: 'boolean',
-                description: 'Include current session. Default false.',
-              },
+              currentSession: CURRENT_SESSION_SCHEMA,
               after: { type: 'string', description: 'Created after ISO date/time.' },
               before: { type: 'string', description: 'Created before ISO date/time.' },
             },
@@ -295,10 +306,11 @@ export const RecallPlugin = Plugin.define({
           options: directToolOptions(HISTORY_SEARCH_COMMAND),
           async execute(input, toolContext) {
             const args = input as HistorySearchWorkerArgs
+            const scopeContext = await callerScope(toolContext.sessionID)
             const content = await workers.run(toolContext.sessionID, (signal) =>
               executeNodeWorker(
                 WORKER_DIR,
-                { kind: 'search', args, context: { sessionID: toolContext.sessionID } },
+                { kind: 'search', args, context: scopeContext },
                 signal,
               ),
             )
@@ -359,7 +371,7 @@ export const RecallPlugin = Plugin.define({
                   onJudgeDown: markJudgeDown,
                   ...historyWorkers(judge, {
                     workerDir: WORKER_DIR,
-                    sessionID: toolContext.sessionID,
+                    context: { sessionID: toolContext.sessionID },
                     signal,
                   }),
                 }),
@@ -385,23 +397,21 @@ export const RecallPlugin = Plugin.define({
                 description: 'Return only main sessions. Default false.',
               },
               directory: { type: 'string', description: 'Exact session directory.' },
-              includeCurrentSession: {
-                type: 'boolean',
-                description: 'Include current session. Default false.',
-              },
+              currentSession: CURRENT_SESSION_SCHEMA,
               after: { type: 'string', description: 'Session updated after ISO date/time.' },
               before: { type: 'string', description: 'Session updated before ISO date/time.' },
             },
           },
           options: directToolOptions(SESSION_INDEX_COMMAND),
           async execute(input, toolContext) {
+            const scopeContext = await callerScope(toolContext.sessionID)
             const content = await workers.run(toolContext.sessionID, (signal) =>
               executeNodeWorker(
                 WORKER_DIR,
                 {
                   kind: 'session-index',
                   args: input as SessionIndexWorkerArgs,
-                  context: { sessionID: toolContext.sessionID },
+                  context: scopeContext,
                 },
                 signal,
               ),
@@ -479,6 +489,7 @@ export const RecallPlugin = Plugin.define({
             after: { type: 'string', description: 'Active after ISO date/time.' },
             before: { type: 'string', description: 'Active before ISO date/time.' },
             directory: { type: 'string', description: 'Exact session directory.' },
+            currentSession: CURRENT_SESSION_SCHEMA,
           },
           required: ['criteria'],
         },
@@ -491,8 +502,11 @@ export const RecallPlugin = Plugin.define({
             readonly after?: string
             readonly before?: string
             readonly directory?: string
+            readonly currentSession?: CurrentSessionScope
           }
           const sessionID = toolContext.sessionID
+          const scopeContext = await callerScope(sessionID)
+          const currentSession = request.currentSession ?? 'exclude'
           const window = {
             after: request.after,
             before: request.before,
@@ -500,26 +514,45 @@ export const RecallPlugin = Plugin.define({
           }
           const queries = request.queries ?? []
           const standard = (signal: AbortSignal) =>
-            standardHistory(sessionID, { queries, window, directory: request.directory }, signal)
-          const content = await workers.run(sessionID, async (signal) =>
+            standardHistory(
+              scopeContext,
+              { queries, window, directory: request.directory, currentSession },
+              signal,
+            )
+          const workerScope = (signal: AbortSignal) =>
+            historyWorkers(judge, {
+              workerDir: WORKER_DIR,
+              context: scopeContext,
+              currentSession,
+              directory: request.directory,
+              signal,
+            })
+          const callerRead = async (signal: AbortSignal) =>
             usableJudge() === undefined
-              ? `judge unavailable: ${STANDARD_FALLBACK_NOTICE}\n${await standard(signal)}`
-              : findEvidence(
-                  { queries, criteria: request.criteria, window },
-                  {
-                    judge,
-                    run: runs.get(sessionID),
-                    decide: (decision) => context.experimental.generate.decisions(decision),
-                    standard: () => standard(signal),
-                    onJudgeDown: markJudgeDown,
-                    ...historyWorkers(judge, {
-                      workerDir: WORKER_DIR,
-                      sessionID,
-                      directory: request.directory,
-                      signal,
-                    }),
-                  },
-                ),
+              ? `judge unavailable: showing a plain window around ${scopeContext.sessionID} instead of judged segments.\n${await workerScope(signal).read(scopeContext.sessionID)}`
+              : focusedRead(scopeContext.sessionID, request.criteria, FOCUSED_READ_SEGMENTS, {
+                  judge,
+                  run: runs.get(sessionID),
+                  decide: (decision) => context.experimental.generate.decisions(decision),
+                  onJudgeDown: markJudgeDown,
+                  ...workerScope(signal),
+                })
+          const content = await workers.run(sessionID, async (signal) =>
+            currentSession === 'only'
+              ? callerRead(signal)
+              : usableJudge() === undefined
+                ? `judge unavailable: ${STANDARD_FALLBACK_NOTICE}\n${await standard(signal)}`
+                : findEvidence(
+                    { queries, criteria: request.criteria, window },
+                    {
+                      judge,
+                      run: runs.get(sessionID),
+                      decide: (decision) => context.experimental.generate.decisions(decision),
+                      standard: () => standard(signal),
+                      onJudgeDown: markJudgeDown,
+                      ...workerScope(signal),
+                    },
+                  ),
           )
           void executeNodeWorker(
             WORKER_DIR,
@@ -530,7 +563,7 @@ export const RecallPlugin = Plugin.define({
                 n: 1,
                 format: 'json',
               } as HistorySearchWorkerArgs,
-              context: { sessionID },
+              context: scopeContext,
             },
             new AbortController().signal,
           ).catch(() => undefined)
