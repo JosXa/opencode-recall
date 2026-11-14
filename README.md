@@ -253,7 +253,29 @@ Set `judge.model` to a decision model such as `typesafe-ai/jev-latest` to give t
 
 `history_find({ queries, criteria, withinDays?, after?, before?, directory? })` runs all queries through one lexical and semantic search. With a time window, or with no queries, it also has the decision model score compact digests of every main session in the window, so sessions described only by a screenshot or a file name still surface. It judges every candidate session against each criterion, reads the whole transcript of the best sessions in segments (tool calls included) and returns the matching sessions with their best segments and passages, cursors and probabilities. Verdicts, segment scores and matching sessions are kept for the rest of the recall run, so a second call is cheap; `judge.maxRunTokens` caps the decision-model input per run. `history_read` gains a `criteria` option that returns only the matching segments of the containing session.
 
-With `judge` set, the recall agent sees `history_find`, `history_read` and `session_save`. Without it, the agent keeps the four original history tools and prompt. The first line of every judged tool result reports decision-model usage as `[jev calls=<n> input_tokens=<t> ms=<wall>]`.
+With a working judge, the recall agent sees `history_find`, `history_read` and `session_save`. Without one, the agent keeps the four original history tools and prompt. The first line of every judged tool result reports decision-model usage as `[jev calls=<n> input_tokens=<t> ms=<wall>]`.
+
+The judge must be registered in OpenCode as a decision model (`"type": "decision"`). OpenCode ships the TypeSafe adapter, so a provider entry is enough:
+
+```jsonc
+{
+  "providers": {
+    "typesafe-ai": {
+      "env": ["TYPESAFE_API_KEY"],
+      "package": "@opencode/ai/providers/typesafe-ai/decisions",
+      "models": {
+        "jev-latest": {
+          "type": "decision",
+          "capabilities": { "tools": false, "input": ["text", "image"], "output": ["decision"], "temperature": false },
+          "limit": { "context": 64000, "output": 0 }
+        }
+      }
+    }
+  }
+}
+```
+
+Recall checks the judge at every prompt. When `judge` is unset, names a model OpenCode does not list as an enabled decision model, or the decision API is missing, recall offers the original tools and prompt. When the judge fails during a run (HTTP errors, exhausted credits, timeouts after `judge.timeoutMs`, malformed answers), `history_find` answers the same call with `history_search` results, `history_read` returns a plain window, and the next turn switches to the original tools. Recall retries the judge after 10 minutes. When a run spends `judge.maxRunTokens`, `history_find` also returns `history_search` results for the rest of that run.
 
 OpenCode applies global permission rules after plugin agent transforms, so a global `subagent` or `shell` allow would reach the recall agent. Restate the recall sandbox in your config and list every Recall tool:
 
