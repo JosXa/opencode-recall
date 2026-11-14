@@ -51,6 +51,9 @@ export interface FindSettings {
   readonly outputChars: number
   readonly concurrency: number
   readonly searchShards: number
+  readonly weakMatch: number
+  readonly pickMargin: number
+  readonly pickSessions: number
 }
 
 export interface ScanSettings {
@@ -77,6 +80,9 @@ export interface FocusSettings {
   readonly segmentChars: number
   readonly textChars: number
   readonly toolChars: number
+  readonly topSegments: number
+  readonly topNeighbours: number
+  readonly topSegmentChars: number
 }
 
 export const DEFAULT_FIND_SETTINGS: FindSettings = {
@@ -85,13 +91,16 @@ export const DEFAULT_FIND_SETTINGS: FindSettings = {
   carriedSessions: 6,
   passagesPerSession: 8,
   passageChars: 600,
-  maxSessions: 5,
-  maxPassagesPerSession: 4,
+  maxSessions: 8,
+  maxPassagesPerSession: 3,
   sessionThreshold: 0.5,
   passageThreshold: 0.5,
-  outputChars: 9_000,
+  outputChars: 28_000,
   concurrency: 24,
   searchShards: 2,
+  weakMatch: 0.7,
+  pickMargin: 0.1,
+  pickSessions: 3,
 }
 
 export const DEFAULT_SCAN_SETTINGS: ScanSettings = {
@@ -108,19 +117,22 @@ export const DEFAULT_SCAN_SETTINGS: ScanSettings = {
 }
 
 export const DEFAULT_FOCUS_SETTINGS: FocusSettings = {
-  sessions: 3,
+  sessions: 4,
   segmentTokens: 500,
   windowTokens: 24_000,
-  maxScanTokens: 40_000,
+  maxScanTokens: 60_000,
   readScanTokens: 150_000,
   minScore: 0.5,
   segmentsPerSession: 2,
-  segmentChars: 1_500,
-  textChars: 1_500,
-  toolChars: 160,
+  segmentChars: 2_500,
+  textChars: 4_000,
+  toolChars: 400,
+  topSegments: 3,
+  topNeighbours: 1,
+  topSegmentChars: 8_000,
 }
 
-export const DEFAULT_MAX_RUN_TOKENS = 800_000
+export const DEFAULT_MAX_RUN_TOKENS = 1_500_000
 
 interface RawConfig {
   readonly database?: {
