@@ -19,6 +19,7 @@ import { GenerationIndicator, generationGray } from './src/autocomplete-indicato
 import {
   Autocomplete,
   autocompleteErrorMessage,
+  isRpcUnavailable,
   type SuggestOutput,
 } from './src/autocomplete-rpc.js'
 import { submittedText } from './src/prompt-example.js'
@@ -31,6 +32,8 @@ const isPrompt = (editor: EditBufferRenderable | null | undefined): editor is Te
   'role' in editor.traits &&
   editor.traits.role === 'prompt'
 
+const PREPARE_ATTEMPTS = 30
+const PREPARE_RETRY_MS = 2_000
 const reference = /(^|\s)[#@][^\s#@]*$/u
 const command = /^\/\S*$/u
 const wordChunk = /^\s*\S+/u
@@ -71,24 +74,28 @@ export default Plugin.define({
     let stopPrompt: (() => void) | undefined
     // Let the host finish mounting before a failed RPC reports its toast.
     // Register generators only after the connected server accepts preparation.
-    async function start() {
-      try {
-        await rpc.prepare({})
-      } catch (error) {
-        if (disposed) return
-        context.ui.toast.show({
-          title: 'Recall autocomplete',
-          message: autocompleteErrorMessage(error),
-          variant: 'error',
-        })
-        // A remote server can run Recall without its opt-in autocomplete RPC.
-        // Do not install generators that would keep requesting an unavailable service.
+    async function start(attempt: number): Promise<void> {
+      const failure = await rpc.prepare({}).then(
+        () => undefined,
+        (error: unknown) => ({ error }),
+      )
+      if (disposed) return
+      if (failure === undefined) {
+        stopPrompt = mountAutocomplete(context)
         return
       }
-      if (disposed) return
-      stopPrompt = mountAutocomplete(context)
+      if (isRpcUnavailable(failure.error) && attempt < PREPARE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, PREPARE_RETRY_MS))
+        if (!disposed) await start(attempt + 1)
+        return
+      }
+      context.ui.toast.show({
+        title: 'Recall autocomplete',
+        message: autocompleteErrorMessage(failure.error),
+        variant: 'error',
+      })
     }
-    void start()
+    void start(1)
     return () => {
       disposed = true
       stopPrompt?.()

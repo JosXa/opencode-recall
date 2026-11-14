@@ -1,9 +1,12 @@
 import { Rpc } from '@opencode/plugin/rpc'
 
+export const isRpcUnavailable = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'type' in error && error.type === 'rpc.unavailable'
+
 export function autocompleteErrorMessage(error: unknown): string {
   // The native RPC client rejects with serialized objects rather than Error instances.
   if (typeof error === 'object' && error !== null) {
-    if ('type' in error && error.type === 'rpc.unavailable')
+    if (isRpcUnavailable(error))
       return 'Recall autocomplete is not enabled on the connected server. Enable it in that server’s Recall plugin settings and reopen OpenCode.'
     if ('message' in error && typeof error.message === 'string' && error.message.trim())
       return error.message
