@@ -8,6 +8,7 @@ import {
   findEvidence,
   fuseSessions,
   wantsBreadth,
+  BUDGET_FALLBACK_NOTICE,
   STANDARD_FALLBACK_NOTICE,
 } from '../src/find.js'
 import {
@@ -18,7 +19,7 @@ import {
   selectScanned,
 } from '../src/focus.js'
 import type { FocusTranscript } from '../src/focus-transcript.js'
-import { type DecisionRequest, type DecisionResult, mapConcurrent } from '../src/jev.js'
+import { type DecisionRequest, type DecisionResult, Jev, mapConcurrent } from '../src/jev.js'
 import { digestSession, excerpt, type SessionPart, selectPassages } from '../src/passages.js'
 import { RecallRun, RecallRuns } from '../src/recall-run.js'
 import { type ScannedSession, sessionDigestText } from '../src/scan.js'
@@ -373,12 +374,17 @@ describe('history_find pipeline', () => {
     expect(carried).toContain('via carried')
   })
 
-  test('skips judge calls beyond the run token budget and says so', async () => {
+  test('hands over to the standard history tools once the run token budget is spent', async () => {
     const deps = stubbedDependencies(() => ({ c1: 0.9 }), { run: new RecallRun(10) })
     const output = await findEvidence(request(), deps)
 
     expect(deps.decisions).toHaveLength(0)
-    expect(output).toContain('judge calls skipped: the run reached its 10-token judge budget')
+    expect(deps.judgeDowns).toHaveLength(0)
+    expect(output.split('\n')).toEqual([
+      '[jev calls=0 input_tokens=0 ms=0]',
+      `judge budget spent: the run reached its 10-token judge budget; ${BUDGET_FALLBACK_NOTICE}`,
+      '<history_search results>',
+    ])
   })
 
   test('adds focused transcript segments above the judged passages of top matches', async () => {
@@ -719,5 +725,287 @@ describe('session passages', () => {
       'v2::msg_prt_a',
       'v2::msg_prt_b',
     ])
+  })
+})
+
+const FAST_JUDGE: JudgeConfig = { ...JUDGE, timeoutMs: 20, focus: { ...JUDGE.focus, sessions: 0 } }
+
+const never = () => new Promise<DecisionResult>(() => undefined)
+
+const focusTranscript = (): FocusTranscript[] => [
+  {
+    sid: 'v2::ses_auto',
+    title: 'Autocomplete',
+    directory: '/projects/recall',
+    totalMessages: 1,
+    anchorIndex: 0,
+    messages: [{ index: 0, cursor: 'v2::msg_1', text: 'Tab is reserved for agents.' }],
+  },
+]
+
+const threeSessionSearch = async () => ({
+  lists: [[hit('ses_auto', 'prt_a1'), hit('ses_other', 'prt_o1'), hit('ses_third', 'prt_t1')]],
+})
+
+const sessionOf = (decision: DecisionRequest) =>
+  ['ses_auto', 'ses_other', 'ses_third'].find((sid) =>
+    decision.input[0]?.text.includes(`title ${sid}`),
+  )
+
+describe('judge availability', () => {
+  describe.each<[string, () => Promise<DecisionResult>, RegExp]>([
+    ['out of credits', () => Promise.reject(new Error('HTTP 402: no available credits')), /HTTP 402/],
+    ['revoked key', () => Promise.reject(new Error('HTTP 401: authentication_error')), /HTTP 401/],
+    ['rate limit', () => Promise.reject(new Error('HTTP 429: Free usage limit reached')), /HTTP 429/],
+    ['provider outage', () => Promise.reject(new Error('HTTP 503: upstream down')), /HTTP 503/],
+    ['network failure', () => Promise.reject(new Error('fetch failed: ECONNRESET')), /ECONNRESET/],
+    ['rejection without an Error', () => Promise.reject('model not found'), /model not found/],
+    [
+      'synchronous throw',
+      () => {
+        throw new Error('decisions is not a function')
+      },
+      /decisions is not a function/,
+    ],
+    ['empty response', () => Promise.resolve(undefined as unknown as DecisionResult), /no answers/],
+    [
+      'response without answers',
+      () => Promise.resolve({ answers: null } as unknown as DecisionResult),
+      /no answers/,
+    ],
+    [
+      'answers with invalid probabilities',
+      () =>
+        Promise.resolve({
+          answers: [
+            { type: 'predicate', name: 'c1', probability: Number.NaN },
+            { type: 'predicate', name: 'p1', probability: 7 },
+          ],
+        }),
+      /lacks valid answers/,
+    ],
+    ['hanging call', never, /timed out after 20 ms/],
+  ])('when the decision model fails with %s', (_, decide, reason) => {
+    test('history_find hands over to the standard history tools', async () => {
+      const deps = stubbedDependencies(() => ({}), { judge: FAST_JUDGE, decide })
+      const output = await findEvidence(request(), deps)
+      const lines = output.split('\n')
+
+      expect(lines[0]).toMatch(/^\[jev calls=0 input_tokens=0 /)
+      expect(lines[1]).toMatch(reason)
+      expect(lines[1]).toContain(STANDARD_FALLBACK_NOTICE)
+      expect(lines.slice(2)).toEqual(['<history_search results>'])
+      expect(deps.judgeDowns).toHaveLength(1)
+    })
+
+    test('history_read with criteria shows a plain window', async () => {
+      const judgeDowns: string[] = []
+      const output = await focusedRead('v2::msg_1', ['why Tab was not used'], 5, {
+        judge: FAST_JUDGE,
+        run: new RecallRun(1_000_000),
+        decide,
+        transcripts: async () => focusTranscript(),
+        read: async (cursor) => `<window around ${cursor}>`,
+        onJudgeDown: () => judgeDowns.push('down'),
+      })
+      const lines = output.split('\n')
+
+      expect(lines[1]).toMatch(reason)
+      expect(lines.slice(2)).toEqual(['<window around v2::msg_1>'])
+      expect(judgeDowns).toEqual(['down'])
+    })
+  })
+
+  test('a judge that dies between two calls of one run hands the second call over', async () => {
+    const run = new RecallRun(1_000_000)
+    let alive = true
+    const answered = answerAll(() => ({ c1: 0.9, p1: 0.8 }))
+    const deps = stubbedDependencies(() => ({}), {
+      run,
+      decide: (decision) =>
+        alive ? answered(decision) : Promise.reject(new Error('HTTP 402: no available credits')),
+    })
+
+    const first = await findEvidence(request(), deps)
+    alive = false
+    const second = await findEvidence(request({ criteria: ['a new topic'] }), deps)
+
+    expect(first).toContain('history_find: 2 of 2 judged sessions match')
+    expect(second.split('\n')[1]).toMatch(/^judge unavailable: .*HTTP 402/)
+    expect(second).toContain('<history_search results>')
+    expect(deps.judgeDowns).toHaveLength(1)
+  })
+
+  test('cached verdicts keep answering a repeated question after the judge dies', async () => {
+    const run = new RecallRun(1_000_000)
+    let alive = true
+    const answered = answerAll(() => ({ c1: 0.9, p1: 0.8 }))
+    const deps = stubbedDependencies(() => ({}), {
+      run,
+      decide: (decision) =>
+        alive ? answered(decision) : Promise.reject(new Error('HTTP 402: no available credits')),
+    })
+
+    await findEvidence(request(), deps)
+    alive = false
+    const repeated = await findEvidence(request(), deps)
+
+    expect(repeated).toContain('history_find: 2 of 2 judged sessions match')
+    expect(deps.judgeDowns).toHaveLength(0)
+  })
+
+  test('keeps judged evidence when only a minority of sessions fail', async () => {
+    const answered = answerAll(() => ({ c1: 0.9 }))
+    const deps = stubbedDependencies(() => ({}), {
+      search: threeSessionSearch,
+      decide: (decision) =>
+        sessionOf(decision) === 'ses_third'
+          ? Promise.reject(new Error('HTTP 500'))
+          : answered(decision),
+    })
+    const output = await findEvidence(request(), deps)
+
+    expect(output).toContain('unjudged: 1 sessions')
+    expect(output).toContain('judge problems: 1 judge calls failed (HTTP 500)')
+    expect(deps.judgeDowns).toHaveLength(0)
+  })
+
+  test('hands over when most sessions fail even though one was judged', async () => {
+    const answered = answerAll(() => ({ c1: 0.9 }))
+    const deps = stubbedDependencies(() => ({}), {
+      search: threeSessionSearch,
+      decide: (decision) =>
+        sessionOf(decision) === 'ses_auto'
+          ? answered(decision)
+          : Promise.reject(new Error('HTTP 500')),
+    })
+    const output = await findEvidence(request(), deps)
+
+    expect(output.split('\n')[1]).toMatch(/^judge unavailable: 2 of 3 decision calls failed/)
+    expect(output).toContain('<history_search results>')
+    expect(deps.judgeDowns).toHaveLength(1)
+  })
+
+  test('a single transient failure is retried and leaves no trace', async () => {
+    const answered = answerAll(() => ({ c1: 0.9, p1: 0.8 }))
+    const seen = new Set<string>()
+    const deps = stubbedDependencies(() => ({}), {
+      decide: (decision) => {
+        const sid = sessionOf(decision) ?? ''
+        if (seen.has(sid)) return answered(decision)
+        seen.add(sid)
+        return Promise.reject(new Error('socket hang up'))
+      },
+    })
+    const output = await findEvidence(request(), deps)
+
+    expect(output).toContain('history_find: 2 of 2 judged sessions match')
+    expect(output).not.toContain('judge problems')
+    expect(deps.judgeDowns).toHaveLength(0)
+  })
+
+  test('a judge with no candidates to judge returns the empty result without a handover', async () => {
+    const deps = stubbedDependencies(() => ({}), {
+      search: async () => ({ lists: [[]] }),
+      decide: () => Promise.reject(new Error('HTTP 402')),
+    })
+    const output = await findEvidence(request({ window: { after: '2026-11-01' } }), deps)
+
+    expect(output).not.toContain('judge unavailable')
+    expect(deps.judgeDowns).toHaveLength(0)
+  })
+
+  test('history_read with criteria shows a plain window once the run budget is spent', async () => {
+    const reads: string[] = []
+    const output = await focusedRead('v2::msg_1', ['why Tab was not used'], 5, {
+      judge: JUDGE,
+      run: new RecallRun(10),
+      decide: () => Promise.reject(new Error('the judge must not be called')),
+      transcripts: async () => focusTranscript(),
+      read: async (cursor) => {
+        reads.push(cursor)
+        return `<window around ${cursor}>`
+      },
+      onJudgeDown: () => {
+        throw new Error('a spent budget is no outage')
+      },
+    })
+
+    expect(reads).toEqual(['v2::msg_1'])
+    expect(output.split('\n')).toEqual([
+      '[jev calls=0 input_tokens=0 ms=0]',
+      'judge budget spent: the run reached its 10-token judge budget; showing a plain window around v2::msg_1 instead of judged segments.',
+      '<window around v2::msg_1>',
+    ])
+  })
+})
+
+describe('Jev client', () => {
+  const MODEL = { providerID: 'typesafe-ai', id: 'jev-latest' }
+  const QUESTIONS = [{ type: 'predicate' as const, name: 'q1', instructions: 'is it?' }]
+
+  test('stops calling a judge after three failures without a success', async () => {
+    let calls = 0
+    const jev = new Jev(
+      MODEL,
+      () => {
+        calls += 1
+        return Promise.reject(new Error('HTTP 402'))
+      },
+      { spent: 0, cap: 1_000_000 },
+      Date.now,
+      20,
+    )
+
+    for (const _ of [1, 2, 3, 4, 5]) await jev.ask(['text'], QUESTIONS)
+
+    expect(calls).toBe(6)
+    expect(jev.unavailable).toBe(true)
+    expect(jev.failures).toBe(5)
+  })
+
+  test('refunds the reserved budget of a failed call', async () => {
+    const budget = { spent: 0, cap: 1_000_000 }
+    const jev = new Jev(
+      MODEL,
+      () => Promise.reject(new Error('HTTP 503')),
+      budget,
+      Date.now,
+      20,
+    )
+
+    await jev.ask(['text'], QUESTIONS)
+
+    expect(budget.spent).toBe(0)
+  })
+
+  test('times out a hanging call within its retry and reports the timeout', async () => {
+    const started = Date.now()
+    const jev = new Jev(MODEL, never, { spent: 0, cap: 1_000_000 }, Date.now, 20)
+
+    expect(await jev.ask(['text'], QUESTIONS)).toBeUndefined()
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(jev.lastError).toBe('decision call timed out after 20 ms')
+  })
+
+  test('a late answer after a timeout does not count as a success', async () => {
+    let resolveLate: (result: DecisionResult) => void = () => undefined
+    const jev = new Jev(
+      MODEL,
+      () =>
+        new Promise<DecisionResult>((resolve) => {
+          resolveLate = resolve
+        }),
+      { spent: 0, cap: 1_000_000 },
+      Date.now,
+      20,
+    )
+
+    await jev.ask(['text'], QUESTIONS)
+    resolveLate({ answers: [{ type: 'predicate', name: 'q1', probability: 0.9 }] })
+    await Promise.resolve()
+
+    expect(jev.calls).toBe(0)
+    expect(jev.failures).toBe(1)
   })
 })

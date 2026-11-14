@@ -33,6 +33,7 @@ export interface RecallConfig {
 export interface JudgeConfig {
   readonly model: { readonly providerID: string; readonly id: string }
   readonly maxRunTokens: number
+  readonly timeoutMs: number
   readonly find: FindSettings
   readonly scan: ScanSettings
   readonly focus: FocusSettings
@@ -135,6 +136,7 @@ export const DEFAULT_FOCUS_SETTINGS: FocusSettings = {
 }
 
 export const DEFAULT_MAX_RUN_TOKENS = 1_500_000
+export const DEFAULT_JUDGE_TIMEOUT_MS = 15_000
 
 interface RawConfig {
   readonly database?: {
@@ -150,6 +152,7 @@ interface RawConfig {
   readonly judge?: {
     readonly model?: string
     readonly maxRunTokens?: number
+    readonly timeoutMs?: number
     readonly find?: Partial<FindSettings>
     readonly scan?: Partial<ScanSettings>
     readonly focus?: Partial<FocusSettings>
@@ -264,6 +267,7 @@ export function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeCo
     judge: {
       model: { providerID: model.slice(0, separator), id: model.slice(separator + 1) },
       maxRunTokens: raw?.maxRunTokens ?? DEFAULT_MAX_RUN_TOKENS,
+      timeoutMs: raw?.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS,
       find: { ...DEFAULT_FIND_SETTINGS, ...raw?.find },
       scan: { ...DEFAULT_SCAN_SETTINGS, ...raw?.scan },
       focus: { ...DEFAULT_FOCUS_SETTINGS, ...raw?.focus },

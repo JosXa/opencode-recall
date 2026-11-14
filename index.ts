@@ -92,7 +92,7 @@ export const RecallPlugin = Plugin.define({
         context.model.list(),
         configuredJudge === undefined
           ? Promise.resolve(undefined)
-          : context.model.list({ types: ['decision'] }),
+          : context.model.list({ types: ['decision'] }).catch(() => undefined),
       ])
       availableModels.clear()
       for (const model of models.data) {
@@ -106,6 +106,7 @@ export const RecallPlugin = Plugin.define({
     const usableJudge = () =>
       configuredJudge !== undefined &&
       decisionModels.has(`${configuredJudge.model.providerID}/${configuredJudge.model.id}`) &&
+      typeof context.experimental?.generate?.decisions === 'function' &&
       Date.now() >= judgeRetryAt
         ? configuredJudge
         : undefined

@@ -88,6 +88,9 @@ interface ScanOutcome {
 }
 
 const RRF_OFFSET = 60
+export const BUDGET_FALLBACK_NOTICE =
+  'below are history_search results for the queries; read them with history_read without criteria.'
+
 export const STANDARD_FALLBACK_NOTICE =
   'recall switched to the standard history tools (history_search, history_read, session_index); below are history_search results for the queries.'
 const FIRST_PROMPT_LINE_CHARS = 240
@@ -114,7 +117,7 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
   const criteria = unique(request.criteria)
   if (criteria.length === 0) return 'history_find needs at least one criterion.'
   const settings = deps.judge.find
-  const jev = new Jev(deps.judge.model, deps.decide, deps.run.budget, now)
+  const jev = new Jev(deps.judge.model, deps.decide, deps.run.budget, now, deps.judge.timeoutMs)
   const timings: Record<string, number> = {}
   const timed = async <T>(stage: string, work: () => Promise<T>): Promise<T> => {
     const begun = now()
@@ -163,6 +166,11 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
       jev.unavailableNotice(STANDARD_FALLBACK_NOTICE),
       await deps.standard(),
     ].join('\n')
+  }
+  if (verdicts.length > 0 && jev.budgetSpent) {
+    return [jev.footer(), jev.budgetNotice(BUDGET_FALLBACK_NOTICE), await deps.standard()].join(
+      '\n',
+    )
   }
   const strongest = Math.max(0, ...verdicts.map((verdict) => verdict.match ?? 0))
   if (!scanWanted && strongest < settings.weakMatch) {

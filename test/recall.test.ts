@@ -1,13 +1,16 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, onTestFinished, test, vi } from 'vitest'
 
 import { RecallPlugin } from '../index.js'
 import {
+  HISTORY_FIND_COMMAND,
   HISTORY_READ_COMMAND,
   HISTORY_SEARCH_COMMAND,
   RECALL_AGENT_DESCRIPTION,
@@ -325,6 +328,201 @@ describe('plugin recall subagent', () => {
       }
     })
   }, 15_000)
+})
+
+describe('recall without a working decision model', () => {
+  const withJudgeConfig = async (
+    run: (paths: { root: string; configDir: string }) => Promise<void>,
+    config = JUDGE_CONFIG,
+  ) =>
+    withRecallEnvAsync(async (paths) => {
+      writeFileSync(getConfigFilePath(), config)
+      await run(paths)
+    })
+
+  test.each<[string, Parameters<typeof pluginHarness>[0]]>([
+    ['no decision model is registered', { decisionModels: [] }],
+    ['the decision model is disabled', { decisionModels: [{ ...JEV, enabled: false }] }],
+    [
+      'a different decision model is registered',
+      { decisionModels: [{ ...JEV, id: 'jev-preview', modelID: 'jev-preview' }] },
+    ],
+    ['the host has no decision API', { decisionModels: [JEV], decide: 'missing' }],
+    [
+      'listing decision models fails',
+      {
+        decisionModels: [JEV],
+        decisionListing: () => Promise.reject(new Error('unknown model type: decision')),
+      },
+    ],
+  ])('offers exactly the standard surface when %s', async (_, options) => {
+    await withJudgeConfig(async () => {
+      const harness = pluginHarness({ preseedCommands: false, ...(options as object) })
+      await RecallPlugin.setup(harness.context)
+
+      expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+      expect(sortedKeys(harness.commands)).toEqual([...STANDARD_TOOLS])
+      expect(harness.agents.get(RECALL_AGENT_NAME)?.system).not.toContain('history_find')
+      expect(harness.agents.get(RECALL_AGENT_NAME)?.permissions).not.toContainEqual(
+        expect.objectContaining({ action: 'history_find' }),
+      )
+    })
+  })
+
+  test.each([
+    ['a model without a provider', JSON.stringify({ judge: { model: 'jev-latest' } })],
+    ['an empty model', JSON.stringify({ judge: { model: '' } })],
+    ['no model', JSON.stringify({ judge: { maxRunTokens: 100_000 } })],
+  ])('treats a judge with %s as unset', async (_, config) => {
+    await withJudgeConfig(async () => {
+      const harness = pluginHarness({ preseedCommands: false, decisionModels: [JEV] })
+      await RecallPlugin.setup(harness.context)
+
+      expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+    }, config)
+  })
+
+  test('matches the surface of a plugin without any judge setting', async () => {
+    await withRecallEnvAsync(async () => {
+      const plain = pluginHarness({ preseedCommands: false })
+      await RecallPlugin.setup(plain.context)
+      writeFileSync(getConfigFilePath(), JUDGE_CONFIG)
+      const fallen = pluginHarness({ preseedCommands: false, decisionModels: [] })
+      await RecallPlugin.setup(fallen.context)
+
+      expect(fallen.agents.get(RECALL_AGENT_NAME)).toEqual(plain.agents.get(RECALL_AGENT_NAME))
+      for (const name of STANDARD_TOOLS) {
+        expect(JSON.stringify(fallen.tools.get(name))).toBe(JSON.stringify(plain.tools.get(name)))
+      }
+    })
+  })
+
+  test('recovers the judged surface when decision listing starts working at a later prompt', async () => {
+    await withJudgeConfig(async () => {
+      let listingWorks = false
+      const harness = pluginHarness({
+        preseedCommands: false,
+        decisionModels: [JEV],
+        decisionListing: async () => {
+          if (!listingWorks) throw new Error('decision listing unavailable')
+        },
+      })
+      await RecallPlugin.setup(harness.context)
+      expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+
+      listingWorks = true
+      await harness.beforePrompt?.()
+      expect(sortedKeys(harness.tools)).toEqual([...JUDGED_TOOLS])
+    })
+  })
+
+  test('a decision model that disappears for good keeps recall on the standard tools', async () => {
+    await withJudgeConfig(async () => {
+      const decisionModels = [JEV]
+      const harness = pluginHarness({ preseedCommands: false, decisionModels })
+      await RecallPlugin.setup(harness.context)
+      expect(sortedKeys(harness.tools)).toEqual([...JUDGED_TOOLS])
+
+      decisionModels.length = 0
+      for (const _ of [1, 2, 3]) await harness.beforePrompt?.()
+
+      expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+      expect(sortedKeys(harness.commands)).toEqual([...STANDARD_TOOLS])
+      expect(harness.decisions).toHaveLength(0)
+    })
+  })
+
+  test('history_find and history_read keep working through the standard tools when the judge fails mid-run', async () => {
+    await withJudgeConfig(async ({ configDir, root }) => {
+      const historyPath = `/tmp/opencode-recall-judge-history-${crypto.randomUUID()}.db`
+      const sidecarPath = `/tmp/opencode-recall-judge-sidecar-${crypto.randomUUID()}.db`
+      const db = new Database(historyPath)
+      let credits = false
+      const ollamaUrl = await fakeOllama()
+      try {
+        db.exec(`
+          create table session (id text primary key, title text, directory text, time_updated integer);
+          create table message (id text primary key, session_id text, data text, time_created integer, time_updated integer);
+          create table part (id text primary key, message_id text, session_id text, data text, time_updated integer);
+        `)
+        insertTextPart(db, 'ses_worker', 'Worker DB', 'msg_worker', 'part_worker', 1)
+        writeFileSync(
+          `${configDir}/recall.jsonc`,
+          JSON.stringify({
+            database: { path: historyPath, indexPath: sidecarPath },
+            embeddings: { ollamaUrl, model: 'worker-model' },
+            judge: { model: 'typesafe-ai/jev-latest', timeoutMs: 1_000 },
+          }),
+        )
+        const harness = pluginHarness({
+          directory: root,
+          decisionModels: [JEV],
+          decide: (request) =>
+            credits
+              ? answerEveryQuestion(0.9)(request)
+              : Promise.reject(new Error('HTTP 402: no available credits')),
+        })
+        await RecallPlugin.setup(harness.context)
+        await harness.startTurn()
+        const staleFind = harness.tools.get(HISTORY_FIND_COMMAND)
+        expect(staleFind).toBeDefined()
+
+        const found = await staleFind?.execute(
+          { queries: ['invoices'], criteria: ['the session mentions invoices'] },
+          toolContext(RECALL_AGENT_NAME),
+        )
+        const foundText = String(found?.content)
+        expect(foundText).toContain('judge unavailable')
+        expect(foundText).toContain('HTTP 402')
+        expect(foundText).toContain('"sid": "ses_worker"')
+
+        await harness.startTurn()
+        expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+        expect(harness.agents.get(RECALL_AGENT_NAME)?.system).not.toContain('history_find')
+
+        const callsAfterOutage = harness.decisions.length
+        const again = await staleFind?.execute(
+          { queries: ['invoices'], criteria: ['the session mentions invoices'] },
+          toolContext(RECALL_AGENT_NAME),
+        )
+        expect(String(again?.content)).toMatch(/^judge unavailable: .*standard history tools/)
+        expect(String(again?.content)).toContain('"sid": "ses_worker"')
+        expect(harness.decisions).toHaveLength(callsAfterOutage)
+
+        const search = await harness.tools.get(HISTORY_SEARCH_COMMAND)?.execute(
+          { q: 'invoices', includeCurrentSession: true, n: 5 },
+          toolContext(RECALL_AGENT_NAME),
+        )
+        expect(search?.content).toContain('"sid": "ses_worker"')
+        const read = await harness.tools.get(HISTORY_READ_COMMAND)?.execute(
+          { cursor: 'ses_worker', n: 5, criteria: ['invoices'] },
+          toolContext(RECALL_AGENT_NAME),
+        )
+        expect(read?.content).toContain('<hist sid="ses_worker"')
+        expect(harness.decisions).toHaveLength(callsAfterOutage)
+
+        credits = true
+        await harness.beforePrompt?.()
+        expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+
+        const later = Date.now() + 11 * 60_000
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(later)
+        onTestFinished(() => clock.mockRestore())
+        await harness.startTurn()
+        expect(sortedKeys(harness.tools)).toEqual([...JUDGED_TOOLS])
+        const recovered = await harness.tools.get(HISTORY_FIND_COMMAND)?.execute(
+          { queries: ['invoices'], criteria: ['the session mentions invoices'] },
+          toolContext(RECALL_AGENT_NAME),
+        )
+        expect(String(recovered?.content)).toMatch(/^\[jev calls=[1-9]/)
+        expect(String(recovered?.content)).not.toContain('judge unavailable')
+      } finally {
+        db.close()
+        removeSqliteFiles(historyPath)
+        removeSqliteFiles(sidecarPath)
+      }
+    })
+  }, 30_000)
 })
 
 describe('config file loading', () => {
@@ -1745,6 +1943,26 @@ const JEV: TestModel = {
   enabled: true,
 }
 const STANDARD_TOOLS = ['history_read', 'history_search', 'session_index', 'session_save'] as const
+const JUDGED_TOOLS = ['history_find', 'history_read', 'session_save'] as const
+const JUDGE_CONFIG = JSON.stringify({ judge: { model: 'typesafe-ai/jev-latest', timeoutMs: 1_000 } })
+
+interface TestDecisionRequest {
+  questions: { name: string }[]
+}
+type TestDecide = (request: TestDecisionRequest) => Promise<unknown>
+
+function answerEveryQuestion(probability: number): TestDecide {
+  return async (request) => ({
+    answers: request.questions.map((question) => ({
+      type: 'predicate',
+      name: question.name,
+      probability,
+    })),
+    tokens: { input: 100 },
+  })
+}
+
+const sortedKeys = (map: Map<string, unknown>) => [...map.keys()].sort()
 
 function pluginHarness(
   input:
@@ -1755,6 +1973,8 @@ function pluginHarness(
         preseedRecallAgent?: boolean
         availableModels?: TestModel[]
         decisionModels?: TestModel[]
+        decide?: TestDecide | 'missing'
+        decisionListing?: () => Promise<void>
       } = {},
 ) {
   const options = typeof input === 'string' ? { directory: input } : input
@@ -1763,6 +1983,8 @@ function pluginHarness(
     { providerID: 'example', id: 'recall-mini', modelID: 'recall-mini', enabled: true },
   ]
   const decisionModels = options.decisionModels ?? []
+  const decide = options.decide ?? answerEveryQuestion(0.9)
+  const decisions: unknown[] = []
   const agents = new Map<string, TestAgent>([
     [
       'build',
@@ -1790,6 +2012,7 @@ function pluginHarness(
     | ((call: { agent: string; tool: string }) => Promise<void> | void)
     | undefined
   let beforePrompt: (() => Promise<void>) | undefined
+  let beforeContext: ((request: { agent: string; sessionID: string }) => void) | undefined
   const context = {
     options: {},
     app: { name: 'opencode', version: 'test', channel: 'test' },
@@ -1836,9 +2059,25 @@ function pluginHarness(
     },
     model: {
       async list(input?: { types?: string[] }) {
-        return { data: input?.types?.includes('decision') ? decisionModels : availableModels }
+        if (input?.types?.includes('decision')) {
+          await options.decisionListing?.()
+          return { data: decisionModels }
+        }
+        return { data: availableModels }
       },
     },
+    ...(decide === 'missing'
+      ? {}
+      : {
+          experimental: {
+            generate: {
+              decisions(request: TestDecisionRequest) {
+                decisions.push(request)
+                return decide(request)
+              },
+            },
+          },
+        }),
     tool: {
       async hook(
         name: string,
@@ -1863,8 +2102,11 @@ function pluginHarness(
       },
     },
     session: {
-      async hook(name: string, callback: () => Promise<void>) {
-        if (name === 'prompt') beforePrompt = callback
+      async hook(name: string, callback: (request?: never) => Promise<void> | void) {
+        if (name === 'prompt') beforePrompt = callback as () => Promise<void>
+        if (name === 'context') {
+          beforeContext = callback as unknown as (request: { agent: string; sessionID: string }) => void
+        }
         return { dispose() {} }
       },
       async prompt(input: unknown) {
@@ -1879,10 +2121,15 @@ function pluginHarness(
   return {
     agents,
     commands,
+    decisions,
     prompts,
     tools,
     get beforePrompt() {
       return beforePrompt
+    },
+    async startTurn() {
+      await beforePrompt?.()
+      beforeContext?.({ agent: RECALL_AGENT_NAME, sessionID: 'ses_current' })
     },
     get beforeToolExecute() {
       return beforeToolExecute
@@ -1980,4 +2227,28 @@ function restoreEnv(previous: Map<(typeof CONFIG_ENV_KEYS)[number], string | und
 
     process.env[key] = value
   }
+}
+
+async function fakeOllama(): Promise<string> {
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(chunk))
+    request.on('end', () => {
+      response.setHeader('content-type', 'application/json')
+      if (request.url === '/api/tags') {
+        response.end(JSON.stringify({ models: [{ name: 'worker-model:latest', model: 'worker-model:latest' }] }))
+        return
+      }
+      if (request.url === '/api/embed') {
+        const body = JSON.parse(Buffer.concat(chunks).toString() || '{}') as { input?: unknown }
+        const inputs = Array.isArray(body.input) ? body.input : [body.input]
+        response.end(JSON.stringify({ embeddings: inputs.map(() => [1, 0, 0, 0]) }))
+        return
+      }
+      response.end(JSON.stringify({ version: '0.0.0' }))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  onTestFinished(() => new Promise<void>((resolve) => server.close(() => resolve())))
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 }

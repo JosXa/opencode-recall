@@ -36,7 +36,13 @@ export async function focusedRead(
   limit: number,
   deps: FocusedReadDependencies,
 ): Promise<string> {
-  const jev = new Jev(deps.judge.model, deps.decide, deps.run.budget, deps.now ?? Date.now)
+  const jev = new Jev(
+    deps.judge.model,
+    deps.decide,
+    deps.run.budget,
+    deps.now ?? Date.now,
+    deps.judge.timeoutMs,
+  )
   const transcripts = await deps.transcripts([cursor])
   const results = await focusTranscripts(
     transcripts,
@@ -49,13 +55,14 @@ export async function focusedRead(
   )
   if (
     results.length > 0 &&
-    jev.failures > 0 &&
+    (jev.failures > 0 || jev.budgetSpent) &&
     results.every((result) => result.scored.length === 0)
   ) {
-    deps.onJudgeDown()
+    const fallback = `showing a plain window around ${cursor} instead of judged segments.`
+    if (jev.failures > 0) deps.onJudgeDown()
     return [
       jev.footer(),
-      jev.unavailableNotice(`showing a plain window around ${cursor} instead of judged segments.`),
+      jev.failures > 0 ? jev.unavailableNotice(fallback) : jev.budgetNotice(fallback),
       await deps.read(cursor),
     ].join('\n')
   }
