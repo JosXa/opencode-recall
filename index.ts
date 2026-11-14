@@ -5,7 +5,7 @@ import { Plugin } from '@opencode/plugin'
 import { Plugin as EffectPlugin } from '@opencode/plugin/effect'
 import { fromPromise } from '@opencode/plugin/promise/adapter'
 import { Effect } from 'effect'
-import { registerAutocomplete } from './src/autocomplete.js'
+import { registerAutocomplete, registerDisabledAutocomplete } from './src/autocomplete.js'
 import { autocompleteGeneration } from './src/autocomplete-generation.js'
 
 import {
@@ -112,7 +112,9 @@ export const RecallPlugin = Plugin.define({
     await refreshModels()
     // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket access for the host option index signature.
     const enabled = context.options['autocomplete'] === true
-    const stopAutocomplete = enabled ? await registerAutocomplete(context, WORKER_DIR) : undefined
+    const stopAutocomplete = enabled
+      ? await registerAutocomplete(context, WORKER_DIR)
+      : await registerDisabledAutocomplete(context)
     const workers = new SessionWorkerAbortRegistry()
     const runs = new RecallRuns(configuredJudge?.maxRunTokens ?? 0)
     const eventSubscription = new AbortController()
@@ -539,7 +541,7 @@ export const RecallPlugin = Plugin.define({
     await registerSurface()
 
     return async () => {
-      await stopAutocomplete?.()
+      await stopAutocomplete()
       eventSubscription.abort()
       workers.dispose()
       await admissionRefresh

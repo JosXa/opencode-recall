@@ -66,32 +66,28 @@ function eligible(editor: TextareaRenderable | undefined, text: string, next: bo
 export default Plugin.define({
   id: 'josxa.recall.autocomplete.tui',
   setup(context) {
-    // Opt in explicitly: loading Recall for history must not start model requests.
-    // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket access for the host option index signature.
-    if (context.options['autocomplete'] !== true) return
     const rpc = context.client.rpc(Autocomplete)
     let disposed = false
     let stopPrompt: (() => void) | undefined
-    // Let the host finish mounting before a failed RPC reports its toast.
-    // Register generators only after the connected server accepts preparation.
     async function start(attempt: number): Promise<void> {
-      const failure = await rpc.prepare({}).then(
-        () => undefined,
+      const outcome = await rpc.prepare({}).then(
+        (result) => ({ enabled: (result as { enabled?: unknown }).enabled === true }),
         (error: unknown) => ({ error }),
       )
       if (disposed) return
-      if (failure === undefined) {
-        stopPrompt = mountAutocomplete(context)
+      if (!('error' in outcome)) {
+        if (outcome.enabled) stopPrompt = mountAutocomplete(context)
         return
       }
-      if (isRpcUnavailable(failure.error) && attempt < PREPARE_ATTEMPTS) {
+      if (isRpcUnavailable(outcome.error)) {
+        if (attempt >= PREPARE_ATTEMPTS) return
         await new Promise((resolve) => setTimeout(resolve, PREPARE_RETRY_MS))
         if (!disposed) await start(attempt + 1)
         return
       }
       context.ui.toast.show({
         title: 'Recall autocomplete',
-        message: autocompleteErrorMessage(failure.error),
+        message: autocompleteErrorMessage(outcome.error),
         variant: 'error',
       })
     }

@@ -65,7 +65,12 @@ export const Autocomplete = Rpc.define({
   methods: {
     prepare: {
       input: { type: 'object', additionalProperties: false },
-      output: { type: 'object', additionalProperties: false },
+      output: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { enabled: { type: 'boolean' } },
+        required: ['enabled'],
+      },
     },
     suggest: { input, output },
     refine: {

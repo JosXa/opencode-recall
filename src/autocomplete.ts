@@ -137,6 +137,20 @@ export function normalizeSuggestion(raw: string, input: SuggestInput): string {
   return input.text + (input.text.endsWith(' ') ? suffix.trimStart() : suffix)
 }
 
+export async function registerDisabledAutocomplete(
+  context: Plugin.Context,
+): Promise<() => Promise<void>> {
+  const disabled = async (): Promise<SuggestOutput> => {
+    throw new Error('Recall autocomplete is disabled on the connected server.')
+  }
+  const registration = await context.rpc.register(Autocomplete, {
+    prepare: async () => ({ enabled: false }),
+    suggest: disabled,
+    refine: disabled,
+  })
+  return () => registration.dispose()
+}
+
 export async function registerAutocomplete(
   context: Plugin.Context,
   workerDir: string,
@@ -257,7 +271,7 @@ export async function registerAutocomplete(
   const registration = await context.rpc.register(Autocomplete, {
     prepare: async () => {
       void prepare()
-      return {}
+      return { enabled: true }
     },
     suggest: async (value, call): Promise<SuggestOutput> => {
       const input = value as SuggestInput

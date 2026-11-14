@@ -110,8 +110,8 @@ Its display delay is separate from autocomplete timing.
 Edits to trailing spaces keep the dot visible and preserve its display deadline.
 Cached suggestions stay visible while the background request runs.
 
-Enable autocomplete in both the server plugin registration (`opencode.json`) and
-the TUI registration (`cli.json`):
+Autocomplete is off by default. Turn it on in the server plugin registration
+(`opencode.json`):
 
 ```jsonc
 {
@@ -125,8 +125,11 @@ the TUI registration (`cli.json`):
 }
 ```
 
-Restart the server and TUI after changing these settings. Omit `autocomplete` or
-set it to `false` to use Recall without automatic generation.
+Also register the same package in the TUI configuration (`cli.json`) so the
+prompt can show suggestions. The TUI follows the connected server: while the
+server leaves autocomplete off, or does not load Recall at all, the TUI shows
+nothing and starts no model requests. Restart the server after changing these
+settings.
 
 The preview shows up to three upcoming sentences from the cached continuation.
 **Right** accepts one sentence at a time,

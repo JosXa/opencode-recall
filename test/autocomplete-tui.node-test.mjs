@@ -13,13 +13,11 @@ async function advance(t, retries) {
   await settle()
 }
 
-test('built CLI reports an RPC that stays unavailable for the whole server start window once', async (t) => {
+test('built CLI stays silent when the server never registers Recall autocomplete', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const toasts = []
-  let slots = 0
   let attempts = 0
   const result = plugin.setup({
-    options: { autocomplete: true },
+    options: {},
     client: {
       rpc: () => ({
         prepare: async () => {
@@ -28,32 +26,54 @@ test('built CLI reports an RPC that stays unavailable for the whole server start
         },
       }),
     },
-    ui: { toast: { show: (value) => toasts.push(value) }, slot: () => { slots++; return () => {} } },
+    ui: {
+      toast: { show: () => assert.fail('A server without Recall autocomplete must not produce a toast') },
+      slot: () => assert.fail('A server without Recall autocomplete must not install the prompt slot'),
+    },
   })
-  await advance(t, 5)
-  assert.equal(toasts.length, 0)
-  await advance(t, 40)
+  await advance(t, 45)
   assert.equal(typeof result, 'function')
   assert.equal(attempts, 30)
-  assert.equal(slots, 0)
-  assert.equal(toasts.length, 1)
-  assert.match(toasts[0].message, /not enabled on the connected server/)
-  assert.doesNotMatch(toasts[0].message, /\[object Object\]/)
   result()
 })
+
+for (const options of [{}, { autocomplete: true }, { autocomplete: false }]) {
+  test(`built CLI stays silent when the server disables autocomplete (TUI options ${JSON.stringify(options)})`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    let attempts = 0
+    const result = plugin.setup({
+      options,
+      client: {
+        rpc: () => ({
+          prepare: async () => {
+            attempts++
+            return { enabled: false }
+          },
+        }),
+      },
+      ui: {
+        toast: { show: () => assert.fail('Disabled autocomplete must not produce a toast') },
+        slot: () => assert.fail('Disabled autocomplete must not install the prompt slot'),
+      },
+    })
+    await advance(t, 45)
+    assert.equal(attempts, 1)
+    result()
+  })
+}
 
 test('built CLI installs autocomplete once a restarting server registers the RPC', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let attempts = 0
   const slots = []
   const result = plugin.setup({
-    options: { autocomplete: true },
+    options: {},
     client: {
       rpc: () => ({
         prepare: async () => {
           attempts++
           if (attempts < 4) throw UNAVAILABLE
-          return {}
+          return { enabled: true }
         },
       }),
     },
@@ -73,7 +93,7 @@ test('built CLI reports other preparation failures without retrying', async (t) 
   const toasts = []
   let attempts = 0
   const result = plugin.setup({
-    options: { autocomplete: true },
+    options: {},
     client: {
       rpc: () => ({
         prepare: async () => {
@@ -94,7 +114,7 @@ test('disposing the built CLI while it waits for a restarting server stops the r
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let attempts = 0
   const dispose = plugin.setup({
-    options: { autocomplete: true },
+    options: {},
     client: {
       rpc: () => ({
         prepare: async () => {
@@ -119,7 +139,7 @@ test('built CLI waits for server preparation before installing its owned autocom
   const slots = []
   const cleanup = () => {}
   const result = plugin.setup({
-    options: { autocomplete: true },
+    options: {},
     client: { rpc: () => ({ prepare: () => preparation.promise }) },
     ui: {
       toast: { show: () => assert.fail('Successful preparation must not report an error') },
@@ -127,7 +147,7 @@ test('built CLI waits for server preparation before installing its owned autocom
     },
   })
   assert.deepEqual(slots, [])
-  preparation.resolve({})
+  preparation.resolve({ enabled: true })
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(slots, ['prompt.footer'])
   assert.equal(typeof result, 'function')
@@ -138,7 +158,7 @@ test('disposing the built CLI while preparation is pending prevents late install
   for (const fail of [false, true]) {
     const preparation = Promise.withResolvers()
     const dispose = plugin.setup({
-      options: { autocomplete: true },
+      options: {},
       client: { rpc: () => ({ prepare: () => preparation.promise }) },
       ui: {
         toast: { show: () => assert.fail('Disposed plugins must not show toasts') },
@@ -147,7 +167,7 @@ test('disposing the built CLI while preparation is pending prevents late install
     })
     dispose()
     if (fail) preparation.reject({ type: 'rpc.unavailable', message: 'Server unavailable' })
-    else preparation.resolve({})
+    else preparation.resolve({ enabled: true })
     await new Promise((resolve) => setImmediate(resolve))
   }
 })
