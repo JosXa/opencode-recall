@@ -59,6 +59,38 @@
         }
       },
       "additionalProperties": false
+    },
+    "judge": {
+      "type": "object",
+      "description": "Decision model that judges recall evidence. Enables the history_find tool when set.",
+      "required": ["model"],
+      "properties": {
+        "model": {
+          "type": "string",
+          "pattern": "^[^/]+/.+$",
+          "examples": ["typesafe-ai/jev-latest", "opencode/jev-1.13-free"],
+          "description": "Decision model as providerID/modelID."
+        },
+        "find": {
+          "type": "object",
+          "description": "history_find pipeline knobs.",
+          "properties": {
+            "queryHits": { "type": "integer", "minimum": 1, "maximum": 100, "default": 40, "description": "Search hits fetched per query before session fusion." },
+            "candidateSessions": { "type": "integer", "minimum": 1, "maximum": 64, "default": 24, "description": "Fused sessions sent to the judge." },
+            "passagesPerSession": { "type": "integer", "minimum": 1, "maximum": 24, "default": 8, "description": "Passages per session shown to the judge." },
+            "passageChars": { "type": "integer", "minimum": 120, "maximum": 4000, "default": 600, "description": "Excerpt length per passage." },
+            "maxSessions": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5, "description": "Matching sessions returned in the evidence pack." },
+            "maxPassagesPerSession": { "type": "integer", "minimum": 1, "maximum": 12, "default": 4, "description": "Passages returned per matching session." },
+            "sessionThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Minimum probability that a session satisfies every criterion." },
+            "passageThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Minimum probability that a passage is evidence." },
+            "outputChars": { "type": "integer", "minimum": 1000, "maximum": 40000, "default": 9000, "description": "Evidence pack size budget in characters." },
+            "concurrency": { "type": "integer", "minimum": 1, "maximum": 64, "default": 24, "description": "Parallel judge requests." },
+            "searchShards": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2, "description": "Parallel search worker processes; history sources are split across them." }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

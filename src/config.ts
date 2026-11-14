@@ -27,6 +27,40 @@ export interface RecallConfig {
     readonly ollamaUrl: string
     readonly model: string
   }
+  readonly judge?: JudgeConfig | undefined
+}
+
+export interface JudgeConfig {
+  readonly model: { readonly providerID: string; readonly id: string }
+  readonly find: FindSettings
+}
+
+export interface FindSettings {
+  readonly queryHits: number
+  readonly candidateSessions: number
+  readonly passagesPerSession: number
+  readonly passageChars: number
+  readonly maxSessions: number
+  readonly maxPassagesPerSession: number
+  readonly sessionThreshold: number
+  readonly passageThreshold: number
+  readonly outputChars: number
+  readonly concurrency: number
+  readonly searchShards: number
+}
+
+export const DEFAULT_FIND_SETTINGS: FindSettings = {
+  queryHits: 40,
+  candidateSessions: 24,
+  passagesPerSession: 8,
+  passageChars: 600,
+  maxSessions: 5,
+  maxPassagesPerSession: 4,
+  sessionThreshold: 0.5,
+  passageThreshold: 0.5,
+  outputChars: 9_000,
+  concurrency: 24,
+  searchShards: 2,
 }
 
 interface RawConfig {
@@ -39,6 +73,10 @@ interface RawConfig {
   readonly embeddings?: {
     readonly ollamaUrl?: string
     readonly model?: string
+  }
+  readonly judge?: {
+    readonly model?: string
+    readonly find?: Partial<FindSettings>
   }
 }
 
@@ -134,6 +172,23 @@ function mergeConfig(base: RecallConfig, raw: RawConfig): RecallConfig {
       ollamaUrl: nonEmptyString(raw.embeddings?.ollamaUrl) ?? base.embeddings.ollamaUrl,
       model: nonEmptyString(raw.embeddings?.model) ?? base.embeddings.model,
     },
+    ...judgeConfig(raw.judge),
+  }
+}
+
+export function loadJudgeConfig(): JudgeConfig | undefined {
+  return judgeConfig(readConfigFile().judge).judge
+}
+
+function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeConfig } {
+  const model = nonEmptyString(raw?.model)
+  const separator = model?.indexOf('/') ?? -1
+  if (model === undefined || separator <= 0) return {}
+  return {
+    judge: {
+      model: { providerID: model.slice(0, separator), id: model.slice(separator + 1) },
+      find: { ...DEFAULT_FIND_SETTINGS, ...raw?.find },
+    },
   }
 }
 
@@ -146,6 +201,7 @@ function applyEnvOverrides(config: RecallConfig): RecallConfig {
   } = process.env
   const sourcePath = expandPath(OPENCODE_DB_PATH)
   return {
+    ...config,
     database: {
       ...config.database,
       path: sourcePath ?? config.database.path,
@@ -287,5 +343,8 @@ const DEFAULT_CONFIG_CONTENT = `{
     // Default: all-minilm
     // "model": "all-minilm"
   }
+
+  // Decision model for the one-call history_find tool. Unset keeps it disabled.
+  // "judge": { "model": "typesafe-ai/jev-latest" }
 }
 `

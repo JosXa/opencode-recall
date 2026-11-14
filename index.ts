@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { Plugin } from '@opencode/plugin'
 
 import {
+  HISTORY_FIND_COMMAND,
   HISTORY_READ_COMMAND,
   HISTORY_SEARCH_COMMAND,
   RECALL_AGENT_DESCRIPTION,
@@ -11,11 +12,14 @@ import {
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
 } from './src/commands.js'
+import { loadJudgeConfig } from './src/config.js'
+import { type FindSearchResult, findEvidence } from './src/find.js'
 import {
   executeNodeWorker,
   forwardSessionInterruptions,
   SessionWorkerAbortRegistry,
 } from './src/node-worker-client.js'
+import type { SessionDigest } from './src/passages.js'
 import {
   DEFAULT_READ_LIMIT,
   DEFAULT_SEARCH_LIMIT,
@@ -30,16 +34,15 @@ import type {
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
 const WORKER_DIR = join(PACKAGE_DIR, 'src')
-const RECALL_AGENT_PROMPT_PATHS = [
-  join(PACKAGE_DIR, 'prompts/recall-agent-prompt.txt'),
-  join(PACKAGE_DIR, '../prompts/recall-agent-prompt.txt'),
-] as const
+const RECALL_AGENT_PROMPT_FILE = 'recall-agent-prompt.txt'
+const RECALL_AGENT_FIND_PROMPT_FILE = 'recall-agent-find-prompt.txt'
 const TOOL_NAMES = [
   HISTORY_SEARCH_COMMAND,
   HISTORY_READ_COMMAND,
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
 ] as const
+const RECALL_TOOL_NAMES = [...TOOL_NAMES, HISTORY_FIND_COMMAND] as const
 const OBJECT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -48,7 +51,11 @@ const OBJECT_SCHEMA = {
 export const RecallPlugin = Plugin.define({
   id: 'josxa.opencode-recall',
   async setup(context) {
-    const recallAgentPrompt = await loadRecallAgentPrompt()
+    const judge = loadJudgeConfig()
+    const enabledTools = judge === undefined ? TOOL_NAMES : RECALL_TOOL_NAMES
+    const recallAgentPrompt = await loadRecallAgentPrompt(
+      judge === undefined ? RECALL_AGENT_PROMPT_FILE : RECALL_AGENT_FIND_PROMPT_FILE,
+    )
     const availableModels = new Set<string>()
     const refreshModels = async () => {
       const models = (await context.model.list()).data
@@ -108,7 +115,7 @@ export const RecallPlugin = Plugin.define({
         // Deny last so broader agent rules cannot expose history tools outside @recall.
         agent.permissions = [
           ...agent.permissions.filter((rule) => !isRecallTool(rule.action)),
-          ...toolPermissions('deny'),
+          ...toolPermissions(enabledTools, 'deny'),
         ]
       }
       agents.update(RECALL_AGENT_NAME, (agent) => {
@@ -125,7 +132,7 @@ export const RecallPlugin = Plugin.define({
         agent.permissions = [
           { action: '*', resource: '*', effect: 'deny' },
           { action: 'execute', resource: '*', effect: 'allow' },
-          ...toolPermissions('allow'),
+          ...toolPermissions(enabledTools, 'allow'),
         ]
       })
     }
@@ -298,6 +305,106 @@ export const RecallPlugin = Plugin.define({
           return { content }
         },
       })
+
+      if (judge === undefined) return
+      tools.add({
+        name: HISTORY_FIND_COMMAND,
+        description:
+          'Find judged evidence in OpenCode history in one call: searches every query, fuses hits by session, and a decision model checks each session and passage against the criteria.',
+        input: {
+          ...OBJECT_SCHEMA,
+          properties: {
+            queries: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                '3-8 search queries: distinctive terms, synonyms, likely file/tool/project names, German and English variants.',
+            },
+            criteria: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                '1-4 atomic yes/no conditions a matching session must satisfy, e.g. "The session changes the Traefik config of josxa.dev".',
+            },
+            directory: { type: 'string', description: 'Exact session directory.' },
+            after: { type: 'string', description: 'Created after ISO date/time.' },
+            before: { type: 'string', description: 'Created before ISO date/time.' },
+          },
+          required: ['queries', 'criteria'],
+        },
+        options: directToolOptions(HISTORY_FIND_COMMAND),
+        async execute(input, toolContext) {
+          const request = input as {
+            readonly queries: readonly string[]
+            readonly criteria: readonly string[]
+            readonly directory?: string
+            readonly after?: string
+            readonly before?: string
+          }
+          const content = await workers.run(toolContext.sessionID, (signal) => {
+            const worker = (payload: Parameters<typeof executeNodeWorker>[1]) =>
+              executeNodeWorker(WORKER_DIR, payload, signal)
+            return findEvidence(request, {
+              model: judge.model,
+              settings: judge.find,
+              search: async (queries) => {
+                const shards = await Promise.all(
+                  Array.from({ length: judge.find.searchShards }, async (_, index) => {
+                    const response = await worker({
+                      kind: 'search',
+                      args: {
+                        queries,
+                        shard: { index, count: judge.find.searchShards },
+                        n: judge.find.queryHits,
+                        maxSearchLimit: judge.find.queryHits,
+                        excludeSubagents: true,
+                        directory: request.directory,
+                        after: request.after,
+                        before: request.before,
+                        sync: false,
+                        format: 'json',
+                      } as HistorySearchWorkerArgs,
+                      context: { sessionID: toolContext.sessionID },
+                    })
+                    return JSON.parse(response) as FindSearchResult
+                  }),
+                )
+                return {
+                  lists: shards.flatMap((shard) => shard.lists),
+                  notice: shards.find((shard) => shard.notice !== undefined)?.notice,
+                }
+              },
+              digest: async (sessions, queries) =>
+                JSON.parse(
+                  await worker({
+                    kind: 'session-digest',
+                    args: {
+                      sessions,
+                      queries,
+                      passagesPerSession: judge.find.passagesPerSession,
+                      passageChars: judge.find.passageChars,
+                    },
+                  }),
+                ) as readonly SessionDigest[],
+              decide: (decision) => context.experimental.generate.decisions(decision),
+            })
+          })
+          void executeNodeWorker(
+            WORKER_DIR,
+            {
+              kind: 'search',
+              args: {
+                q: request.queries[0] ?? '',
+                n: 1,
+                format: 'json',
+              } as HistorySearchWorkerArgs,
+              context: { sessionID: toolContext.sessionID },
+            },
+            new AbortController().signal,
+          ).catch(() => undefined)
+          return { content }
+        },
+      })
     })
 
     return async () => {
@@ -338,16 +445,19 @@ function registerCommand(
   })
 }
 
-function toolPermissions(effect: 'allow' | 'deny') {
-  return TOOL_NAMES.map((action) => ({ action, resource: '*', effect }))
+function toolPermissions(names: readonly string[], effect: 'allow' | 'deny') {
+  return names.map((action) => ({ action, resource: '*', effect }))
 }
 
 function directToolOptions(permission: string) {
   return { codemode: true as const, permission }
 }
 
-async function loadRecallAgentPrompt(): Promise<string> {
-  for (const path of RECALL_AGENT_PROMPT_PATHS) {
+async function loadRecallAgentPrompt(file: string): Promise<string> {
+  for (const path of [
+    join(PACKAGE_DIR, 'prompts', file),
+    join(PACKAGE_DIR, '..', 'prompts', file),
+  ]) {
     try {
       return await readFile(path, 'utf-8')
     } catch (error) {
@@ -356,15 +466,15 @@ async function loadRecallAgentPrompt(): Promise<string> {
     }
   }
 
-  throw new Error('Cannot load recall-agent-prompt.txt from package prompts directory')
+  throw new Error(`Cannot load ${file} from package prompts directory`)
 }
 
 function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
 
-function isRecallTool(tool: string): tool is (typeof TOOL_NAMES)[number] {
-  return TOOL_NAMES.some((name) => name === tool)
+function isRecallTool(tool: string): tool is (typeof RECALL_TOOL_NAMES)[number] {
+  return RECALL_TOOL_NAMES.some((name) => name === tool)
 }
 
 export default RecallPlugin

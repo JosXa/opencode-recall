@@ -135,6 +135,25 @@ describe('plugin recall subagent', () => {
     expect([...harness.tools.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
   })
 
+  test('offers history_find with its evidence prompt only when a judge model is configured', async () => {
+    await withRecallEnvAsync(async () => {
+      const plain = pluginHarness({ preseedCommands: false })
+      await RecallPlugin.setup(plain.context)
+      expect(plain.tools.has('history_find')).toBe(false)
+      expect(plain.agents.get(RECALL_AGENT_NAME)?.system).not.toContain('history_find')
+
+      writeFileSync(getConfigFilePath(), JSON.stringify({ judge: { model: 'typesafe-ai/jev-latest' } }))
+      const judged = pluginHarness({ preseedCommands: false })
+      await RecallPlugin.setup(judged.context)
+      expect(judged.tools.has('history_find')).toBe(true)
+      expect(judged.agents.get(RECALL_AGENT_NAME)?.system).toContain('history_find')
+      expect(judged.agents.get(RECALL_AGENT_NAME)?.permissions).toContainEqual(
+        expect.objectContaining({ action: 'history_find', effect: 'allow' }),
+      )
+      expect([...judged.commands.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
+    })
+  })
+
   test('falls back to OpenCode model resolution when the configured recall model is unavailable', async () => {
     const harness = pluginHarness({ availableModels: [] })
     await RecallPlugin.setup(harness.context)

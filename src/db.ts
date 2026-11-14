@@ -13,6 +13,7 @@ export interface SearchOptions {
   readonly before?: number
   readonly directory?: string
   readonly excludeSessionId?: string
+  readonly role?: 'user' | 'assistant'
   /** Lexical only: every term must occur in the session, as a word prefix. */
   readonly matchAll?: boolean
 }
@@ -244,9 +245,10 @@ export class HistoryDatabase {
     return rows
   }
 
-  public mainSessionIds(): string[] {
+  public mainSessionIds(excludeAutomations = false): string[] {
     return this.#db
-      .query<{ id: string }>('select id from session where parent_id is null')
+      .query<{ id: string }>(`select id from session where parent_id is null
+        ${excludeAutomations ? "and instr(directory || '/', '/shepherd/topic-agent/') = 0 and instr(directory || '/', '/oca/jobs/') = 0" : ''}`)
       .all()
       .map((row) => row.id)
   }

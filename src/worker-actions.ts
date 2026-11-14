@@ -35,6 +35,10 @@ export async function executeWorkerRequest(request: HistoryWorkerRequest): Promi
     return executeSessionSave(request)
   }
 
+  if (request.kind === 'session-digest') {
+    return executeSessionDigest(request)
+  }
+
   const window = executeHistoryReadWindow(request)
 
   if (request.kind === 'read-window') {
@@ -42,6 +46,33 @@ export async function executeWorkerRequest(request: HistoryWorkerRequest): Promi
   }
 
   return new ChatmlRenderer().render(window)
+}
+
+const DIGEST_PART_CHARS = 20_000
+
+function executeSessionDigest(
+  request: Extract<HistoryWorkerRequest, { readonly kind: 'session-digest' }>,
+): string {
+  const history = new HistorySources(request.args)
+  try {
+    return JSON.stringify(
+      request.args.sessions.flatMap((session) => {
+        const digest = history.sessionDigest(
+          session.cursor,
+          {
+            queries: request.args.queries,
+            hitPartIds: session.hitPartIds,
+            limit: request.args.passagesPerSession,
+            chars: request.args.passageChars,
+          },
+          DIGEST_PART_CHARS,
+        )
+        return digest === undefined ? [] : [digest]
+      }),
+    )
+  } finally {
+    history.close()
+  }
 }
 
 async function executeSessionSave(
@@ -133,6 +164,18 @@ async function executeHistorySearch(
   const db = new HistorySources(request.args)
 
   try {
+    if (request.args.queries !== undefined) {
+      const result = await db.searchMany(
+        request.args.queries,
+        options,
+        { semantic: semanticEnabled, shard: request.args.shard },
+        semanticEnabled ? new OllamaEmbeddingProvider() : undefined,
+      )
+      return JSON.stringify({
+        lists: result.lists.map((rows) => rows.map(formatSearchResult)),
+        ...(result.notice === undefined ? {} : { notice: result.notice }),
+      })
+    }
     if (query.trim().length === 0) {
       const rows = db.recent(options)
       return formatSearchResponse(request, rows)

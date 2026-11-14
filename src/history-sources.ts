@@ -9,6 +9,7 @@ import {
 } from './db.js'
 import type { EmbeddingProvider } from './embedding.js'
 import { normalizeWindow } from './normalizer.js'
+import { digestSession, type PassageSelection, type SessionDigest } from './passages.js'
 import { rankSearchRows } from './search.js'
 import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar.js'
 import {
@@ -25,7 +26,13 @@ interface OpenSource {
   sidecar?: RecallSidecarIndex
 }
 
+export interface SearchShard {
+  readonly index: number
+  readonly count: number
+}
+
 interface SearchFeatures {
+  readonly excludeAutomations?: boolean
   readonly lexical: boolean
   readonly semantic: boolean
   readonly sync: boolean
@@ -101,6 +108,48 @@ export class HistorySources {
     }
   }
 
+  public async searchMany(
+    queries: readonly string[],
+    options: SearchOptions,
+    features: Pick<SearchFeatures, 'semantic' | 'excludeAutomations'> & {
+      readonly shard?: SearchShard | undefined
+    },
+    provider?: EmbeddingProvider,
+  ): Promise<{ lists: SearchRow[][]; notice?: string }> {
+    const shard = features.shard
+    const available = this.#available().filter(
+      (_, position) => shard === undefined || position % shard.count === shard.index,
+    )
+    const embeddings =
+      features.semantic && provider !== undefined && available.length > 0
+        ? await provider.embed(queries).catch(() => undefined)
+        : undefined
+    const lists = queries.map((): SearchRow[] => [])
+    for (const entry of available) {
+      const index = this.#index(entry)
+      const scoped = {
+        ...scopedOptions(options, entry.source.id),
+        ...(options.excludeSubagents
+          ? { sessionIds: entry.history.mainSessionIds(features.excludeAutomations) }
+          : {}),
+      }
+      const semantic =
+        embeddings === undefined || provider === undefined
+          ? []
+          : index.searchWithEmbeddings(queries, scoped, provider.model, embeddings)
+      queries.forEach((query, position) => {
+        const rows = [...index.lexicalSearch(query, scoped), ...(semantic[position] ?? [])]
+        lists[position]?.push(...rows.map((row) => this.#provenance(row, entry.source)))
+      })
+    }
+    return {
+      lists: queries.map((query, position) =>
+        rankSearchRows(query, lists[position] ?? [], options.limit),
+      ),
+      ...(features.semantic && embeddings === undefined ? { notice: LEXICAL_FALLBACK_NOTICE } : {}),
+    }
+  }
+
   async #search(
     query: string,
     options: SearchOptions,
@@ -160,7 +209,9 @@ export class HistorySources {
     const scoped = {
       ...scopedOptions(options, entry.source.id),
       // Apply the root-session boundary before either lane limits candidates.
-      ...(options.excludeSubagents ? { sessionIds: entry.history.mainSessionIds() } : {}),
+      ...(options.excludeSubagents
+        ? { sessionIds: entry.history.mainSessionIds(features.excludeAutomations) }
+        : {}),
     }
     const lexical = features.lexical ? index.lexicalSearch(query, scoped) : []
     const semantic =
@@ -188,6 +239,23 @@ export class HistorySources {
         ? entry.history.readWindowForSession(cursor.sessionId ?? '', options)
         : entry.history.readWindow(cursor.messageId, options)
     return this.#window(normalizeWindow(rows), entry.source)
+  }
+
+  public sessionDigest(
+    value: string,
+    selection: PassageSelection,
+    maxPartChars: number,
+  ): SessionDigest | undefined {
+    const { entry, cursor } = this.#route(value)
+    if (cursor.sessionId === undefined) throw new Error('session digest requires a session cursor')
+    const parts = this.#index(entry).sessionParts(cursor.sessionId, maxPartChars)
+    if (parts.length === 0) return undefined
+    return digestSession(
+      value,
+      this.#sources.length > 1 ? entry.source.id : undefined,
+      parts,
+      selection,
+    )
   }
 
   public readSession(value: string): TranscriptWindow {

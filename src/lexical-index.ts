@@ -1,4 +1,5 @@
 import type { IndexSourceRow, SearchOptions, SearchRow, SearchSource } from './db.js'
+import type { SessionPart } from './passages.js'
 import type { Database } from './sqlite.js'
 
 const FTS_CANDIDATE_LIMIT = 200
@@ -143,6 +144,19 @@ export class LexicalIndex {
     const sessionRows = this.#searchSessions(match, filters, cap)
 
     return this.#fuseAndProject(partRows, sessionRows, options.limit)
+  }
+
+  public sessionParts(sessionId: string, maxChars: number): SessionPart[] {
+    return this.#db
+      .query<SessionPart, [number, string]>(`
+        select pm.part_id as partId, pm.message_id as messageId, pm.role,
+          pm.time_created as timeCreated, substr(coalesce(f.text, ''), 1, ?) as text
+        from lex_part_meta pm
+        join lex_part_fts f on f.rowid = pm.rowid
+        where pm.session_id = ? and pm.source = 'text'
+        order by pm.time_created, pm.rowid
+      `)
+      .all(maxChars, sessionId)
   }
 
   public hasIndexedRows(): boolean {
