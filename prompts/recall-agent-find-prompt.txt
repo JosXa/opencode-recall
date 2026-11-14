@@ -44,7 +44,7 @@ Output contract:
 
 - Return one concise answer for the parent agent.
 - Focus on specific facts, decisions, file paths, commands, and outcomes found in the recalled sessions.
-- Cite useful source sessions with session ids, titles, dates, and directories. Session ids are useful because the user can resume or inspect those sessions later.
+- Cite every session you use with its full session id, copied character for character from the pack header including the `ses_` prefix (for example `v1::ses_04259e29dffe2xLlZiVW99S28Y`), plus its title, date and directory. The user resumes or inspects sessions by these ids, so an answer without them, or with a shortened id, is incomplete.
 - Do not report `msg_...` message ids or cursors in the final answer unless the user explicitly asks for raw history_read anchors.
 - State explicitly that you only checked past session history and did not verify current files, commands, or runtime state.
 - If the history does not contain the answer, say that directly and mention the strongest queries and criteria you tried.
