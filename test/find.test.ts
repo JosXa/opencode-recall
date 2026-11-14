@@ -234,6 +234,28 @@ describe('history_find pipeline', () => {
     expect(output).toContain('## v2::ses_scan match=0.70')
   })
 
+  test('bounds only the scan by a relative window so slightly older search hits still compete', async () => {
+    const searches: unknown[] = []
+    const scans: unknown[] = []
+    const deps = stubbedDependencies(() => ({ c1: 0.9 }), {
+      search: async (_queries, window) => {
+        searches.push(window)
+        return { lists: [[hit('ses_old', 'prt_o1')]] }
+      },
+      scan: async (window) => {
+        scans.push(window)
+        return { sessions: [], total: 0 }
+      },
+    })
+    await findEvidence(
+      request({ window: { withinDays: 7, before: '2026-11-14T00:00:00Z' } }),
+      deps,
+    )
+
+    expect(searches).toEqual([{ after: undefined, before: '2026-11-14T00:00:00Z' }])
+    expect(scans).toEqual([{ withinDays: 7, before: '2026-11-14T00:00:00Z' }])
+  })
+
   test('requires at least one criterion', async () => {
     const deps = stubbedDependencies(() => ({}))
     expect(await findEvidence(request({ criteria: [] }), deps)).toBe(

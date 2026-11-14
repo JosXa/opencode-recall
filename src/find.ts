@@ -106,7 +106,9 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
   const [search, firstScan] = await Promise.all([
     queries.length === 0
       ? Promise.resolve<FindSearchResult>({ lists: [] })
-      : timed('search', () => deps.search(queries, request.window)),
+      : timed('search', () =>
+          deps.search(queries, { after: request.window.after, before: request.window.before }),
+        ),
     scanWanted
       ? timed('scan', () => scanWindow(request.window, criteria, deps, jev))
       : Promise.resolve(undefined),
