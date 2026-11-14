@@ -16,6 +16,7 @@ export interface ScoredSegment extends Segment, SegmentScore {}
 export interface FocusResult {
   readonly transcript: FocusTranscript
   readonly segments: number
+  readonly all: readonly Segment[]
   readonly scored: readonly ScoredSegment[]
 }
 
@@ -84,6 +85,7 @@ export async function focusTranscripts(
       return {
         transcript,
         segments: segments.length,
+        all: segments,
         scored: scanned.flatMap((segment) => {
           const score = scores.get(segment.id)
           return score === undefined ? [] : [{ ...segment, ...score }]
@@ -145,6 +147,52 @@ export function bestSegments(result: FocusResult, settings: FocusSettings): Scor
     .sort((left, right) => rank(right) - rank(left) || left.id - right.id)
     .slice(0, settings.segmentsPerSession)
     .sort((left, right) => left.id - right.id)
+}
+
+export function expandSegments(
+  result: FocusResult,
+  best: readonly ScoredSegment[],
+  neighbours: number,
+): ScoredSegment[] {
+  const ranges = best
+    .map((segment) => ({
+      first: Math.max(0, segment.id - neighbours),
+      last: Math.min(result.all.length - 1, segment.id + neighbours),
+      evidence: segment.evidence,
+      final: segment.final,
+    }))
+    .sort((left, right) => left.first - right.first)
+  const merged: (typeof ranges)[number][] = []
+  for (const range of ranges) {
+    const previous = merged.at(-1)
+    if (previous !== undefined && range.first <= previous.last + 1) {
+      merged[merged.length - 1] = {
+        first: previous.first,
+        last: Math.max(previous.last, range.last),
+        evidence: Math.max(previous.evidence, range.evidence),
+        final: Math.max(previous.final, range.final),
+      }
+      continue
+    }
+    merged.push(range)
+  }
+  return merged.flatMap((range) => {
+    const covered = result.all.slice(range.first, range.last + 1)
+    const [start] = covered
+    const end = covered.at(-1)
+    if (start === undefined || end === undefined) return []
+    return [
+      {
+        id: start.id,
+        startIndex: start.startIndex,
+        endIndex: end.endIndex,
+        startCursor: start.startCursor,
+        text: covered.map((segment) => segment.text).join('\n'),
+        evidence: range.evidence,
+        final: range.final,
+      },
+    ]
+  })
 }
 
 export function renderSegment(segment: ScoredSegment, chars: number): string {

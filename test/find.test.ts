@@ -7,8 +7,15 @@ import {
   type FindRequest,
   findEvidence,
   fuseSessions,
+  wantsBreadth,
 } from '../src/find.js'
-import { focusedRead, segmentTranscript, selectScanned } from '../src/focus.js'
+import {
+  expandSegments,
+  type FocusResult,
+  focusedRead,
+  segmentTranscript,
+  selectScanned,
+} from '../src/focus.js'
 import type { FocusTranscript } from '../src/focus-transcript.js'
 import { type DecisionRequest, type DecisionResult, mapConcurrent } from '../src/jev.js'
 import { digestSession, excerpt, type SessionPart, selectPassages } from '../src/passages.js'
@@ -376,6 +383,43 @@ describe('history_find pipeline', () => {
     expect(output).toContain('  ▸ #0-#0 p=0.92 final=0.50 v2::msg_9')
   })
 
+  test('scans the fallback window when the best search match is weak', async () => {
+    const deps = stubbedDependencies((decision) => (isAuto(decision) ? { c1: 0.6 } : { c1: 0.1 }))
+    const output = await findEvidence(request(), deps)
+
+    expect(output).toContain('history_find: 1 of 2 judged sessions match')
+    expect(deps.scans).toEqual([{ withinDays: JUDGE.scan.fallbackDays }])
+  })
+
+  test('orders close top matches by one pairwise decision and shows its probability', async () => {
+    const isPick = (decision: DecisionRequest) =>
+      decision.questions.some((question) => question.instructions.startsWith('Of the 2 sessions'))
+    const deps = stubbedDependencies((decision) => {
+      if (isPick(decision)) return { S1: 0.2, S2: 0.85 }
+      return isAuto(decision) ? { c1: 0.92 } : { c1: 0.88 }
+    })
+    const output = await findEvidence(request(), deps)
+
+    expect(deps.decisions.filter(isPick)).toHaveLength(1)
+    expect(output.indexOf('## v2::ses_other')).toBeLessThan(output.indexOf('## v2::ses_auto'))
+    expect(output).toContain('## v2::ses_other match=0.88 (c1=0.88) best=0.85')
+    expect(output).toContain('## v2::ses_auto match=0.92 (c1=0.92) best=0.20')
+  })
+
+  test('skips the pairwise pick when the best match leads clearly', async () => {
+    const deps = stubbedDependencies((decision) => (isAuto(decision) ? { c1: 0.95 } : { c1: 0.7 }))
+    const output = await findEvidence(request(), deps)
+
+    expect(deps.decisions).toHaveLength(2)
+    expect(output).not.toContain('best=')
+  })
+
+  test('detects requests that span many sessions', () => {
+    expect(wantsBreadth(['The session is one step in the timeline of the tmux setup'])).toBe(true)
+    expect(wantsBreadth(['Liste aller Änderungen'])).toBe(true)
+    expect(wantsBreadth(['The session fixes the right arrow accept'])).toBe(false)
+  })
+
   test('runs at most the configured number of tasks at once', async () => {
     let active = 0
     let peak = 0
@@ -414,6 +458,42 @@ describe('history_find pipeline', () => {
 })
 
 describe('focused reads', () => {
+  test('expands the best segments with their neighbours and merges overlapping ranges', () => {
+    const all = Array.from({ length: 6 }, (_, id) => ({
+      id,
+      startIndex: id * 2,
+      endIndex: id * 2 + 1,
+      startCursor: `v2::msg_${id}`,
+      text: `segment ${id}`,
+    }))
+    const result: FocusResult = {
+      transcript: { sid: 'v2::ses_x', directory: '/', totalMessages: 12, messages: [] },
+      segments: all.length,
+      all,
+      scored: [],
+    }
+    const expanded = expandSegments(
+      result,
+      [
+        { ...all[2]!, evidence: 0.9, final: 0.2 },
+        { ...all[3]!, evidence: 0.7, final: 0.8 },
+      ],
+      1,
+    )
+
+    expect(expanded).toEqual([
+      {
+        id: 1,
+        startIndex: 2,
+        endIndex: 9,
+        startCursor: 'v2::msg_1',
+        text: 'segment 1\nsegment 2\nsegment 3\nsegment 4',
+        evidence: 0.9,
+        final: 0.8,
+      },
+    ])
+  })
+
   test('segments transcripts and scans the segments nearest the anchor first', () => {
     const messages = Array.from({ length: 6 }, (_, index) => ({
       index,

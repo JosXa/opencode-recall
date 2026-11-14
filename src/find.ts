@@ -1,6 +1,12 @@
 import type { JudgeConfig } from './config.js'
 import { encodeCursor } from './cursor.js'
-import { bestSegments, type FocusResult, focusTranscripts, renderSegment } from './focus.js'
+import {
+  bestSegments,
+  expandSegments,
+  type FocusResult,
+  focusTranscripts,
+  renderSegment,
+} from './focus.js'
 import type { FocusTranscript } from './focus-transcript.js'
 import type { SessionScanResult } from './history-sources.js'
 import { type Decide, Jev, mapConcurrent } from './jev.js'
@@ -84,6 +90,18 @@ const FIRST_PROMPT_LINE_CHARS = 240
 const NEAR_MISSES = 3
 const NEAR_MISS_FOCUS_SESSIONS = 2
 const NEAR_MISS_FOCUS_FLOOR = 0.1
+const PICK_SEGMENT_CHARS = 2_500
+const MIN_SEGMENT_CHARS = 400
+const BLOCK_OVERHEAD_CHARS = 1_200
+const BREADTH_WORDS =
+  /\b(all|every|each|list|timeline|overview|chronolog\w*|history of|alle[nmrs]?|jede[nmrs]?|liste|verlauf|übersicht)\b/iu
+
+interface BlockShape {
+  readonly segments: number
+  readonly segmentChars: number
+  readonly passages: number
+  readonly expand: number
+}
 
 export async function findEvidence(request: FindRequest, deps: FindDependencies): Promise<string> {
   const now = deps.now ?? Date.now
@@ -130,7 +148,8 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
     judgeCandidates(candidates, terms, criteria, deps, jev),
   )
   let scan = firstScan
-  if (!(scanWanted || verdicts.some((verdict) => isMatch(verdict, deps.judge)))) {
+  const strongest = Math.max(0, ...verdicts.map((verdict) => verdict.match ?? 0))
+  if (!scanWanted && strongest < settings.weakMatch) {
     scan = await timed('scan', () =>
       scanWindow({ withinDays: deps.judge.scan.fallbackDays }, criteria, deps, jev),
     )
@@ -147,8 +166,18 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
       (right.match ?? -1) - (left.match ?? -1) || right.candidate.fusion - left.candidate.fusion,
   )
   const matching = ranked.filter((verdict) => isMatch(verdict, deps.judge))
+  const breadth = wantsBreadth([...queries, ...criteria])
   const focused = await timed('focus', () =>
-    focusMatches(matching.length > 0 ? matching : nearMisses(ranked), criteria, deps, jev),
+    focusMatches(
+      matching.length > 0 ? matching : nearMisses(ranked),
+      breadth ? settings.maxSessions : deps.judge.focus.sessions,
+      criteria,
+      deps,
+      jev,
+    ),
+  )
+  const picked = await timed('pick', () =>
+    pickBest(matching, focused, queries, criteria, deps.judge, jev),
   )
   for (const verdict of matching) {
     deps.run.pool.set(verdict.candidate.cursor, {
@@ -161,7 +190,7 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
   const problems = jev.problems()
   return [
     jev.footer(),
-    renderEvidence(ranked, matching, focused, criteria, queries.length, deps.judge),
+    renderEvidence(ranked, picked, focused, criteria, queries.length, deps.judge, breadth),
     ...(scan === undefined ? [] : [scanLine(scan)]),
     ...notices,
     ...(problems === undefined ? [] : [problems]),
@@ -346,6 +375,15 @@ export function sessionDossier(
     'Criteria:',
     ...criteria.map((criterion, index) => `c${index + 1}: ${criterion}`),
     '',
+    sessionSummary(candidate, digest),
+  ].join('\n')
+}
+
+function sessionSummary(
+  candidate: Pick<Candidate, 'title' | 'directory'>,
+  digest: SessionDigest,
+): string {
+  return [
     `Session: ${candidate.title}`,
     `Directory: ${candidate.directory}`,
     `Active: ${digest.started} to ${digest.updated} (${digest.messages} messages)`,
@@ -360,12 +398,13 @@ export function sessionDossier(
 
 async function focusMatches(
   matching: readonly Verdict[],
+  sessions: number,
   criteria: readonly string[],
   deps: FindDependencies,
   jev: Jev,
 ): Promise<ReadonlyMap<string, FocusResult>> {
   const focus = deps.judge.focus
-  const targets = matching.slice(0, Math.min(focus.sessions, deps.judge.find.maxSessions))
+  const targets = matching.slice(0, Math.min(sessions, deps.judge.find.maxSessions))
   if (targets.length === 0) return new Map()
   const transcripts = await deps.transcripts(targets.map(anchorCursor))
   const results = await focusTranscripts(
@@ -377,6 +416,69 @@ async function focusMatches(
     deps.judge.find.concurrency,
   )
   return new Map(results.map((result) => [result.transcript.sid, result]))
+}
+
+interface Picked {
+  readonly verdicts: readonly Verdict[]
+  readonly probabilities: ReadonlyMap<string, number>
+}
+
+async function pickBest(
+  matching: readonly Verdict[],
+  focused: ReadonlyMap<string, FocusResult>,
+  queries: readonly string[],
+  criteria: readonly string[],
+  judge: JudgeConfig,
+  jev: Jev,
+): Promise<Picked> {
+  const unpicked = { verdicts: matching, probabilities: new Map<string, number>() }
+  const top = matching[0]?.match
+  if (top === undefined || judge.find.pickSessions < 2) return unpicked
+  const close = matching
+    .slice(0, judge.find.pickSessions)
+    .filter((verdict) => top - (verdict.match ?? 0) <= judge.find.pickMargin)
+  if (close.length < 2) return unpicked
+  const labels = close.map((_, index) => `S${index + 1}`)
+  const answers = await jev.ask(
+    [
+      [
+        'Criteria:',
+        ...criteria.map((criterion, index) => `c${index + 1}: ${criterion}`),
+        ...(queries.length === 0 ? [] : [`Search terms: ${queries.join('; ')}`]),
+      ].join('\n'),
+      ...close.map(
+        (verdict, index) =>
+          `<session id="${labels[index]}">\n${pickDossier(verdict, focused.get(verdict.candidate.cursor), judge)}\n</session>`,
+      ),
+    ],
+    labels.map((label) => ({
+      type: 'predicate' as const,
+      name: label,
+      instructions: `Of the ${close.length} sessions shown, session ${label} is the one that best satisfies every criterion and holds the most specific, final answer about it.`,
+    })),
+  )
+  if (answers === undefined) return unpicked
+  const scored = close
+    .map((verdict, index) => ({ verdict, probability: answers.get(labels[index] ?? '') ?? 0 }))
+    .sort((left, right) => right.probability - left.probability)
+  return {
+    verdicts: [...scored.map((item) => item.verdict), ...matching.slice(close.length)],
+    probabilities: new Map(
+      scored.map((item) => [item.verdict.candidate.cursor, item.probability] as const),
+    ),
+  }
+}
+
+function pickDossier(verdict: Verdict, focus: FocusResult | undefined, judge: JudgeConfig): string {
+  const segments = focus === undefined ? [] : bestSegments(focus, judge.focus)
+  return [
+    sessionSummary(verdict.candidate, verdict.digest),
+    ...segments.map((segment) => renderSegment(segment, PICK_SEGMENT_CHARS)),
+  ].join('\n')
+}
+
+export function wantsBreadth(texts: readonly string[]): boolean {
+  return texts.some((text) => BREADTH_WORDS.test(text))
 }
 
 function anchorCursor(verdict: Verdict): string {
@@ -400,13 +502,15 @@ function isMatch(verdict: Verdict, judge: JudgeConfig): boolean {
 
 function renderEvidence(
   ranked: readonly Verdict[],
-  matching: readonly Verdict[],
+  picked: Picked,
   focused: ReadonlyMap<string, FocusResult>,
   criteria: readonly string[],
   queryCount: number,
   judge: JudgeConfig,
+  breadth: boolean,
 ): string {
   const settings = judge.find
+  const matching = picked.verdicts
   const unjudged = ranked.filter((verdict) => verdict.unjudged)
   const lines = [
     `history_find: ${matching.length} of ${ranked.length} judged sessions match all criteria (p>=${settings.sessionThreshold}); ${queryCount} queries.`,
@@ -416,25 +520,48 @@ function renderEvidence(
   let shownSessions = 0
   let heldPassages = 0
   let budgetCut = 0
-  for (const verdict of matching.slice(0, settings.maxSessions)) {
-    const block = sessionBlock(verdict, focused.get(verdict.candidate.cursor), judge)
+  const sessions = matching.slice(0, settings.maxSessions)
+  sessions.forEach((verdict, position) => {
+    const allowance = Math.floor(budget / (sessions.length - position))
+    const block = fitBlock(
+      verdict,
+      focused.get(verdict.candidate.cursor),
+      judge,
+      position === 0 ? deepShape(judge, breadth) : undefined,
+      position === 0 ? budget : allowance,
+      picked.probabilities.get(verdict.candidate.cursor),
+    )
     heldPassages += block.held
     if (block.text.length > budget) {
       budgetCut += 1
-      continue
+      return
     }
     budget -= block.text.length + 1
     shownSessions += 1
     lines.push(block.text)
-  }
+  })
   if (matching.length === 0) {
     lines.push('No session matched every criterion. Nearest sessions:')
-    for (const verdict of ranked.filter((item) => !item.unjudged).slice(0, NEAR_MISSES)) {
-      const focus = focused.get(verdict.candidate.cursor)
-      lines.push(
-        focus === undefined ? sessionHeader(verdict) : sessionBlock(verdict, focus, judge).text,
-      )
-    }
+    ranked
+      .filter((item) => !item.unjudged)
+      .slice(0, NEAR_MISSES)
+      .forEach((verdict, position) => {
+        const focus = focused.get(verdict.candidate.cursor)
+        if (focus === undefined) {
+          lines.push(sessionHeader(verdict))
+          return
+        }
+        const block = fitBlock(
+          verdict,
+          focus,
+          judge,
+          position === 0 ? deepShape(judge, false) : undefined,
+          Math.max(0, budget),
+          undefined,
+        )
+        budget -= block.text.length + 1
+        lines.push(block.text)
+      })
   }
   const belowThreshold = ranked.length - matching.length - unjudged.length
   lines.push(
@@ -444,16 +571,60 @@ function renderEvidence(
   return lines.join('\n')
 }
 
+function deepShape(judge: JudgeConfig, breadth: boolean): BlockShape {
+  return {
+    segments: breadth ? 1 : judge.focus.topSegments,
+    segmentChars: judge.focus.topSegmentChars,
+    passages: judge.find.maxPassagesPerSession,
+    expand: judge.focus.topNeighbours,
+  }
+}
+
+function fitBlock(
+  verdict: Verdict,
+  focus: FocusResult | undefined,
+  judge: JudgeConfig,
+  deep: BlockShape | undefined,
+  allowance: number,
+  pick: number | undefined,
+): { text: string; held: number } {
+  const regular: BlockShape = {
+    segments: judge.focus.segmentsPerSession,
+    segmentChars: judge.focus.segmentChars,
+    passages: judge.find.maxPassagesPerSession - judge.focus.segmentsPerSession,
+    expand: 0,
+  }
+  const compact: BlockShape = {
+    segments: 1,
+    segmentChars: Math.max(MIN_SEGMENT_CHARS, allowance - BLOCK_OVERHEAD_CHARS),
+    passages: 1,
+    expand: 0,
+  }
+  const fallback = sessionBlock(verdict, focus, judge, compact, pick)
+  return (
+    [...(deep === undefined ? [] : [deep]), regular]
+      .map((shape) => sessionBlock(verdict, focus, judge, shape, pick))
+      .find((block) => block.text.length <= allowance) ?? fallback
+  )
+}
+
 function sessionBlock(
   verdict: Verdict,
   focus: FocusResult | undefined,
   judge: JudgeConfig,
+  shape: BlockShape,
+  pick: number | undefined,
 ): { text: string; held: number } {
   const header = [
-    sessionHeader(verdict),
+    sessionHeader(verdict, pick),
     `  first prompt: ${truncate(verdict.digest.firstPrompt, FIRST_PROMPT_LINE_CHARS)}`,
   ]
-  const segments = focus === undefined ? [] : bestSegments(focus, judge.focus)
+  const best =
+    focus === undefined
+      ? []
+      : bestSegments(focus, { ...judge.focus, segmentsPerSession: shape.segments })
+  const segments =
+    focus === undefined || shape.expand === 0 ? best : expandSegments(focus, best, shape.expand)
   const settings = judge.find
   const passages = verdict.digest.passages
     .map((passage, index) => ({ passage, probability: verdict.passages[index] ?? 0 }))
@@ -461,32 +632,37 @@ function sessionBlock(
     .filter((item) => !segments.some((segment) => segment.text.includes(item.passage.cursor)))
     .sort((left, right) => right.probability - left.probability)
   const shown = passages
-    .slice(0, Math.max(0, settings.maxPassagesPerSession - segments.length))
+    .slice(
+      0,
+      shape.expand > 0
+        ? shape.passages
+        : Math.max(1, shape.passages + shape.segments - best.length),
+    )
     .sort((left, right) => left.passage.time.localeCompare(right.passage.time))
   const heldSegments =
     focus === undefined
       ? 0
       : focus.scored.filter((segment) => segment.evidence >= judge.focus.minScore).length -
-        segments.length
+        best.length
   return {
     text: [
       ...header,
-      ...segments.map((segment) => renderSegment(segment, judge.focus.segmentChars)),
+      ...segments.map((segment) => renderSegment(segment, shape.segmentChars)),
       ...shown.map(
         ({ passage, probability }) =>
           `  - ${formatProbability(probability)} ${passage.cursor} ${passage.role} ${passage.time.slice(0, 16)}: ${passage.text}`,
       ),
     ].join('\n'),
-    held: passages.length - shown.length + heldSegments,
+    held: passages.length - shown.length + Math.max(0, heldSegments),
   }
 }
 
-function sessionHeader(verdict: Verdict): string {
+function sessionHeader(verdict: Verdict, pick?: number): string {
   const criteria = verdict.criteria
     .map((value, index) => `c${index + 1}=${formatProbability(value)}`)
     .join(' ')
   return [
-    `## ${verdict.candidate.cursor} match=${formatProbability(verdict.match)} (${criteria})`,
+    `## ${verdict.candidate.cursor} match=${formatProbability(verdict.match)} (${criteria})${pick === undefined ? '' : ` best=${formatProbability(pick)}`}`,
     `${verdict.digest.started.slice(0, 10)}..${verdict.digest.updated.slice(0, 10)}`,
     `${verdict.digest.messages} msgs`,
     `"${verdict.candidate.title}"`,
