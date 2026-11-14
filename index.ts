@@ -12,7 +12,7 @@ import {
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
 } from './src/commands.js'
-import { type JudgeConfig, loadJudgeConfig } from './src/config.js'
+import { availableJudge, type JudgeConfig, loadJudgeConfig } from './src/config.js'
 import { type FindWindow, findEvidence, STANDARD_FALLBACK_NOTICE } from './src/find.js'
 import { historyWorkers } from './src/find-workers.js'
 import { focusedRead } from './src/focus.js'
@@ -99,11 +99,10 @@ export const RecallPlugin = Plugin.define({
       }
     }
     const usableJudge = () =>
-      configuredJudge !== undefined &&
-      decisionModels.has(`${configuredJudge.model.providerID}/${configuredJudge.model.id}`) &&
-      typeof context.experimental?.generate?.decisions === 'function' &&
-      Date.now() >= judgeRetryAt
-        ? configuredJudge
+      typeof context.experimental?.generate?.decisions === 'function' && Date.now() >= judgeRetryAt
+        ? availableJudge(configuredJudge, (model) =>
+            decisionModels.has(`${model.providerID}/${model.id}`),
+          )
         : undefined
     await refreshModels()
     const workers = new SessionWorkerAbortRegistry()
@@ -199,7 +198,7 @@ export const RecallPlugin = Plugin.define({
         })
       return admissionRefresh
     }
-    const judgeChanged = () => (usableJudge() === undefined) !== (activeJudge === undefined)
+    const judgeChanged = () => judgeKey(usableJudge()) !== judgeKey(activeJudge)
     const markJudgeDown = () => {
       judgeRetryAt = Date.now() + JUDGE_RETRY_MS
       void refreshSurface(async () => judgeChanged()).catch(() => undefined)
@@ -568,6 +567,10 @@ function registerCommand(
       await context.session.prompt(input)
     },
   })
+}
+
+function judgeKey(judge: JudgeConfig | undefined) {
+  return judge === undefined ? '' : `${judge.model.providerID}/${judge.model.id}`
 }
 
 function toolPermissions(names: readonly string[], effect: 'allow' | 'deny') {

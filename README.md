@@ -206,7 +206,9 @@ The judge must be registered in OpenCode as a decision model (`"type": "decision
 }
 ```
 
-Recall checks the judge at every prompt. When `judge` is unset, names a model OpenCode does not list as an enabled decision model, or the decision API is missing, recall offers the original tools and prompt. When the judge fails during a run (HTTP errors, exhausted credits, timeouts after `judge.timeoutMs`, malformed answers), `history_find` answers the same call with `history_search` results, `history_read` returns a plain window, and the next turn switches to the original tools. Recall retries the judge after 10 minutes. When a run spends `judge.maxRunTokens`, `history_find` also returns `history_search` results for the rest of that run.
+`judge.model` also takes an ordered list such as `["litellm/microsoft-decision-1", "typesafe-ai/jev-latest"]`. Recall uses the first model that OpenCode lists as an enabled decision model, so one shared `recall.jsonc` can serve machines with different providers.
+
+Recall checks the judge at every prompt. When `judge` is unset, names no model that OpenCode lists as an enabled decision model, or the decision API is missing, recall offers the original tools and prompt. When the judge fails during a run (HTTP errors, exhausted credits, timeouts after `judge.timeoutMs`, malformed answers), `history_find` answers the same call with `history_search` results, `history_read` returns a plain window, and the next turn switches to the original tools. Recall retries the judge after 10 minutes. When a run spends `judge.maxRunTokens`, `history_find` also returns `history_search` results for the rest of that run.
 
 OpenCode applies global permission rules after plugin agent transforms, so a global `subagent` or `shell` allow would reach the recall agent. Restate the recall sandbox in your config and list every Recall tool:
 

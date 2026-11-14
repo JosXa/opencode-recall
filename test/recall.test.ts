@@ -382,6 +382,22 @@ describe('recall without a working decision model', () => {
     }, config)
   })
 
+  test('judges with any listed model that OpenCode registers', async () => {
+    const decisionModels: TestModel[] = [JEV]
+    const config = JSON.stringify({
+      judge: { model: ['litellm/microsoft-decision-1', 'typesafe-ai/jev-latest'] },
+    })
+    await withJudgeConfig(async () => {
+      const harness = pluginHarness({ preseedCommands: false, decisionModels })
+      await RecallPlugin.setup(harness.context)
+      expect(sortedKeys(harness.tools)).toEqual([...JUDGED_TOOLS])
+
+      decisionModels.splice(0)
+      await harness.beforePrompt?.()
+      expect(sortedKeys(harness.tools)).toEqual([...STANDARD_TOOLS])
+    }, config)
+  })
+
   test('matches the surface of a plugin without any judge setting', async () => {
     await withRecallEnvAsync(async () => {
       const plain = pluginHarness({ preseedCommands: false })
