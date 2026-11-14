@@ -192,6 +192,13 @@
               "default": 0.7,
               "description": "When no window was scanned and the best match is below this, history_find also scans the fallback window."
             },
+            "partialMatch": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.8,
+              "description": "With several criteria, sessions that meet at least one criterion and reach this probability on one of them join the pack after full matches, marked partial."
+            },
             "pickMargin": {
               "type": "number",
               "minimum": 0,
@@ -217,14 +224,14 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 10000,
-              "default": 500,
+              "default": 1000,
               "description": "Newest sessions in the window that get scanned."
             },
             "maxInputTokens": {
               "type": "integer",
               "minimum": 1000,
               "maximum": 2000000,
-              "default": 120000,
+              "default": 300000,
               "description": "Scan input token cap per call."
             },
             "pack": {
