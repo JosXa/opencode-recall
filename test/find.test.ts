@@ -188,6 +188,61 @@ describe('history_find pipeline', () => {
     expect(output).not.toContain('Nearest sessions')
   })
 
+  test('falls back to unjudged search candidates with lexical passages when the judge is down', async () => {
+    const deps = stubbedDependencies(() => ({}), {
+      decide: async () => {
+        throw new Error('Provider request failed with HTTP 402: no available credits')
+      },
+    })
+    const output = await findEvidence(
+      request({ queries: ['ghost text autocomplete'], criteria: ['changes recall autocomplete'] }),
+      deps,
+    )
+    const lines = output.split('\n')
+
+    expect(lines[0]).toMatch(/^\[jev calls=0 input_tokens=0 /)
+    expect(lines[1]).toBe(
+      'judge unavailable: 2 of 2 decision calls failed (Provider request failed with HTTP 402: no available credits); the sessions below are unjudged search candidates in search rank order, with lexical passages only.',
+    )
+    expect(lines[2]).toBe('history_find: 2 of 2 candidate sessions shown unjudged; 1 queries.')
+    expect(output.indexOf('## v2::ses_auto unjudged')).toBeLessThan(
+      output.indexOf('## v2::ses_other unjudged'),
+    )
+    expect(output).toContain(
+      '  - v2::msg_prt_a1 assistant 2026-11-01T10:05: Implemented ghost text autocomplete',
+    )
+    expect(output).not.toContain('match=')
+    expect(deps.scans).toHaveLength(0)
+  })
+
+  test('scans newest window sessions unjudged when a pure scan cannot reach the judge', async () => {
+    const scanned = (sid: string, updatedAt: number) => ({
+      cursor: `v2::${sid}`,
+      title: `title ${sid}`,
+      directory: '/projects/recall',
+      updatedAt,
+      text: `digest ${sid}`,
+    })
+    const deps = stubbedDependencies(() => ({}), {
+      decide: async () => {
+        throw new Error('429 rate limited')
+      },
+      scan: async () => ({
+        sessions: [scanned('ses_new', 2), scanned('ses_old', 1)],
+        total: 2,
+      }),
+    })
+    const output = await findEvidence(
+      request({ criteria: ['changes recall autocomplete'], window: { withinDays: 2 } }),
+      deps,
+    )
+
+    expect(output.split('\n')[1]).toMatch(/^judge unavailable: /)
+    expect(output.indexOf('## v2::ses_new unjudged')).toBeLessThan(
+      output.indexOf('## v2::ses_old unjudged'),
+    )
+  })
+
   test('retries a failed judge call once and reports sessions that stay unjudged', async () => {
     const attempts = new Map<string, number>()
     const decide = answerAll(() => ({ c1: 0.8 }))
@@ -542,6 +597,7 @@ describe('focused reads', () => {
           messages: [{ index: 0, cursor: 'v2::msg_1', text: 'Tab is reserved for agents.' }],
         },
       ],
+      read: async () => 'plain window',
     })
     const lines = output.split('\n')
 
@@ -550,6 +606,38 @@ describe('focused reads', () => {
       '## v2::ses_auto · "Autocomplete" · /projects/recall · 1 msgs · scanned 1 of 1 segments, 1 at p>=0.5',
     )
     expect(output).toContain('Tab is reserved for agents.')
+  })
+
+  test('history_read with criteria degrades to a plain window when the judge is down', async () => {
+    const reads: string[] = []
+    const output = await focusedRead('v2::msg_1', ['why Tab was not used'], 5, {
+      judge: JUDGE,
+      run: new RecallRun(1_000_000),
+      decide: async () => {
+        throw new Error('HTTP 402')
+      },
+      transcripts: async () => [
+        {
+          sid: 'v2::ses_auto',
+          title: 'Autocomplete',
+          directory: '/projects/recall',
+          totalMessages: 1,
+          anchorIndex: 0,
+          messages: [{ index: 0, cursor: 'v2::msg_1', text: 'Tab is reserved for agents.' }],
+        },
+      ],
+      read: async (cursor) => {
+        reads.push(cursor)
+        return '<window around v2::msg_1>'
+      },
+    })
+
+    expect(reads).toEqual(['v2::msg_1'])
+    expect(output.split('\n')).toEqual([
+      expect.stringMatching(/^\[jev calls=0 input_tokens=0 /),
+      'judge unavailable: 1 of 1 decision calls failed (HTTP 402); showing a plain window around v2::msg_1 instead of judged segments.',
+      '<window around v2::msg_1>',
+    ])
   })
 })
 

@@ -25,6 +25,7 @@ export interface FocusedReadDependencies {
   readonly run: RecallRun
   readonly decide: Decide
   readonly transcripts: (cursors: readonly string[]) => Promise<readonly FocusTranscript[]>
+  readonly read: (cursor: string) => Promise<string>
   readonly now?: () => number
 }
 
@@ -45,6 +46,17 @@ export async function focusedRead(
     deps.judge.find.concurrency,
     deps.judge.focus.readScanTokens,
   )
+  if (
+    results.length > 0 &&
+    jev.failures > 0 &&
+    results.every((result) => result.scored.length === 0)
+  ) {
+    return [
+      jev.footer(),
+      jev.unavailableNotice(`showing a plain window around ${cursor} instead of judged segments.`),
+      await deps.read(cursor),
+    ].join('\n')
+  }
   const problems = jev.problems()
   return [
     jev.footer(),
