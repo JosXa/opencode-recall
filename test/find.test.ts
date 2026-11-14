@@ -8,6 +8,7 @@ import {
   findEvidence,
   fuseSessions,
   wantsBreadth,
+  STANDARD_FALLBACK_NOTICE,
 } from '../src/find.js'
 import {
   expandSegments,
@@ -72,13 +73,21 @@ const answerAll =
 function stubbedDependencies(
   answers: (request: DecisionRequest) => Record<string, number>,
   overrides: Partial<FindDependencies> = {},
-): FindDependencies & { readonly decisions: DecisionRequest[]; readonly scans: unknown[] } {
+): FindDependencies & {
+  readonly decisions: DecisionRequest[]
+  readonly scans: unknown[]
+  readonly judgeDowns: number[]
+} {
   const decisions: DecisionRequest[] = []
   const scans: unknown[] = []
+  const judgeDowns: number[] = []
   const decide = answerAll(answers)
   return {
     decisions,
     scans,
+    judgeDowns,
+    standard: async () => '<history_search results>',
+    onJudgeDown: () => judgeDowns.push(judgeDowns.length),
     judge: { ...JUDGE, focus: { ...JUDGE.focus, sessions: 0 } },
     run: new RecallRun(1_000_000),
     search: async () => ({
@@ -188,7 +197,7 @@ describe('history_find pipeline', () => {
     expect(output).not.toContain('Nearest sessions')
   })
 
-  test('falls back to unjudged search candidates with lexical passages when the judge is down', async () => {
+  test('hands over to the standard history tools when the judge is down', async () => {
     const deps = stubbedDependencies(() => ({}), {
       decide: async () => {
         throw new Error('Provider request failed with HTTP 402: no available credits')
@@ -198,38 +207,32 @@ describe('history_find pipeline', () => {
       request({ queries: ['ghost text autocomplete'], criteria: ['changes recall autocomplete'] }),
       deps,
     )
-    const lines = output.split('\n')
 
-    expect(lines[0]).toMatch(/^\[jev calls=0 input_tokens=0 /)
-    expect(lines[1]).toBe(
-      'judge unavailable: 2 of 2 decision calls failed (Provider request failed with HTTP 402: no available credits); the sessions below are unjudged search candidates in search rank order, with lexical passages only.',
-    )
-    expect(lines[2]).toBe('history_find: 2 of 2 candidate sessions shown unjudged; 1 queries.')
-    expect(output.indexOf('## v2::ses_auto unjudged')).toBeLessThan(
-      output.indexOf('## v2::ses_other unjudged'),
-    )
-    expect(output).toContain(
-      '  - v2::msg_prt_a1 assistant 2026-11-01T10:05: Implemented ghost text autocomplete',
-    )
-    expect(output).not.toContain('match=')
+    expect(output.split('\n')).toEqual([
+      expect.stringMatching(/^\[jev calls=0 input_tokens=0 /),
+      `judge unavailable: 2 of 2 decision calls failed (Provider request failed with HTTP 402: no available credits); ${STANDARD_FALLBACK_NOTICE}`,
+      '<history_search results>',
+    ])
+    expect(deps.judgeDowns).toHaveLength(1)
     expect(deps.scans).toHaveLength(0)
   })
 
-  test('scans newest window sessions unjudged when a pure scan cannot reach the judge', async () => {
-    const scanned = (sid: string, updatedAt: number) => ({
-      cursor: `v2::${sid}`,
-      title: `title ${sid}`,
-      directory: '/projects/recall',
-      updatedAt,
-      text: `digest ${sid}`,
-    })
+  test('hands a pure window scan over to the standard tools when the judge is down', async () => {
     const deps = stubbedDependencies(() => ({}), {
       decide: async () => {
         throw new Error('429 rate limited')
       },
       scan: async () => ({
-        sessions: [scanned('ses_new', 2), scanned('ses_old', 1)],
-        total: 2,
+        sessions: [
+          {
+            cursor: 'v2::ses_new',
+            title: 'title ses_new',
+            directory: '/projects/recall',
+            updatedAt: 2,
+            text: 'digest ses_new',
+          },
+        ],
+        total: 1,
       }),
     })
     const output = await findEvidence(
@@ -237,10 +240,9 @@ describe('history_find pipeline', () => {
       deps,
     )
 
-    expect(output.split('\n')[1]).toMatch(/^judge unavailable: /)
-    expect(output.indexOf('## v2::ses_new unjudged')).toBeLessThan(
-      output.indexOf('## v2::ses_old unjudged'),
-    )
+    expect(output.split('\n')[1]).toMatch(/^judge unavailable: .*standard history tools/)
+    expect(output).toContain('<history_search results>')
+    expect(deps.judgeDowns).toHaveLength(1)
   })
 
   test('retries a failed judge call once and reports sessions that stay unjudged', async () => {
@@ -262,6 +264,7 @@ describe('history_find pipeline', () => {
     expect(output).toContain('unjudged: 1 sessions')
     expect(output).toContain('judge problems: 1 judge calls failed (429 rate limited)')
     expect(output.split('\n')[0]).toMatch(/^\[jev calls=1 input_tokens=100 /)
+    expect(deps.judgeDowns).toHaveLength(0)
   })
 
   test('falls back to a recent-window scan when the search finds no matching session', async () => {
@@ -598,6 +601,9 @@ describe('focused reads', () => {
         },
       ],
       read: async () => 'plain window',
+      onJudgeDown: () => {
+        throw new Error('the judge answered')
+      },
     })
     const lines = output.split('\n')
 
@@ -610,6 +616,7 @@ describe('focused reads', () => {
 
   test('history_read with criteria degrades to a plain window when the judge is down', async () => {
     const reads: string[] = []
+    const judgeDowns: string[] = []
     const output = await focusedRead('v2::msg_1', ['why Tab was not used'], 5, {
       judge: JUDGE,
       run: new RecallRun(1_000_000),
@@ -630,9 +637,11 @@ describe('focused reads', () => {
         reads.push(cursor)
         return '<window around v2::msg_1>'
       },
+      onJudgeDown: () => judgeDowns.push('down'),
     })
 
     expect(reads).toEqual(['v2::msg_1'])
+    expect(judgeDowns).toEqual(['down'])
     expect(output.split('\n')).toEqual([
       expect.stringMatching(/^\[jev calls=0 input_tokens=0 /),
       'judge unavailable: 1 of 1 decision calls failed (HTTP 402); showing a plain window around v2::msg_1 instead of judged segments.',

@@ -12,8 +12,8 @@ import {
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
 } from './src/commands.js'
-import { loadJudgeConfig } from './src/config.js'
-import { findEvidence } from './src/find.js'
+import { type JudgeConfig, loadJudgeConfig } from './src/config.js'
+import { type FindWindow, findEvidence, STANDARD_FALLBACK_NOTICE } from './src/find.js'
 import { historyWorkers } from './src/find-workers.js'
 import { focusedRead } from './src/focus.js'
 import {
@@ -51,6 +51,8 @@ const JUDGED_TOOL_NAMES = [
 ] as const
 const RECALL_TOOL_NAMES = [...TOOL_NAMES, HISTORY_FIND_COMMAND] as const
 const FOCUSED_READ_SEGMENTS = 5
+const JUDGE_RETRY_MS = 10 * 60_000
+const DAY_MS = 86_400_000
 const COMMAND_DESCRIPTIONS = [
   [HISTORY_SEARCH_COMMAND, 'Search OpenCode history and return ranked cursor anchors'],
   [HISTORY_READ_COMMAND, 'Read a cursor-paginated ChatML window from OpenCode history'],
@@ -68,22 +70,43 @@ const OBJECT_SCHEMA = {
 export const RecallPlugin = Plugin.define({
   id: 'josxa.opencode-recall',
   async setup(context) {
-    const judge = loadJudgeConfig()
-    const enabledTools: readonly string[] = judge === undefined ? TOOL_NAMES : JUDGED_TOOL_NAMES
-    const recallAgentPrompt = await loadRecallAgentPrompt(
-      judge === undefined ? RECALL_AGENT_PROMPT_FILE : RECALL_AGENT_FIND_PROMPT_FILE,
-    )
+    const configuredJudge = loadJudgeConfig()
+    const standardPrompt = await loadRecallAgentPrompt(RECALL_AGENT_PROMPT_FILE)
+    const judgedPrompt =
+      configuredJudge === undefined
+        ? standardPrompt
+        : await loadRecallAgentPrompt(RECALL_AGENT_FIND_PROMPT_FILE)
+    let activeJudge: JudgeConfig | undefined
+    let judgeRetryAt = 0
+    const enabledTools = (): readonly string[] =>
+      activeJudge === undefined ? TOOL_NAMES : JUDGED_TOOL_NAMES
     const availableModels = new Set<string>()
+    const decisionModels = new Set<string>()
     const refreshModels = async () => {
-      const models = (await context.model.list()).data
+      const [models, decisions] = await Promise.all([
+        context.model.list(),
+        configuredJudge === undefined
+          ? Promise.resolve(undefined)
+          : context.model.list({ types: ['decision'] }),
+      ])
       availableModels.clear()
-      for (const model of models) {
+      for (const model of models.data) {
         if (model.enabled) availableModels.add(`${model.providerID}/${model.id}`)
       }
+      decisionModels.clear()
+      for (const model of decisions?.data ?? []) {
+        if (model.enabled) decisionModels.add(`${model.providerID}/${model.id}`)
+      }
     }
+    const usableJudge = () =>
+      configuredJudge !== undefined &&
+      decisionModels.has(`${configuredJudge.model.providerID}/${configuredJudge.model.id}`) &&
+      Date.now() >= judgeRetryAt
+        ? configuredJudge
+        : undefined
     await refreshModels()
     const workers = new SessionWorkerAbortRegistry()
-    const runs = new RecallRuns(judge?.maxRunTokens ?? 0)
+    const runs = new RecallRuns(configuredJudge?.maxRunTokens ?? 0)
     const eventSubscription = new AbortController()
     let interruptionError: unknown
     const interruptionForwarder = forwardSessionInterruptions(
@@ -107,9 +130,9 @@ export const RecallPlugin = Plugin.define({
       }
     })
 
-    if (judge !== undefined) {
+    if (configuredJudge !== undefined) {
       await context.session.hook('context', (request) => {
-        if (String(request.agent) !== RECALL_AGENT_NAME) return
+        if (activeJudge === undefined || String(request.agent) !== RECALL_AGENT_NAME) return
         void runs
           .get(request.sessionID)
           .prepare(() =>
@@ -122,18 +145,18 @@ export const RecallPlugin = Plugin.define({
       })
     }
 
-    await context.command.transform((commands) => {
+    const configureCommands: Parameters<Plugin.Context['command']['transform']>[0] = (commands) => {
       for (const [name, description] of COMMAND_DESCRIPTIONS) {
-        if (enabledTools.includes(name)) registerCommand(context, commands, name, description)
+        if (enabledTools().includes(name)) registerCommand(context, commands, name, description)
       }
-    })
+    }
     const configureRecall: Parameters<Plugin.Context['agent']['transform']>[0] = (agents) => {
       for (const agent of agents.list()) {
         if (String(agent.id) === RECALL_AGENT_NAME) continue
         // Deny last so broader agent rules cannot expose history tools outside @recall.
         agent.permissions = [
           ...agent.permissions.filter((rule) => !isRecallTool(rule.action)),
-          ...toolPermissions(enabledTools, 'deny'),
+          ...toolPermissions(enabledTools(), 'deny'),
         ]
       }
       agents.update(RECALL_AGENT_NAME, (agent) => {
@@ -146,35 +169,97 @@ export const RecallPlugin = Plugin.define({
         }
         agent.description = RECALL_AGENT_DESCRIPTION
         agent.mode = 'subagent'
-        agent.system = recallAgentPrompt
+        agent.system = activeJudge === undefined ? standardPrompt : judgedPrompt
         agent.permissions = [
           { action: '*', resource: '*', effect: 'deny' },
           { action: 'execute', resource: '*', effect: 'allow' },
-          ...toolPermissions(enabledTools, 'allow'),
+          ...toolPermissions(enabledTools(), 'allow'),
         ]
       })
     }
-    let agentRegistration = await context.agent.transform(configureRecall)
+    let surface: readonly Registration[] = []
+    const registerSurface = async () => {
+      activeJudge = usableJudge()
+      await Promise.all(surface.map((registration) => registration.dispose()))
+      surface = [
+        await context.command.transform(configureCommands),
+        await context.agent.transform(configureRecall),
+        await context.tool.transform(configureTools),
+      ]
+    }
     let admissionRefresh = Promise.resolve()
-    await context.session.hook('prompt', async () => {
-      // Native configuration transforms can register after plugin setup. Prompt
-      // admission runs after startup, before model selection, so reapply here.
+    const refreshSurface = (refresh: () => Promise<boolean>) => {
       admissionRefresh = admissionRefresh
         .catch(() => {
           // The previous prompt already received its error; allow the next retry.
         })
         .then(async () => {
-          await refreshModels()
-          const { data: agent } = await context.agent.get({ agentID: RECALL_AGENT_NAME })
-          if (!agent.model || availableModels.has(`${agent.model.providerID}/${agent.model.id}`))
-            return
-          await agentRegistration.dispose()
-          agentRegistration = await context.agent.transform(configureRecall)
+          if (await refresh()) await registerSurface()
         })
-      await admissionRefresh
+      return admissionRefresh
+    }
+    const judgeChanged = () => (usableJudge() === undefined) !== (activeJudge === undefined)
+    const markJudgeDown = () => {
+      judgeRetryAt = Date.now() + JUDGE_RETRY_MS
+      void refreshSurface(async () => judgeChanged()).catch(() => undefined)
+    }
+    const standardHistory = async (
+      sessionID: string,
+      request: {
+        readonly queries: readonly string[]
+        readonly window: FindWindow
+        readonly directory?: string | undefined
+      },
+      signal: AbortSignal,
+    ) => {
+      const scope = {
+        directory: request.directory,
+        after:
+          request.window.after ??
+          (request.window.withinDays === undefined
+            ? undefined
+            : new Date(Date.now() - request.window.withinDays * DAY_MS).toISOString()),
+        before: request.window.before,
+        excludeSubagents: true,
+      }
+      if (request.queries.length === 0) {
+        return executeNodeWorker(
+          WORKER_DIR,
+          { kind: 'session-index', args: scope as SessionIndexWorkerArgs, context: { sessionID } },
+          signal,
+        )
+      }
+      const pages = await Promise.all(
+        request.queries.map(
+          async (q) =>
+            `### history_search q=${JSON.stringify(q)}\n${await executeNodeWorker(
+              WORKER_DIR,
+              {
+                kind: 'search',
+                args: { ...scope, q } as HistorySearchWorkerArgs,
+                context: { sessionID },
+              },
+              signal,
+            )}`,
+        ),
+      )
+      return pages.join('\n\n')
+    }
+    await context.session.hook('prompt', async () => {
+      // Native configuration transforms can register after plugin setup. Prompt
+      // admission runs after startup, before model selection, so reapply here.
+      await refreshSurface(async () => {
+        await refreshModels()
+        const { data: agent } = await context.agent.get({ agentID: RECALL_AGENT_NAME })
+        const staleModel =
+          agent.model !== undefined &&
+          !availableModels.has(`${agent.model.providerID}/${agent.model.id}`)
+        return staleModel || judgeChanged()
+      })
     })
 
-    await context.tool.transform((tools) => {
+    const configureTools: Parameters<Plugin.Context['tool']['transform']>[0] = (tools) => {
+      const judge = activeJudge
       if (judge === undefined) {
         tools.add({
           name: HISTORY_SEARCH_COMMAND,
@@ -252,12 +337,16 @@ export const RecallPlugin = Plugin.define({
           const args = input as HistoryReadWorkerArgs & { readonly criteria?: readonly string[] }
           const criteria = args.criteria?.filter((criterion) => criterion.trim().length > 0) ?? []
           const content = await workers.run(toolContext.sessionID, (signal) =>
-            judge === undefined || criteria.length === 0 || args.cursor === undefined
+            judge === undefined ||
+            usableJudge() === undefined ||
+            criteria.length === 0 ||
+            args.cursor === undefined
               ? executeNodeWorker(WORKER_DIR, { kind: 'read', args }, signal)
               : focusedRead(args.cursor, criteria, args.n ?? FOCUSED_READ_SEGMENTS, {
                   judge,
                   run: runs.get(toolContext.sessionID),
                   decide: (decision) => context.experimental.generate.decisions(decision),
+                  onJudgeDown: markJudgeDown,
                   ...historyWorkers(judge, {
                     workerDir: WORKER_DIR,
                     sessionID: toolContext.sessionID,
@@ -399,21 +488,28 @@ export const RecallPlugin = Plugin.define({
             before: request.before,
             withinDays: request.withinDays,
           }
-          const content = await workers.run(sessionID, (signal) =>
-            findEvidence(
-              { queries: request.queries ?? [], criteria: request.criteria, window },
-              {
-                judge,
-                run: runs.get(sessionID),
-                decide: (decision) => context.experimental.generate.decisions(decision),
-                ...historyWorkers(judge, {
-                  workerDir: WORKER_DIR,
-                  sessionID,
-                  directory: request.directory,
-                  signal,
-                }),
-              },
-            ),
+          const queries = request.queries ?? []
+          const standard = (signal: AbortSignal) =>
+            standardHistory(sessionID, { queries, window, directory: request.directory }, signal)
+          const content = await workers.run(sessionID, async (signal) =>
+            usableJudge() === undefined
+              ? `judge unavailable: ${STANDARD_FALLBACK_NOTICE}\n${await standard(signal)}`
+              : findEvidence(
+                  { queries, criteria: request.criteria, window },
+                  {
+                    judge,
+                    run: runs.get(sessionID),
+                    decide: (decision) => context.experimental.generate.decisions(decision),
+                    standard: () => standard(signal),
+                    onJudgeDown: markJudgeDown,
+                    ...historyWorkers(judge, {
+                      workerDir: WORKER_DIR,
+                      sessionID,
+                      directory: request.directory,
+                      signal,
+                    }),
+                  },
+                ),
           )
           void executeNodeWorker(
             WORKER_DIR,
@@ -431,7 +527,8 @@ export const RecallPlugin = Plugin.define({
           return { content }
         },
       })
-    })
+    }
+    await registerSurface()
 
     return async () => {
       eventSubscription.abort()
@@ -443,6 +540,7 @@ export const RecallPlugin = Plugin.define({
   },
 })
 
+type Registration = Awaited<ReturnType<Plugin.Context['agent']['transform']>>
 type CommandDraft = Parameters<Parameters<Plugin.Context['command']['transform']>[0]>[0]
 
 function registerCommand(

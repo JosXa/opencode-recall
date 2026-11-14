@@ -56,6 +56,8 @@ export interface FindDependencies {
     terms: readonly string[],
   ) => Promise<readonly SessionDigest[]>
   readonly transcripts: (cursors: readonly string[]) => Promise<readonly FocusTranscript[]>
+  readonly standard: () => Promise<string>
+  readonly onJudgeDown: () => void
   readonly now?: () => number
 }
 
@@ -86,6 +88,8 @@ interface ScanOutcome {
 }
 
 const RRF_OFFSET = 60
+export const STANDARD_FALLBACK_NOTICE =
+  'recall switched to the standard history tools (history_search, history_read, session_index); below are history_search results for the queries.'
 const FIRST_PROMPT_LINE_CHARS = 240
 const NEAR_MISSES = 3
 const NEAR_MISS_FOCUS_SESSIONS = 2
@@ -153,15 +157,11 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
       .map(([stage, ms]) => `${stage}=${Math.round(ms)}`)
       .join(' ')}`
   if (judgeDown(verdicts, jev)) {
+    deps.onJudgeDown()
     return [
       jev.footer(),
-      jev.unavailableNotice(
-        'the sessions below are unjudged search candidates in search rank order, with lexical passages only.',
-      ),
-      renderUnjudged(verdicts, criteria, queries.length, deps.judge),
-      ...scanLines(scan),
-      ...notices,
-      timing(),
+      jev.unavailableNotice(STANDARD_FALLBACK_NOTICE),
+      await deps.standard(),
     ].join('\n')
   }
   const strongest = Math.max(0, ...verdicts.map((verdict) => verdict.match ?? 0))
@@ -220,63 +220,6 @@ function judgeDown(verdicts: readonly Verdict[], jev: Jev): boolean {
   if (verdicts.length === 0) return jev.unavailable
   const unjudged = verdicts.filter((verdict) => verdict.unjudged).length
   return jev.failures > 0 && unjudged * 2 > verdicts.length
-}
-
-function renderUnjudged(
-  verdicts: readonly Verdict[],
-  criteria: readonly string[],
-  queryCount: number,
-  judge: JudgeConfig,
-): string {
-  const settings = judge.find
-  const ordered = [...verdicts].sort(
-    (left, right) => right.candidate.fusion - left.candidate.fusion,
-  )
-  const sessions = ordered.slice(0, settings.maxSessions)
-  const lines = [
-    `history_find: ${sessions.length} of ${ordered.length} candidate sessions shown unjudged; ${queryCount} queries.`,
-    ...criteria.map((criterion, index) => `c${index + 1}: ${criterion}`),
-  ]
-  let budget = settings.outputChars - lines.join('\n').length
-  let heldPassages = 0
-  sessions.forEach((verdict, position) => {
-    const block = unjudgedBlock(verdict, Math.floor(budget / (sessions.length - position)))
-    heldPassages += block.held
-    budget -= block.text.length + 1
-    lines.push(block.text)
-  })
-  lines.push(
-    `held back: ${ordered.length - sessions.length} sessions, ${heldPassages} passages over the ${settings.outputChars}-char budget.`,
-  )
-  return lines.join('\n')
-}
-
-function unjudgedBlock(verdict: Verdict, allowance: number): { text: string; held: number } {
-  const lines = [
-    `## ${verdict.candidate.cursor} unjudged · ${sessionFacts(verdict)}`,
-    `  first prompt: ${truncate(verdict.digest.firstPrompt, FIRST_PROMPT_LINE_CHARS)}`,
-  ]
-  let used = lines.join('\n').length
-  const rendered = verdict.digest.passages
-    .map((passage) => ({
-      passage,
-      text: `  - ${passage.cursor} ${passage.role} ${passage.time.slice(0, 16)}: ${passage.text}`,
-    }))
-    .sort((left, right) => Number(right.passage.hit) - Number(left.passage.hit))
-  const shown = rendered.filter((item) => {
-    if (used + item.text.length + 1 > allowance) return false
-    used += item.text.length + 1
-    return true
-  })
-  return {
-    text: [
-      ...lines,
-      ...shown
-        .sort((left, right) => left.passage.time.localeCompare(right.passage.time))
-        .map((item) => item.text),
-    ].join('\n'),
-    held: rendered.length - shown.length,
-  }
 }
 
 async function scanWindow(
