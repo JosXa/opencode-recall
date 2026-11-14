@@ -245,12 +245,35 @@ Set `judge.model` to a decision model such as `typesafe-ai/jev-latest` to give t
   "judge": {
     "model": "typesafe-ai/jev-latest",
     // Optional tuning; see schema/config.schema.json for every knob and its default.
-    "find": { "candidateSessions": 24, "maxSessions": 5, "outputChars": 9000 }
+    "maxRunTokens": 800000,
+    "scan": { "excludeDirectories": ["/shepherd/topic-agent/", "/oca/jobs/"] }
   }
 }
 ```
 
-`history_find({ queries, criteria })` runs all queries through one lexical and semantic search, fuses the hits per session, asks the decision model whether each candidate session meets every criterion and which of its passages carry the evidence, and returns the matching sessions with their best passages, cursors and probabilities. Without `judge`, the agent keeps the four history tools and the original prompt.
+`history_find({ queries, criteria, withinDays?, after?, before?, directory? })` runs all queries through one lexical and semantic search. With a time window, or with no queries, it also has the decision model score compact digests of every main session in the window, so sessions described only by a screenshot or a file name still surface. It judges every candidate session against each criterion, reads the whole transcript of the best sessions in segments (tool calls included) and returns the matching sessions with their best segments and passages, cursors and probabilities. Verdicts, segment scores and matching sessions are kept for the rest of the recall run, so a second call is cheap; `judge.maxRunTokens` caps the decision-model input per run. `history_read` gains a `criteria` option that returns only the matching segments of the containing session.
+
+With `judge` set, the recall agent sees `history_find`, `history_read` and `session_save`. Without it, the agent keeps the four original history tools and prompt. The first line of every judged tool result reports decision-model usage as `[jev calls=<n> input_tokens=<t> ms=<wall>]`.
+
+OpenCode applies global permission rules after plugin agent transforms, so a global `subagent` or `shell` allow would reach the recall agent. Restate the recall sandbox in your config and list every Recall tool:
+
+```jsonc
+{
+  "agents": {
+    "recall": {
+      "permissions": [
+        { "action": "*", "resource": "*", "effect": "deny" },
+        { "action": "execute", "resource": "*", "effect": "allow" },
+        { "action": "history_find", "resource": "*", "effect": "allow" },
+        { "action": "history_search", "resource": "*", "effect": "allow" },
+        { "action": "history_read", "resource": "*", "effect": "allow" },
+        { "action": "session_index", "resource": "*", "effect": "allow" },
+        { "action": "session_save", "resource": "*", "effect": "allow" }
+      ]
+    }
+  }
+}
+```
 
 ### Read V1 and V2 history from either runtime
 

@@ -139,15 +139,25 @@ export class SessionWorkerAbortRegistry {
   }
 }
 
+const SESSION_END_EVENTS = new Set([
+  'session.execution.succeeded',
+  'session.execution.failed',
+  'session.execution.interrupted',
+  'session.deleted',
+])
+
 export async function forwardSessionInterruptions(
   events: AsyncIterable<{ type: string; data?: unknown }>,
   workers: SessionWorkerAbortRegistry,
+  onSessionEnd: (sessionID: string) => void = () => undefined,
 ): Promise<void> {
   for await (const event of events) {
-    if (event.type !== 'session.execution.interrupted') continue
+    if (!SESSION_END_EVENTS.has(event.type)) continue
     const data = event.data
     if (typeof data !== 'object' || data === null || !('sessionID' in data)) continue
-    if (typeof data.sessionID === 'string') workers.interrupt(data.sessionID)
+    if (typeof data.sessionID !== 'string') continue
+    if (event.type === 'session.execution.interrupted') workers.interrupt(data.sessionID)
+    onSessionEnd(data.sessionID)
   }
 }
 

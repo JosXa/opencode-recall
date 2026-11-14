@@ -11,6 +11,7 @@ import type { EmbeddingProvider } from './embedding.js'
 import { normalizeWindow } from './normalizer.js'
 import { digestSession, type PassageSelection, type SessionDigest } from './passages.js'
 import type { PromptExample } from './prompt-example.js'
+import { estimateDigestTokens, type ScannedSession, sessionDigestText } from './scan.js'
 import { rankSearchRows } from './search.js'
 import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar.js'
 import {
@@ -25,6 +26,25 @@ interface OpenSource {
   readonly source: ResolvedSource
   readonly history: HistoryDatabase
   sidecar?: RecallSidecarIndex
+}
+
+export interface SessionScanOptions {
+  readonly maxSessions: number
+  readonly maxInputTokens: number
+  readonly digestChars: number
+  readonly promptSamples: number
+  readonly sessionsPerDirectory: number
+  readonly excludeDirectories: readonly string[]
+  readonly after?: number | undefined
+  readonly before?: number | undefined
+  readonly directory?: string | undefined
+  readonly excludeSessionId?: string | undefined
+}
+
+export interface SessionScanResult {
+  readonly sessions: readonly ScannedSession[]
+  readonly total: number
+  readonly continueBefore?: number
 }
 
 export interface SearchShard {
@@ -175,6 +195,8 @@ export class HistorySources {
     const lists = queries.map((): SearchRow[] => [])
     for (const entry of available) {
       const index = this.#index(entry)
+      if (options.after !== undefined && (index.newestActivity(undefined) ?? 0) < options.after)
+        continue
       const scoped = {
         ...scopedOptions(options, entry.source.id),
         ...(options.excludeSubagents
@@ -304,6 +326,90 @@ export class HistorySources {
       parts,
       selection,
     )
+  }
+
+  public newestActivity(): number | undefined {
+    const times = this.#available().flatMap(
+      (entry) => this.#index(entry).newestActivity(undefined) ?? [],
+    )
+    return times.length === 0 ? undefined : Math.max(...times)
+  }
+
+  public scanSessions(options: SessionScanOptions): SessionScanResult {
+    const headers = this.#available()
+      .flatMap((entry) => {
+        const filters = scopedOptions(
+          {
+            limit: options.maxSessions,
+            sessionIds: entry.history.mainSessionIds(true),
+            ...(options.after === undefined ? {} : { after: options.after }),
+            ...(options.before === undefined ? {} : { before: options.before }),
+            ...(options.directory === undefined ? {} : { directory: options.directory }),
+            ...(options.excludeSessionId === undefined
+              ? {}
+              : { excludeSessionId: options.excludeSessionId }),
+          },
+          entry.source.id,
+        )
+        const scoped = options.directory !== undefined
+        return this.#index(entry)
+          .sessionHeaders(
+            filters,
+            scoped ? [] : options.excludeDirectories,
+            scoped ? options.maxSessions : options.sessionsPerDirectory,
+            options.maxSessions,
+          )
+          .map((header) => ({ entry, header }))
+      })
+      .sort((left, right) => right.header.updatedAt - left.header.updatedAt)
+    const sessions: ScannedSession[] = []
+    let tokens = 0
+    for (const { entry, header } of headers.slice(0, options.maxSessions)) {
+      const parts = this.#index(entry).digestParts(
+        header.sessionId,
+        options.promptSamples,
+        options.digestChars,
+      )
+      const text = sessionDigestText(header, parts, options.digestChars)
+      if (text === undefined) continue
+      const cost = estimateDigestTokens(text)
+      if (tokens + cost > options.maxInputTokens) {
+        return { sessions, total: headers.length, continueBefore: header.updatedAt + 1 }
+      }
+      tokens += cost
+      sessions.push({
+        cursor: encodeCursor({
+          version: 1,
+          sessionId: header.sessionId,
+          ...(this.#sources.length > 1 ? { sourceId: entry.source.id } : {}),
+        }),
+        title: header.title,
+        directory: header.directory,
+        updatedAt: header.updatedAt,
+        text,
+      })
+    }
+    return {
+      sessions,
+      total: headers.length,
+      ...(headers.length > options.maxSessions
+        ? { continueBefore: (headers[options.maxSessions - 1]?.header.updatedAt ?? 0) + 1 }
+        : {}),
+    }
+  }
+
+  public readContainingSession(value: string): TranscriptWindow {
+    const { entry, cursor } = this.#route(value)
+    if (cursor.messageId === undefined) return this.readSession(value)
+    const anchor = this.read(value, { mode: 'around', limit: 1 })
+    const session = this.#window(
+      normalizeWindow(entry.history.readSession(anchor.sessionId)),
+      entry.source,
+    )
+    const anchored = session.messages.find((message) => message.id === cursor.messageId)
+    return anchored === undefined
+      ? session
+      : { ...session, anchorIndex: anchored.index, anchorCursor: anchor.anchorCursor }
   }
 
   public readSession(value: string): TranscriptWindow {

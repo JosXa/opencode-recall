@@ -32,12 +32,16 @@ export interface RecallConfig {
 
 export interface JudgeConfig {
   readonly model: { readonly providerID: string; readonly id: string }
+  readonly maxRunTokens: number
   readonly find: FindSettings
+  readonly scan: ScanSettings
+  readonly focus: FocusSettings
 }
 
 export interface FindSettings {
   readonly queryHits: number
   readonly candidateSessions: number
+  readonly carriedSessions: number
   readonly passagesPerSession: number
   readonly passageChars: number
   readonly maxSessions: number
@@ -49,9 +53,36 @@ export interface FindSettings {
   readonly searchShards: number
 }
 
+export interface ScanSettings {
+  readonly maxSessions: number
+  readonly maxInputTokens: number
+  readonly pack: number
+  readonly candidates: number
+  readonly minProbability: number
+  readonly fallbackDays: number
+  readonly digestChars: number
+  readonly promptSamples: number
+  readonly sessionsPerDirectory: number
+  readonly excludeDirectories: readonly string[]
+}
+
+export interface FocusSettings {
+  readonly sessions: number
+  readonly segmentTokens: number
+  readonly windowTokens: number
+  readonly maxScanTokens: number
+  readonly readScanTokens: number
+  readonly minScore: number
+  readonly segmentsPerSession: number
+  readonly segmentChars: number
+  readonly textChars: number
+  readonly toolChars: number
+}
+
 export const DEFAULT_FIND_SETTINGS: FindSettings = {
   queryHits: 40,
-  candidateSessions: 24,
+  candidateSessions: 30,
+  carriedSessions: 6,
   passagesPerSession: 8,
   passageChars: 600,
   maxSessions: 5,
@@ -62,6 +93,34 @@ export const DEFAULT_FIND_SETTINGS: FindSettings = {
   concurrency: 24,
   searchShards: 2,
 }
+
+export const DEFAULT_SCAN_SETTINGS: ScanSettings = {
+  maxSessions: 500,
+  maxInputTokens: 120_000,
+  pack: 32,
+  candidates: 12,
+  minProbability: 0.2,
+  fallbackDays: 60,
+  digestChars: 700,
+  promptSamples: 4,
+  sessionsPerDirectory: 40,
+  excludeDirectories: ['/shepherd/topic-agent/', '/oca/jobs/'],
+}
+
+export const DEFAULT_FOCUS_SETTINGS: FocusSettings = {
+  sessions: 3,
+  segmentTokens: 500,
+  windowTokens: 24_000,
+  maxScanTokens: 40_000,
+  readScanTokens: 150_000,
+  minScore: 0.5,
+  segmentsPerSession: 2,
+  segmentChars: 1_500,
+  textChars: 1_500,
+  toolChars: 160,
+}
+
+export const DEFAULT_MAX_RUN_TOKENS = 800_000
 
 interface RawConfig {
   readonly database?: {
@@ -76,7 +135,10 @@ interface RawConfig {
   }
   readonly judge?: {
     readonly model?: string
+    readonly maxRunTokens?: number
     readonly find?: Partial<FindSettings>
+    readonly scan?: Partial<ScanSettings>
+    readonly focus?: Partial<FocusSettings>
   }
 }
 
@@ -180,14 +242,17 @@ export function loadJudgeConfig(): JudgeConfig | undefined {
   return judgeConfig(readConfigFile().judge).judge
 }
 
-function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeConfig } {
+export function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeConfig } {
   const model = nonEmptyString(raw?.model)
   const separator = model?.indexOf('/') ?? -1
   if (model === undefined || separator <= 0) return {}
   return {
     judge: {
       model: { providerID: model.slice(0, separator), id: model.slice(separator + 1) },
+      maxRunTokens: raw?.maxRunTokens ?? DEFAULT_MAX_RUN_TOKENS,
       find: { ...DEFAULT_FIND_SETTINGS, ...raw?.find },
+      scan: { ...DEFAULT_SCAN_SETTINGS, ...raw?.scan },
+      focus: { ...DEFAULT_FOCUS_SETTINGS, ...raw?.focus },
     },
   }
 }

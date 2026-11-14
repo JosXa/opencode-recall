@@ -18,11 +18,25 @@
           "description": "Named read-only source databases. Both runtimes may share each source's dedicated sidecar. Overrides path/indexPath.",
           "items": {
             "type": "object",
-            "required": ["id", "path"],
+            "required": [
+              "id",
+              "path"
+            ],
             "properties": {
-              "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Stable source name used in qualified cursors." },
-              "path": { "type": "string", "minLength": 1 },
-              "indexPath": { "type": "string", "minLength": 1, "description": "Dedicated sidecar; defaults to a hash of the canonical source path." }
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "description": "Stable source name used in qualified cursors."
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "indexPath": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Dedicated sidecar; defaults to a hash of the canonical source path."
+              }
             },
             "additionalProperties": false
           }
@@ -63,29 +77,272 @@
     "judge": {
       "type": "object",
       "description": "Decision model that judges recall evidence. Enables the history_find tool when set.",
-      "required": ["model"],
+      "required": [
+        "model"
+      ],
       "properties": {
         "model": {
           "type": "string",
           "pattern": "^[^/]+/.+$",
-          "examples": ["typesafe-ai/jev-latest", "opencode/jev-1.13-free"],
+          "examples": [
+            "typesafe-ai/jev-latest",
+            "opencode/jev-1.13-free"
+          ],
           "description": "Decision model as providerID/modelID."
+        },
+        "maxRunTokens": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 20000000,
+          "default": 800000,
+          "description": "Hard cap on decision-model input tokens per recall run; calls beyond it are skipped."
         },
         "find": {
           "type": "object",
           "description": "history_find pipeline knobs.",
           "properties": {
-            "queryHits": { "type": "integer", "minimum": 1, "maximum": 100, "default": 40, "description": "Search hits fetched per query before session fusion." },
-            "candidateSessions": { "type": "integer", "minimum": 1, "maximum": 64, "default": 24, "description": "Fused sessions sent to the judge." },
-            "passagesPerSession": { "type": "integer", "minimum": 1, "maximum": 24, "default": 8, "description": "Passages per session shown to the judge." },
-            "passageChars": { "type": "integer", "minimum": 120, "maximum": 4000, "default": 600, "description": "Excerpt length per passage." },
-            "maxSessions": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5, "description": "Matching sessions returned in the evidence pack." },
-            "maxPassagesPerSession": { "type": "integer", "minimum": 1, "maximum": 12, "default": 4, "description": "Passages returned per matching session." },
-            "sessionThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Minimum probability that a session satisfies every criterion." },
-            "passageThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Minimum probability that a passage is evidence." },
-            "outputChars": { "type": "integer", "minimum": 1000, "maximum": 40000, "default": 9000, "description": "Evidence pack size budget in characters." },
-            "concurrency": { "type": "integer", "minimum": 1, "maximum": 64, "default": 24, "description": "Parallel judge requests." },
-            "searchShards": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2, "description": "Parallel search worker processes; history sources are split across them." }
+            "queryHits": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 40,
+              "description": "Search hits fetched per query before session fusion."
+            },
+            "candidateSessions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 30,
+              "description": "Fused sessions sent to the judge."
+            },
+            "passagesPerSession": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 24,
+              "default": 8,
+              "description": "Passages per session shown to the judge."
+            },
+            "passageChars": {
+              "type": "integer",
+              "minimum": 120,
+              "maximum": 4000,
+              "default": 600,
+              "description": "Excerpt length per passage."
+            },
+            "maxSessions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 5,
+              "description": "Matching sessions returned in the evidence pack."
+            },
+            "maxPassagesPerSession": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12,
+              "default": 4,
+              "description": "Passages returned per matching session."
+            },
+            "sessionThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.5,
+              "description": "Minimum probability that a session satisfies every criterion."
+            },
+            "passageThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.5,
+              "description": "Minimum probability that a passage is evidence."
+            },
+            "outputChars": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 40000,
+              "default": 9000,
+              "description": "Evidence pack size budget in characters."
+            },
+            "concurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 24,
+              "description": "Parallel judge requests."
+            },
+            "searchShards": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8,
+              "default": 2,
+              "description": "Parallel search worker processes; history sources are split across them."
+            },
+            "carriedSessions": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 24,
+              "default": 6,
+              "description": "Best sessions from earlier history_find calls in the same recall run that rejoin the judged pool."
+            }
+          },
+          "additionalProperties": false
+        },
+        "scan": {
+          "type": "object",
+          "description": "Session digest scan: judges compact digests of every main session in a time window.",
+          "properties": {
+            "maxSessions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 500,
+              "description": "Newest sessions in the window that get scanned."
+            },
+            "maxInputTokens": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 2000000,
+              "default": 120000,
+              "description": "Scan input token cap per call."
+            },
+            "pack": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 32,
+              "description": "Session digests per decision request."
+            },
+            "candidates": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 12,
+              "description": "Best scanned sessions fused into the judged pool."
+            },
+            "minProbability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.2,
+              "description": "Minimum scan probability for a session to join the pool."
+            },
+            "fallbackDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650,
+              "default": 60,
+              "description": "Window scanned when neither search nor a window found a matching session."
+            },
+            "digestChars": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 4000,
+              "default": 700,
+              "description": "Digest size per session."
+            },
+            "promptSamples": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12,
+              "default": 4,
+              "description": "User prompts sampled into each digest."
+            },
+            "sessionsPerDirectory": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 40,
+              "description": "Newest sessions per directory that get scanned, so busy agent directories cannot crowd a window; ignored when directory is given."
+            },
+            "excludeDirectories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "/shepherd/topic-agent/",
+                "/oca/jobs/"
+              ],
+              "description": "Directory fragments of agent-run sessions left out of scans unless directory is given."
+            }
+          },
+          "additionalProperties": false
+        },
+        "focus": {
+          "type": "object",
+          "description": "Focused reads: whole-session segments judged against the criteria.",
+          "properties": {
+            "sessions": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10,
+              "default": 3,
+              "description": "Top matching sessions that get a focused read inside history_find."
+            },
+            "segmentTokens": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 8000,
+              "default": 500,
+              "description": "Segment size in decision-model tokens."
+            },
+            "windowTokens": {
+              "type": "integer",
+              "minimum": 2000,
+              "maximum": 60000,
+              "default": 24000,
+              "description": "Segments packed per decision request, in tokens."
+            },
+            "maxScanTokens": {
+              "type": "integer",
+              "minimum": 2000,
+              "maximum": 1000000,
+              "default": 40000,
+              "description": "Tokens scanned per session; segments near search hits go first."
+            },
+            "readScanTokens": {
+              "type": "integer",
+              "minimum": 2000,
+              "maximum": 2000000,
+              "default": 150000,
+              "description": "Tokens scanned by history_read with criteria; segments near the cursor go first."
+            },
+            "minScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.5,
+              "description": "Minimum segment score to be shown."
+            },
+            "segmentsPerSession": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 2,
+              "description": "Segments shown per session."
+            },
+            "segmentChars": {
+              "type": "integer",
+              "minimum": 300,
+              "maximum": 8000,
+              "default": 1500,
+              "description": "Characters shown per segment."
+            },
+            "textChars": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 20000,
+              "default": 1500,
+              "description": "Characters kept per message text in segments."
+            },
+            "toolChars": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4000,
+              "default": 160,
+              "description": "Characters kept per tool call line in segments."
+            }
           },
           "additionalProperties": false
         }

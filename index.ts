@@ -18,13 +18,15 @@ import {
   SESSION_SAVE_COMMAND,
 } from './src/commands.js'
 import { loadJudgeConfig } from './src/config.js'
-import { type FindSearchResult, findEvidence } from './src/find.js'
+import { findEvidence } from './src/find.js'
+import { historyWorkers } from './src/find-workers.js'
+import { focusedRead } from './src/focus.js'
 import {
   executeNodeWorker,
   forwardSessionInterruptions,
   SessionWorkerAbortRegistry,
 } from './src/node-worker-client.js'
-import type { SessionDigest } from './src/passages.js'
+import { RecallRuns } from './src/recall-run.js'
 import {
   DEFAULT_READ_LIMIT,
   DEFAULT_SEARCH_LIMIT,
@@ -47,7 +49,22 @@ const TOOL_NAMES = [
   SESSION_INDEX_COMMAND,
   SESSION_SAVE_COMMAND,
 ] as const
+const JUDGED_TOOL_NAMES = [
+  HISTORY_FIND_COMMAND,
+  HISTORY_READ_COMMAND,
+  SESSION_SAVE_COMMAND,
+] as const
 const RECALL_TOOL_NAMES = [...TOOL_NAMES, HISTORY_FIND_COMMAND] as const
+const FOCUSED_READ_SEGMENTS = 5
+const COMMAND_DESCRIPTIONS = [
+  [HISTORY_SEARCH_COMMAND, 'Search OpenCode history and return ranked cursor anchors'],
+  [HISTORY_READ_COMMAND, 'Read a cursor-paginated ChatML window from OpenCode history'],
+  [
+    SESSION_INDEX_COMMAND,
+    'Browse recallable OpenCode sessions by recency, title, and usefulness signals',
+  ],
+  [SESSION_SAVE_COMMAND, 'Materialize session to file'],
+] as const
 const OBJECT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -57,7 +74,7 @@ export const RecallPlugin = Plugin.define({
   id: 'josxa.opencode-recall',
   async setup(context) {
     const judge = loadJudgeConfig()
-    const enabledTools = judge === undefined ? TOOL_NAMES : RECALL_TOOL_NAMES
+    const enabledTools: readonly string[] = judge === undefined ? TOOL_NAMES : JUDGED_TOOL_NAMES
     const recallAgentPrompt = await loadRecallAgentPrompt(
       judge === undefined ? RECALL_AGENT_PROMPT_FILE : RECALL_AGENT_FIND_PROMPT_FILE,
     )
@@ -74,11 +91,13 @@ export const RecallPlugin = Plugin.define({
     const enabled = context.options['autocomplete'] === true
     const stopAutocomplete = enabled ? await registerAutocomplete(context, WORKER_DIR) : undefined
     const workers = new SessionWorkerAbortRegistry()
+    const runs = new RecallRuns(judge?.maxRunTokens ?? 0)
     const eventSubscription = new AbortController()
     let interruptionError: unknown
     const interruptionForwarder = forwardSessionInterruptions(
       context.event.subscribe({ signal: eventSubscription.signal }),
       workers,
+      (sessionID) => runs.end(sessionID),
     ).catch((error: unknown) => {
       if (!eventSubscription.signal.aborted) interruptionError = error
     })
@@ -96,26 +115,25 @@ export const RecallPlugin = Plugin.define({
       }
     })
 
+    if (judge !== undefined) {
+      await context.session.hook('context', (request) => {
+        if (String(request.agent) !== RECALL_AGENT_NAME) return
+        void runs
+          .get(request.sessionID)
+          .prepare(() =>
+            executeNodeWorker(
+              WORKER_DIR,
+              { kind: 'sync-lexical', args: {} },
+              new AbortController().signal,
+            ),
+          )
+      })
+    }
+
     await context.command.transform((commands) => {
-      registerCommand(
-        context,
-        commands,
-        HISTORY_SEARCH_COMMAND,
-        'Search OpenCode history and return ranked cursor anchors',
-      )
-      registerCommand(
-        context,
-        commands,
-        HISTORY_READ_COMMAND,
-        'Read a cursor-paginated ChatML window from OpenCode history',
-      )
-      registerCommand(
-        context,
-        commands,
-        SESSION_INDEX_COMMAND,
-        'Browse recallable OpenCode sessions by recency, title, and usefulness signals',
-      )
-      registerCommand(context, commands, SESSION_SAVE_COMMAND, 'Materialize session to file')
+      for (const [name, description] of COMMAND_DESCRIPTIONS) {
+        if (enabledTools.includes(name)) registerCommand(context, commands, name, description)
+      }
     })
     const configureRecall: Parameters<Plugin.Context['agent']['transform']>[0] = (agents) => {
       for (const agent of agents.list()) {
@@ -165,40 +183,42 @@ export const RecallPlugin = Plugin.define({
     })
 
     await context.tool.transform((tools) => {
-      tools.add({
-        name: HISTORY_SEARCH_COMMAND,
-        description: 'Recall OpenCode history.',
-        input: {
-          ...OBJECT_SCHEMA,
-          properties: {
-            q: { type: 'string', description: 'Recall query. Empty=recent.' },
-            excludeSubagents: {
-              type: 'boolean',
-              description: 'Return only main sessions. Default false.',
+      if (judge === undefined) {
+        tools.add({
+          name: HISTORY_SEARCH_COMMAND,
+          description: 'Recall OpenCode history.',
+          input: {
+            ...OBJECT_SCHEMA,
+            properties: {
+              q: { type: 'string', description: 'Recall query. Empty=recent.' },
+              excludeSubagents: {
+                type: 'boolean',
+                description: 'Return only main sessions. Default false.',
+              },
+              n: { type: 'number', description: `Max hits. Default ${DEFAULT_SEARCH_LIMIT}.` },
+              directory: { type: 'string', description: 'Session directory.' },
+              includeCurrentSession: {
+                type: 'boolean',
+                description: 'Include current session. Default false.',
+              },
+              after: { type: 'string', description: 'Created after ISO date/time.' },
+              before: { type: 'string', description: 'Created before ISO date/time.' },
             },
-            n: { type: 'number', description: `Max hits. Default ${DEFAULT_SEARCH_LIMIT}.` },
-            directory: { type: 'string', description: 'Session directory.' },
-            includeCurrentSession: {
-              type: 'boolean',
-              description: 'Include current session. Default false.',
-            },
-            after: { type: 'string', description: 'Created after ISO date/time.' },
-            before: { type: 'string', description: 'Created before ISO date/time.' },
           },
-        },
-        options: directToolOptions(HISTORY_SEARCH_COMMAND),
-        async execute(input, toolContext) {
-          const args = input as HistorySearchWorkerArgs
-          const content = await workers.run(toolContext.sessionID, (signal) =>
-            executeNodeWorker(
-              WORKER_DIR,
-              { kind: 'search', args, context: { sessionID: toolContext.sessionID } },
-              signal,
-            ),
-          )
-          return { content }
-        },
-      })
+          options: directToolOptions(HISTORY_SEARCH_COMMAND),
+          async execute(input, toolContext) {
+            const args = input as HistorySearchWorkerArgs
+            const content = await workers.run(toolContext.sessionID, (signal) =>
+              executeNodeWorker(
+                WORKER_DIR,
+                { kind: 'search', args, context: { sessionID: toolContext.sessionID } },
+                signal,
+              ),
+            )
+            return { content }
+          },
+        })
+      }
 
       tools.add({
         name: HISTORY_READ_COMMAND,
@@ -218,63 +238,87 @@ export const RecallPlugin = Plugin.define({
             },
             n: {
               type: 'number',
-              description: `Message limit (default ${DEFAULT_READ_LIMIT}).`,
+              description:
+                judge === undefined
+                  ? `Message limit (default ${DEFAULT_READ_LIMIT}).`
+                  : `Message limit (default ${DEFAULT_READ_LIMIT}); with criteria: segments shown (default ${FOCUSED_READ_SEGMENTS}).`,
             },
+            ...(judge === undefined
+              ? {}
+              : {
+                  criteria: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description:
+                      'Focused read: judge the whole containing session in segments and return only the segments matching these conditions. mode is ignored.',
+                  },
+                }),
           },
         },
         options: directToolOptions(HISTORY_READ_COMMAND),
         async execute(input, toolContext) {
+          const args = input as HistoryReadWorkerArgs & { readonly criteria?: readonly string[] }
+          const criteria = args.criteria?.filter((criterion) => criterion.trim().length > 0) ?? []
           const content = await workers.run(toolContext.sessionID, (signal) =>
-            executeNodeWorker(
-              WORKER_DIR,
-              { kind: 'read', args: input as HistoryReadWorkerArgs },
-              signal,
-            ),
+            judge === undefined || criteria.length === 0 || args.cursor === undefined
+              ? executeNodeWorker(WORKER_DIR, { kind: 'read', args }, signal)
+              : focusedRead(args.cursor, criteria, args.n ?? FOCUSED_READ_SEGMENTS, {
+                  judge,
+                  run: runs.get(toolContext.sessionID),
+                  decide: (decision) => context.experimental.generate.decisions(decision),
+                  ...historyWorkers(judge, {
+                    workerDir: WORKER_DIR,
+                    sessionID: toolContext.sessionID,
+                    signal,
+                  }),
+                }),
           )
           return { content }
         },
       })
 
-      tools.add({
-        name: SESSION_INDEX_COMMAND,
-        description: 'Browse OpenCode history sessions.',
-        input: {
-          ...OBJECT_SCHEMA,
-          properties: {
-            n: {
-              type: 'number',
-              description: `Max sessions. Default ${DEFAULT_SESSION_INDEX_LIMIT}.`,
-            },
-            title: { type: 'string', description: 'Case-insensitive session title filter.' },
-            excludeSubagents: {
-              type: 'boolean',
-              description: 'Return only main sessions. Default false.',
-            },
-            directory: { type: 'string', description: 'Exact session directory.' },
-            includeCurrentSession: {
-              type: 'boolean',
-              description: 'Include current session. Default false.',
-            },
-            after: { type: 'string', description: 'Session updated after ISO date/time.' },
-            before: { type: 'string', description: 'Session updated before ISO date/time.' },
-          },
-        },
-        options: directToolOptions(SESSION_INDEX_COMMAND),
-        async execute(input, toolContext) {
-          const content = await workers.run(toolContext.sessionID, (signal) =>
-            executeNodeWorker(
-              WORKER_DIR,
-              {
-                kind: 'session-index',
-                args: input as SessionIndexWorkerArgs,
-                context: { sessionID: toolContext.sessionID },
+      if (judge === undefined) {
+        tools.add({
+          name: SESSION_INDEX_COMMAND,
+          description: 'Browse OpenCode history sessions.',
+          input: {
+            ...OBJECT_SCHEMA,
+            properties: {
+              n: {
+                type: 'number',
+                description: `Max sessions. Default ${DEFAULT_SESSION_INDEX_LIMIT}.`,
               },
-              signal,
-            ),
-          )
-          return { content }
-        },
-      })
+              title: { type: 'string', description: 'Case-insensitive session title filter.' },
+              excludeSubagents: {
+                type: 'boolean',
+                description: 'Return only main sessions. Default false.',
+              },
+              directory: { type: 'string', description: 'Exact session directory.' },
+              includeCurrentSession: {
+                type: 'boolean',
+                description: 'Include current session. Default false.',
+              },
+              after: { type: 'string', description: 'Session updated after ISO date/time.' },
+              before: { type: 'string', description: 'Session updated before ISO date/time.' },
+            },
+          },
+          options: directToolOptions(SESSION_INDEX_COMMAND),
+          async execute(input, toolContext) {
+            const content = await workers.run(toolContext.sessionID, (signal) =>
+              executeNodeWorker(
+                WORKER_DIR,
+                {
+                  kind: 'session-index',
+                  args: input as SessionIndexWorkerArgs,
+                  context: { sessionID: toolContext.sessionID },
+                },
+                signal,
+              ),
+            )
+            return { content }
+          },
+        })
+      }
 
       tools.add({
         name: SESSION_SAVE_COMMAND,
@@ -285,7 +329,9 @@ export const RecallPlugin = Plugin.define({
             cursor: {
               type: 'string',
               description:
-                'Exact session cursor from session_index, including source-qualified ses_* cursors.',
+                judge === undefined
+                  ? 'Exact session cursor from session_index, including source-qualified ses_* cursors.'
+                  : 'Exact session cursor from history_find, including source-qualified ses_* cursors.',
             },
             path: { type: 'string', description: 'Workspace-relative destination.' },
             format: {
@@ -318,7 +364,7 @@ export const RecallPlugin = Plugin.define({
       tools.add({
         name: HISTORY_FIND_COMMAND,
         description:
-          'Find judged evidence in OpenCode history in one call: searches every query, fuses hits by session, and a decision model checks each session and passage against the criteria.',
+          'Find judged evidence in OpenCode history in one call: searches the queries, scans session digests in the time window, and a decision model checks each candidate session, passage and transcript segment against the criteria.',
         input: {
           ...OBJECT_SCHEMA,
           properties: {
@@ -326,7 +372,7 @@ export const RecallPlugin = Plugin.define({
               type: 'array',
               items: { type: 'string' },
               description:
-                '3-8 search queries: distinctive terms, synonyms, likely file/tool/project names, German and English variants.',
+                '0-8 search queries: distinctive terms, synonyms, likely file/tool/project names, German and English variants. Empty: scan the time window only.',
             },
             criteria: {
               type: 'array',
@@ -334,79 +380,59 @@ export const RecallPlugin = Plugin.define({
               description:
                 '1-4 atomic yes/no conditions a matching session must satisfy, e.g. "The session changes the Traefik config of josxa.dev".',
             },
+            withinDays: {
+              type: 'number',
+              description:
+                'Relative window: sessions active in the last N days of history. Use for recent, yesterday, last week.',
+            },
+            after: { type: 'string', description: 'Active after ISO date/time.' },
+            before: { type: 'string', description: 'Active before ISO date/time.' },
             directory: { type: 'string', description: 'Exact session directory.' },
-            after: { type: 'string', description: 'Created after ISO date/time.' },
-            before: { type: 'string', description: 'Created before ISO date/time.' },
           },
-          required: ['queries', 'criteria'],
+          required: ['criteria'],
         },
         options: directToolOptions(HISTORY_FIND_COMMAND),
         async execute(input, toolContext) {
           const request = input as {
-            readonly queries: readonly string[]
+            readonly queries?: readonly string[]
             readonly criteria: readonly string[]
-            readonly directory?: string
+            readonly withinDays?: number
             readonly after?: string
             readonly before?: string
+            readonly directory?: string
           }
-          const content = await workers.run(toolContext.sessionID, (signal) => {
-            const worker = (payload: Parameters<typeof executeNodeWorker>[1]) =>
-              executeNodeWorker(WORKER_DIR, payload, signal)
-            return findEvidence(request, {
-              model: judge.model,
-              settings: judge.find,
-              search: async (queries) => {
-                const shards = await Promise.all(
-                  Array.from({ length: judge.find.searchShards }, async (_, index) => {
-                    const response = await worker({
-                      kind: 'search',
-                      args: {
-                        queries,
-                        shard: { index, count: judge.find.searchShards },
-                        n: judge.find.queryHits,
-                        maxSearchLimit: judge.find.queryHits,
-                        excludeSubagents: true,
-                        directory: request.directory,
-                        after: request.after,
-                        before: request.before,
-                        sync: false,
-                        format: 'json',
-                      } as HistorySearchWorkerArgs,
-                      context: { sessionID: toolContext.sessionID },
-                    })
-                    return JSON.parse(response) as FindSearchResult
-                  }),
-                )
-                return {
-                  lists: shards.flatMap((shard) => shard.lists),
-                  notice: shards.find((shard) => shard.notice !== undefined)?.notice,
-                }
+          const sessionID = toolContext.sessionID
+          const window = {
+            after: request.after,
+            before: request.before,
+            withinDays: request.withinDays,
+          }
+          const content = await workers.run(sessionID, (signal) =>
+            findEvidence(
+              { queries: request.queries ?? [], criteria: request.criteria, window },
+              {
+                judge,
+                run: runs.get(sessionID),
+                decide: (decision) => context.experimental.generate.decisions(decision),
+                ...historyWorkers(judge, {
+                  workerDir: WORKER_DIR,
+                  sessionID,
+                  directory: request.directory,
+                  signal,
+                }),
               },
-              digest: async (sessions, queries) =>
-                JSON.parse(
-                  await worker({
-                    kind: 'session-digest',
-                    args: {
-                      sessions,
-                      queries,
-                      passagesPerSession: judge.find.passagesPerSession,
-                      passageChars: judge.find.passageChars,
-                    },
-                  }),
-                ) as readonly SessionDigest[],
-              decide: (decision) => context.experimental.generate.decisions(decision),
-            })
-          })
+            ),
+          )
           void executeNodeWorker(
             WORKER_DIR,
             {
               kind: 'search',
               args: {
-                q: request.queries[0] ?? '',
+                q: request.queries?.[0] ?? request.criteria[0] ?? 'sync',
                 n: 1,
                 format: 'json',
               } as HistorySearchWorkerArgs,
-              context: { sessionID: toolContext.sessionID },
+              context: { sessionID },
             },
             new AbortController().signal,
           ).catch(() => undefined)

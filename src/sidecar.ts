@@ -11,7 +11,12 @@ import type {
   SearchRow,
 } from './db.js'
 import type { EmbeddingProvider } from './embedding.js'
-import { LexicalIndex } from './lexical-index.js'
+import {
+  type DigestParts,
+  type Filters,
+  LexicalIndex,
+  type SessionHeader,
+} from './lexical-index.js'
 import type { SessionPart } from './passages.js'
 import { Database } from './sqlite.js'
 
@@ -363,6 +368,23 @@ export class RecallSidecarIndex {
 
   public sessionParts(sessionId: string, maxChars: number): SessionPart[] {
     return this.#lexical.sessionParts(sessionId, maxChars)
+  }
+
+  public newestActivity(excludeSessionId: string | undefined): number | undefined {
+    return this.#lexical.newestActivity(excludeSessionId)
+  }
+
+  public sessionHeaders(
+    filters: Filters,
+    excludeDirectories: readonly string[],
+    perDirectory: number,
+    limit: number,
+  ): SessionHeader[] {
+    return this.#lexical.sessionHeaders(filters, excludeDirectories, perDirectory, limit)
+  }
+
+  public digestParts(sessionId: string, samples: number, maxChars: number): DigestParts {
+    return this.#lexical.digestParts(sessionId, samples, maxChars)
   }
 
   public hasLexicalIndex(): boolean {

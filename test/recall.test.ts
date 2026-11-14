@@ -150,7 +150,11 @@ describe('plugin recall subagent', () => {
       expect(judged.agents.get(RECALL_AGENT_NAME)?.permissions).toContainEqual(
         expect.objectContaining({ action: 'history_find', effect: 'allow' }),
       )
-      expect([...judged.commands.keys()].sort()).toEqual([...TOOL_NAMES_FOR_TEST].sort())
+      expect([...judged.tools.keys()].sort()).toEqual(['history_find', 'history_read', 'session_save'])
+      expect([...judged.commands.keys()].sort()).toEqual(['history_read', 'session_save'])
+      expect(judged.agents.get(RECALL_AGENT_NAME)?.permissions).not.toContainEqual(
+        expect.objectContaining({ action: 'history_search' }),
+      )
     })
   })
 
