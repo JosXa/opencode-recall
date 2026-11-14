@@ -3,6 +3,8 @@ import type { SourceOptions } from './sources.js'
 export interface HistorySearchWorkerArgs extends SourceOptions {
   readonly excludeSubagents?: boolean | undefined
   readonly q?: string | undefined
+  readonly queries?: readonly string[] | undefined
+  readonly shard?: { readonly index: number; readonly count: number } | undefined
   readonly n?: number | undefined
   readonly maxSearchLimit?: number | undefined
   readonly directory?: string | undefined
@@ -45,7 +47,23 @@ export interface SessionSaveWorkerArgs extends SourceOptions {
   readonly historyDbPath?: string | undefined
 }
 
+export interface SessionDigestWorkerArgs extends SourceOptions {
+  readonly sessions: readonly SessionDigestTarget[]
+  readonly queries: readonly string[]
+  readonly passagesPerSession: number
+  readonly passageChars: number
+}
+
+export interface SessionDigestTarget {
+  readonly cursor: string
+  readonly hitPartIds: readonly string[]
+}
+
 export type HistoryWorkerRequest =
+  | {
+      readonly kind: 'session-digest'
+      readonly args: SessionDigestWorkerArgs
+    }
   | {
       readonly kind: 'prompt-examples'
       readonly args: SourceOptions & { readonly prefix: string; readonly sync?: boolean }

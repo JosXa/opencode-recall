@@ -236,6 +236,22 @@ Most users never need to edit it. Open it when your OpenCode database lives some
 
 Environment variables still work as overrides for CI, MCP, and temporary experiments: `OPENCODE_DB_PATH`, `OPENCODE_RECALL_DB_PATH`, `OPENCODE_RECALL_OLLAMA_URL`, and `OPENCODE_RECALL_EMBED_MODEL`.
 
+### One-call evidence search with a decision model
+
+Set `judge.model` to a decision model such as `typesafe-ai/jev-latest` to give the recall agent the `history_find` tool and a two-turn prompt:
+
+```jsonc
+{
+  "judge": {
+    "model": "typesafe-ai/jev-latest",
+    // Optional tuning; see schema/config.schema.json for every knob and its default.
+    "find": { "candidateSessions": 24, "maxSessions": 5, "outputChars": 9000 }
+  }
+}
+```
+
+`history_find({ queries, criteria })` runs all queries through one lexical and semantic search, fuses the hits per session, asks the decision model whether each candidate session meets every criterion and which of its passages carry the evidence, and returns the matching sessions with their best passages, cursors and probabilities. Without `judge`, the agent keeps the four history tools and the original prompt.
+
 ### Read V1 and V2 history from either runtime
 
 Set the same named sources in both runtimes' `recall.jsonc` files:

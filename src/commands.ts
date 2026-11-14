@@ -2,6 +2,7 @@ export const HISTORY_SEARCH_COMMAND = 'history_search'
 export const HISTORY_READ_COMMAND = 'history_read'
 export const SESSION_INDEX_COMMAND = 'session_index'
 export const SESSION_SAVE_COMMAND = 'session_save'
+export const HISTORY_FIND_COMMAND = 'history_find'
 export const RECALL_AGENT_NAME = 'recall'
 
 export const RECALL_AGENT_DESCRIPTION =
