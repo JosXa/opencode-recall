@@ -426,6 +426,14 @@ describe('cursor decoding', () => {
     })
   })
 
+  test('accepts V2 message ids with numbered suffixes from forked sessions', () => {
+    expect(decodeCursor('v2::msg_1221ed9170010835K4QqRbeFtw_179')).toEqual({
+      version: 1,
+      sourceId: 'v2',
+      messageId: 'msg_1221ed9170010835K4QqRbeFtw_179',
+    })
+  })
+
   test('rejects invalid cursors without leaking JSON parse garbage', () => {
     expect(() => decodeCursor('definitely-not-a-cursor')).toThrow(
       'Invalid history cursor. Expected msg_..., ses_..., or an encoded cursor from history_search.',

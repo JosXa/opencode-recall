@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 
-const MESSAGE_ID_PATTERN = /^msg_[A-Za-z0-9]+$/
+const MESSAGE_ID_PATTERN = /^msg_[A-Za-z0-9_]+$/
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/
 const QUALIFIED_CURSOR_PATTERN = /^([A-Za-z0-9_-]+)::(.+)$/
 export const SOURCE_ID_PATTERN = /^[A-Za-z0-9_-]+$/
