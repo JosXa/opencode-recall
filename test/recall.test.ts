@@ -123,6 +123,17 @@ describe('plugin recall subagent', () => {
     }
   })
 
+  test('keeps prompt autocomplete off by default and tells the TUI so', async () => {
+    const harness = pluginHarness({ preseedCommands: false, preseedRecallAgent: false })
+    const stop = await RecallPlugin.setup(harness.context)
+
+    expect(await harness.rpcs.get('josxa.recall.autocomplete')?.prepare()).toEqual({
+      enabled: false,
+    })
+    await stop?.()
+    expect(harness.rpcs.size).toBe(0)
+  })
+
   test('creates its agent and all slash commands on a clean installation', async () => {
     const harness = pluginHarness({ preseedCommands: false, preseedRecallAgent: false })
     await RecallPlugin.setup(harness.context)
@@ -687,6 +698,14 @@ describe('cursor decoding', () => {
     expect(decodeCursor('ses_1ea07e649ffe8rG0kUBk4oJQC8')).toEqual({
       version: 1,
       sessionId: 'ses_1ea07e649ffe8rG0kUBk4oJQC8',
+    })
+  })
+
+  test('accepts V2 message ids with numbered suffixes from forked sessions', () => {
+    expect(decodeCursor('v2::msg_1221ed9170010835K4QqRbeFtw_179')).toEqual({
+      version: 1,
+      sourceId: 'v2',
+      messageId: 'msg_1221ed9170010835K4QqRbeFtw_179',
     })
   })
 
@@ -2001,6 +2020,7 @@ function pluginHarness(
   const decisionModels = options.decisionModels ?? []
   const decide = options.decide ?? answerEveryQuestion(0.9)
   const decisions: unknown[] = []
+  const rpcs = new Map<string, { prepare: () => Promise<unknown> }>()
   const agents = new Map<string, TestAgent>([
     [
       'build',
@@ -2030,6 +2050,7 @@ function pluginHarness(
   let beforePrompt: (() => Promise<void>) | undefined
   let beforeContext: ((request: { agent: string; sessionID: string }) => void) | undefined
   const context = {
+    options: {},
     app: { name: 'opencode', version: 'test', channel: 'test' },
     event: {
       subscribe() {
@@ -2093,6 +2114,12 @@ function pluginHarness(
             },
           },
         }),
+    rpc: {
+      async register(definition: { id: string }, handlers: { prepare: () => Promise<unknown> }) {
+        rpcs.set(definition.id, handlers)
+        return { dispose: async () => void rpcs.delete(definition.id) }
+      },
+    },
     tool: {
       async hook(
         name: string,
@@ -2137,6 +2164,7 @@ function pluginHarness(
     agents,
     commands,
     decisions,
+    rpcs,
     prompts,
     tools,
     get beforePrompt() {

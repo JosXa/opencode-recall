@@ -7,6 +7,6 @@
     "noEmit": false,
     "rootDir": "."
   },
-  "include": ["index.ts", "src/**/*.ts"],
+  "include": ["index.ts", "tui.tsx", "src/**/*.ts"],
   "exclude": ["node_modules", "dist", "test", "scripts"]
 }

@@ -91,6 +91,78 @@ Register the built directory in your V2 config. Replace the example path with th
 }
 ```
 
+## Prompt autocomplete (opt in)
+
+Recall can show one dim suggestion at the end of the prompt. While you type, Luna
+completes your draft immediately while Recall finds earlier human prompts with
+similar prefixes. A second Luna call applies those examples of your wording
+when they arrive, while the first suggestion remains usable during refinement.
+Accepting a suggestion cancels refinement so accepted text stays intact.
+If you keep typing along the visible suggestion, Recall refines your updated
+draft after the next typing pause while keeping the suggestion visible.
+Cached suggestions resume unfinished refinement. Completed refinements are reused.
+When a turn ends, the session's model suggests a short next action in
+the empty input. Suggestions stay outside the edit buffer until you accept them.
+After 500 ms without typing, a small gray `•` pulses inside the caret cell while
+generation runs without an available suggestion. The dot hides as soon as a
+suggestion appears, including during refinement or background refill.
+Its display delay is separate from autocomplete timing.
+Edits to trailing spaces keep the dot visible and preserve its display deadline.
+Cached suggestions stay visible while the background request runs.
+
+Autocomplete is off by default. Turn it on in the server plugin registration
+(`opencode.json`):
+
+```jsonc
+{
+  "plugins": [{
+    "package": "file:///path/to/opencode-recall/dist",
+    "options": {
+      "autocomplete": true,
+      "autocompleteModel": "openai/gpt-6-luna-fast"
+    }
+  }]
+}
+```
+
+Also register the same package in the TUI configuration (`cli.json`) so the
+prompt can show suggestions. The TUI follows the connected server: while the
+server leaves autocomplete off, or does not load Recall at all, the TUI shows
+nothing and starts no model requests. Restart the server after changing these
+settings.
+
+The preview shows up to three upcoming sentences from the cached continuation.
+**Right** accepts one sentence at a time,
+revealing the next cached sentence as space becomes available.
+Long sentences are accepted together, even if stored as several internal chunks.
+Short replies start one background request before the first acceptance.
+Longer replies refill as you use the cached chunks.
+Adding, deleting, or replacing trailing spaces preserves the debounce deadline,
+active generation, and cached chunks. Other edits or dismissal cancel the background request.
+Superseded generations close their provider connections, including a slower
+initial call when refinement finishes first.
+**Ctrl+Right** or **Alt+Right** accepts one word. **Escape** dismisses it. **Enter** submits only
+the text you have typed or accepted. Suggestions hide while selecting text,
+moving away from the end, using shell mode, or opening snippets and native menus.
+Suggestions wrap inside the prompt card using the available rows. Recall
+temporarily reserves extra input height within OpenCode's limit and restores it
+when the suggestion hides. Longer suggestions are clipped at that limit.
+
+Recall embeds the first 256 normalized characters of the draft and searches
+existing embeddings of human prompts, then reads original wording before snippet
+expansion. Retrieval runs alongside the first Luna call and never delays it.
+Cached examples inform the first call without a second generation. It excludes
+subagents, the active session, and known automated prompts. Typing generation
+sends the draft, preceding user message, recent assistant reply, and selected
+examples to the configured provider.
+The turn-end suggestion uses transient `session.generate` and adds no messages
+to history.
+
+To compare backends against held-out conversations, run
+`pnpm run benchmark:autocomplete prepare`, then
+`pnpm run benchmark:autocomplete run`. Results contain private prompt text and
+are stored outside the repository.
+
 ## Set up embeddings (Ollama)
 
 Semantic search uses [Ollama](https://ollama.com) running locally. Install it, that's it:

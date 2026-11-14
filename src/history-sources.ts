@@ -10,6 +10,7 @@ import {
 import type { EmbeddingProvider } from './embedding.js'
 import { normalizeWindow } from './normalizer.js'
 import { digestSession, type PassageSelection, type SessionDigest } from './passages.js'
+import type { PromptExample } from './prompt-example.js'
 import { estimateDigestTokens, type ScannedSession, sessionDigestText } from './scan.js'
 import { rankSearchRows } from './search.js'
 import { RecallSidecarIndex, type SyncOptions, type SyncResult } from './sidecar.js'
@@ -52,15 +53,17 @@ export interface SearchShard {
 }
 
 interface SearchFeatures {
-  readonly excludeAutomations?: boolean
   readonly lexical: boolean
   readonly semantic: boolean
   readonly sync: boolean
   readonly syncOptions?: SyncOptions | undefined
+  readonly excludeAutomations?: boolean
 }
 
 const LEXICAL_FALLBACK_NOTICE =
   'Semantic search unavailable; showing lexical results only. Install Ollama: https://ollama.com/download.'
+
+const automationDirectory = /\/(?:shepherd\/topic-agent|oca\/jobs)\//u
 
 class EmbeddingUnavailableError extends Error {}
 
@@ -93,6 +96,51 @@ export class HistorySources {
     return combineSync(
       this.#available().map((entry) => this.#index(entry).syncLexicalHistory(entry.history)),
     )
+  }
+
+  public async promptExamples(
+    prefix: string,
+    sessionID: string,
+    provider: EmbeddingProvider,
+  ): Promise<PromptExample[]> {
+    if (!prefix.trim()) return []
+    // Match the human's partial prompt against earlier human prompt prefixes.
+    const result = await this.search(
+      prefix,
+      {
+        limit: 40,
+        excludeSubagents: true,
+        excludeSessionId: sessionID,
+        before: Date.now() - 30_000,
+        role: 'user',
+      },
+      { semantic: true, lexical: false, sync: false, excludeAutomations: true },
+      provider,
+    )
+    // Autocomplete must retry semantic retrieval after a provider recovers.
+    // The history tools can use lexical fallback; don't cache it as a match here.
+    if (result.notice) throw new Error(result.notice)
+    const examples: PromptExample[] = []
+    const seen = new Set<string>()
+    for (const row of result.rows) {
+      if (
+        row.role !== 'user' ||
+        row.source === 'session-title' ||
+        automationDirectory.test(`${row.directory}/`)
+      )
+        continue
+      const source =
+        this.#sources.find((candidate) => candidate.id === row.sourceId) ?? this.#sources[0]
+      if (!source) continue
+      const prompt = this.#entry(source).history.humanPrompt(row.messageId)
+      if (!prompt || seen.has(prompt)) continue
+      seen.add(prompt)
+      examples.push({
+        prompt: prompt.slice(0, 600),
+      })
+      if (examples.length === 5) break
+    }
+    return examples
   }
 
   public async search(

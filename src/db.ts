@@ -1,5 +1,6 @@
 import { loadConfig } from './config.js'
 import { installHistorySchema } from './history-schema.js'
+import { isHumanPrompt, submittedPrompt } from './prompt-example.js'
 import { Database } from './sqlite.js'
 
 const WHITESPACE_REGEX = /\s+/u
@@ -13,6 +14,7 @@ export interface SearchOptions {
   readonly before?: number
   readonly directory?: string
   readonly excludeSessionId?: string
+  /** Semantic only: filter roles before the candidate limit. */
   readonly role?: 'user' | 'assistant'
   /** Lexical only: every term must occur in the session, as a word prefix. */
   readonly matchAll?: boolean
@@ -667,6 +669,47 @@ export class HistoryDatabase {
     }
 
     return this.readWindowForSession(sessionId, { mode: 'head', limit: totalMessages })
+  }
+
+  /** Recover original human wording rather than expanded snippets or synthetic turns. */
+  public humanPrompt(messageId: string): string | undefined {
+    const hasNative =
+      this.#db.query("select 1 from main.sqlite_master where name = 'session_message'").get() !==
+      null
+    if (hasNative) {
+      const row = this.#db
+        .query<{ data: string }, [string]>(`
+          select json_object('agents', json_extract(data, '$.agents'),
+            'text', json_extract(data, '$.text'), 'metadata', json_extract(data, '$.metadata')) as data
+          from main.session_message where id = ? and type = 'user'
+        `)
+        .get(messageId)
+      if (row) {
+        const data = JSON.parse(row.data) as { agents?: unknown; text?: string }
+        // The host composer sends agents, including an empty list. This is an
+        // authorship proxy for old history, not a guarantee about API clients.
+        if (!Array.isArray(data.agents)) return
+        const text = submittedPrompt(row.data, data.text ?? '')
+        return isHumanPrompt(text) ? text : undefined
+      }
+    }
+    const row = this.#db
+      .query<{ id: string; data: string }, [string]>(`
+        select id, data from message where id = ? and json_extract(data, '$.role') = 'user'
+      `)
+      .get(messageId)
+    if (!row) return
+    const parts = readParts(this.#db, [row.id]).flatMap((part) => {
+      const data = JSON.parse(part.data) as {
+        type?: string
+        text?: string
+        synthetic?: boolean
+        ignored?: boolean
+      }
+      return data.type === 'text' && !data.synthetic && !data.ignored ? [data.text ?? ''] : []
+    })
+    const text = submittedPrompt(row.data, parts.join('\n'))
+    return isHumanPrompt(text) ? text : undefined
   }
 
   public readWindow(anchorMessageId: string, options: ReadOptions): WindowRows {

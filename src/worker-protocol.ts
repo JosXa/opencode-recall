@@ -98,6 +98,11 @@ export type HistoryWorkerRequest =
       readonly args: SessionDigestWorkerArgs
     }
   | {
+      readonly kind: 'prompt-examples'
+      readonly args: SourceOptions & { readonly prefix: string; readonly sync?: boolean }
+      readonly context: { readonly sessionID: string }
+    }
+  | {
       readonly kind: 'search'
       readonly args: HistorySearchWorkerArgs
       readonly context: {
