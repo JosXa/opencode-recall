@@ -29,7 +29,20 @@ interface LexicalSessionRow {
   readonly bm25: number
 }
 
-interface Filters {
+export interface SessionHeader {
+  readonly sessionId: string
+  readonly title: string
+  readonly directory: string
+  readonly updatedAt: number
+}
+
+export interface DigestParts {
+  readonly promptCount: number
+  readonly prompts: readonly string[]
+  readonly answer?: string
+}
+
+export interface Filters {
   readonly sessionIds?: readonly string[]
   readonly after?: number
   readonly before?: number
@@ -157,6 +170,65 @@ export class LexicalIndex {
         order by pm.time_created, pm.rowid
       `)
       .all(maxChars, sessionId)
+  }
+
+  public newestActivity(excludeSessionId: string | undefined): number | undefined {
+    const row = this.#db
+      .query<{ readonly time: number | null }, [string]>(
+        'select max(time_created) as time from lex_session_meta where session_id != ?',
+      )
+      .get(excludeSessionId ?? '')
+    return row?.time ?? undefined
+  }
+
+  public sessionHeaders(
+    filters: Filters,
+    excludeDirectories: readonly string[],
+    perDirectory: number,
+    limit: number,
+  ): SessionHeader[] {
+    const params: (string | number)[] = []
+    const clauses = buildFilterClauses(filters, params, 'sm')
+    const directoryClauses = excludeDirectories.map((fragment) => {
+      params.push(fragment)
+      return ` and instr(sm.directory || '/', ?) = 0`
+    })
+    params.push(perDirectory, limit)
+    return this.#db
+      .query<SessionHeader, (string | number)[]>(`
+        select sessionId, title, directory, updatedAt from (
+          select sm.session_id as sessionId, sm.session_title as title, sm.directory,
+            sm.time_created as updatedAt,
+            row_number() over (partition by sm.directory order by sm.time_created desc) as rank
+          from lex_session_meta sm
+          where 1 = 1${clauses}${directoryClauses.join('')}
+        )
+        where rank <= ?
+        order by updatedAt desc
+        limit ?
+      `)
+      .all(...params)
+  }
+
+  public digestParts(sessionId: string, samples: number, maxChars: number): DigestParts {
+    const outline = this.#db
+      .query<{ readonly id: number; readonly role: string }, [string]>(`
+        select rowid as id, role from lex_part_meta
+        where session_id = ? and source = 'text' and role in ('user', 'assistant')
+        order by time_created, rowid
+      `)
+      .all(sessionId)
+    const text = this.#db.query<{ readonly text: string }, [number, number]>(
+      'select substr(text, 1, ?) as text from lex_part_fts where rowid = ?',
+    )
+    const read = (id: number) => text.get(maxChars, id)?.text ?? ''
+    const prompts = outline.filter((part) => part.role === 'user')
+    const answer = outline.findLast((part) => part.role === 'assistant')
+    return {
+      promptCount: prompts.length,
+      prompts: spread(prompts, samples).map((part) => read(part.id)),
+      ...(answer === undefined ? {} : { answer: read(answer.id) }),
+    }
   }
 
   public hasIndexedRows(): boolean {
@@ -654,6 +726,12 @@ function buildMatchQuery(query: string, all: boolean): string {
   }
   const quoted = terms.map((term) => `"${term.replaceAll('"', '""')}"`)
   return all ? quoted.map((term) => `${term}*`).join(' AND ') : quoted.join(' OR ')
+}
+
+function spread<T>(items: readonly T[], count: number): T[] {
+  if (items.length <= count) return [...items]
+  const step = (items.length - 1) / Math.max(1, count - 1)
+  return Array.from({ length: count }, (_, position) => items[Math.round(position * step)] as T)
 }
 
 function buildFilterClauses(
