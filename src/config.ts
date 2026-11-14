@@ -30,8 +30,14 @@ export interface RecallConfig {
   readonly judge?: JudgeConfig | undefined
 }
 
+export interface JudgeModel {
+  readonly providerID: string
+  readonly id: string
+}
+
 export interface JudgeConfig {
-  readonly model: { readonly providerID: string; readonly id: string }
+  readonly model: JudgeModel
+  readonly models: readonly JudgeModel[]
   readonly maxRunTokens: number
   readonly timeoutMs: number
   readonly find: FindSettings
@@ -150,7 +156,7 @@ interface RawConfig {
     readonly model?: string
   }
   readonly judge?: {
-    readonly model?: string
+    readonly model?: string | readonly string[]
     readonly maxRunTokens?: number
     readonly timeoutMs?: number
     readonly find?: Partial<FindSettings>
@@ -260,12 +266,13 @@ export function loadJudgeConfig(): JudgeConfig | undefined {
 }
 
 export function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeConfig } {
-  const model = nonEmptyString(raw?.model)
-  const separator = model?.indexOf('/') ?? -1
-  if (model === undefined || separator <= 0) return {}
+  const models = [raw?.model ?? []].flat().flatMap(judgeModel)
+  const [model] = models
+  if (model === undefined) return {}
   return {
     judge: {
-      model: { providerID: model.slice(0, separator), id: model.slice(separator + 1) },
+      model,
+      models,
       maxRunTokens: raw?.maxRunTokens ?? DEFAULT_MAX_RUN_TOKENS,
       timeoutMs: raw?.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS,
       find: { ...DEFAULT_FIND_SETTINGS, ...raw?.find },
@@ -273,6 +280,21 @@ export function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeCo
       focus: { ...DEFAULT_FOCUS_SETTINGS, ...raw?.focus },
     },
   }
+}
+
+export function availableJudge(
+  judge: JudgeConfig | undefined,
+  isAvailable: (model: JudgeModel) => boolean,
+): JudgeConfig | undefined {
+  const model = judge?.models.find(isAvailable)
+  return judge === undefined || model === undefined ? undefined : { ...judge, model }
+}
+
+function judgeModel(value: string): JudgeModel[] {
+  const model = nonEmptyString(value)
+  const separator = model?.indexOf('/') ?? -1
+  if (model === undefined || separator <= 0 || separator === model.length - 1) return []
+  return [{ providerID: model.slice(0, separator), id: model.slice(separator + 1) }]
 }
 
 function applyEnvOverrides(config: RecallConfig): RecallConfig {

@@ -82,13 +82,26 @@
       ],
       "properties": {
         "model": {
-          "type": "string",
-          "pattern": "^[^/]+/.+$",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[^/]+/.+$"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "pattern": "^[^/]+/.+$"
+              }
+            }
+          ],
           "examples": [
             "typesafe-ai/jev-latest",
-            "opencode/jev-1.13-free"
+            "opencode/jev-1.13-free",
+            ["litellm/microsoft-decision-1", "typesafe-ai/jev-latest"]
           ],
-          "description": "Decision model as providerID/modelID."
+          "description": "Decision model as providerID/modelID, or a list of them. Recall uses the first model that OpenCode lists as an enabled decision model, so one shared file can name the judge of every machine."
         },
         "maxRunTokens": {
           "type": "integer",

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest'
 
-import { DEFAULT_FIND_SETTINGS, type JudgeConfig, judgeConfig } from '../src/config.js'
+import {
+  availableJudge,
+  DEFAULT_FIND_SETTINGS,
+  type JudgeConfig,
+  judgeConfig,
+} from '../src/config.js'
 import {
   type FindDependencies,
   type FindHit,
@@ -937,6 +942,45 @@ describe('judge availability', () => {
       'judge budget spent: the run reached its 10-token judge budget; showing a plain window around v2::msg_1 instead of judged segments.',
       '<window around v2::msg_1>',
     ])
+  })
+})
+
+describe('judge model list', () => {
+  const ids = (judge: JudgeConfig | undefined) =>
+    judge?.models.map((model) => `${model.providerID}/${model.id}`)
+
+  test('accepts one model or an ordered list and drops malformed entries', () => {
+    expect(ids(judgeConfig({ model: 'typesafe-ai/jev-latest' }).judge)).toEqual([
+      'typesafe-ai/jev-latest',
+    ])
+    expect(
+      ids(
+        judgeConfig({
+          model: ['litellm/microsoft-decision-1', 'jev-latest', 'typesafe-ai/', '', 'opencode/jev-1.13-free'],
+        }).judge,
+      ),
+    ).toEqual(['litellm/microsoft-decision-1', 'opencode/jev-1.13-free'])
+    expect(judgeConfig({ model: ['jev-latest', '/jev'] }).judge).toBeUndefined()
+    expect(judgeConfig({ model: [] }).judge).toBeUndefined()
+  })
+
+  test('picks the first listed model that is available', () => {
+    const judge = judgeConfig({
+      model: ['litellm/microsoft-decision-1', 'typesafe-ai/jev-latest', 'opencode/jev-1.13-free'],
+    }).judge
+    const pick = (available: string[]) =>
+      availableJudge(judge, (model) => available.includes(`${model.providerID}/${model.id}`))?.model
+
+    expect(pick(['opencode/jev-1.13-free', 'typesafe-ai/jev-latest'])).toEqual({
+      providerID: 'typesafe-ai',
+      id: 'jev-latest',
+    })
+    expect(pick(['litellm/microsoft-decision-1', 'typesafe-ai/jev-latest'])).toEqual({
+      providerID: 'litellm',
+      id: 'microsoft-decision-1',
+    })
+    expect(pick([])).toBeUndefined()
+    expect(availableJudge(undefined, () => true)).toBeUndefined()
   })
 })
 
