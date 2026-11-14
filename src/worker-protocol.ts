@@ -3,6 +3,8 @@ import type { SourceOptions } from './sources.js'
 export interface HistorySearchWorkerArgs extends SourceOptions {
   readonly excludeSubagents?: boolean | undefined
   readonly q?: string | undefined
+  readonly queries?: readonly string[] | undefined
+  readonly shard?: { readonly index: number; readonly count: number } | undefined
   readonly n?: number | undefined
   readonly maxSearchLimit?: number | undefined
   readonly directory?: string | undefined
@@ -10,6 +12,7 @@ export interface HistorySearchWorkerArgs extends SourceOptions {
   readonly excludeSessionId?: string | undefined
   readonly after?: string | undefined
   readonly before?: string | undefined
+  readonly withinDays?: number | undefined
   readonly historyDbPath?: string | undefined
   readonly sidecarDbPath?: string | undefined
   readonly semantic?: boolean | undefined
@@ -45,7 +48,55 @@ export interface SessionSaveWorkerArgs extends SourceOptions {
   readonly historyDbPath?: string | undefined
 }
 
+export interface SessionDigestWorkerArgs extends SourceOptions {
+  readonly sessions: readonly SessionDigestTarget[]
+  readonly queries: readonly string[]
+  readonly passagesPerSession: number
+  readonly passageChars: number
+}
+
+export interface SessionDigestTarget {
+  readonly cursor: string
+  readonly hitPartIds: readonly string[]
+}
+
+export interface SessionScanWorkerArgs extends SourceOptions {
+  readonly after?: string | undefined
+  readonly before?: string | undefined
+  readonly withinDays?: number | undefined
+  readonly directory?: string | undefined
+  readonly maxSessions: number
+  readonly maxInputTokens: number
+  readonly digestChars: number
+  readonly promptSamples: number
+  readonly sessionsPerDirectory: number
+  readonly excludeDirectories: readonly string[]
+}
+
+export interface FocusTranscriptsWorkerArgs extends SourceOptions {
+  readonly cursors: readonly string[]
+  readonly textChars: number
+  readonly toolChars: number
+}
+
 export type HistoryWorkerRequest =
+  | {
+      readonly kind: 'scan-sessions'
+      readonly args: SessionScanWorkerArgs
+      readonly context: { readonly sessionID: string }
+    }
+  | {
+      readonly kind: 'focus-transcripts'
+      readonly args: FocusTranscriptsWorkerArgs
+    }
+  | {
+      readonly kind: 'sync-lexical'
+      readonly args: SourceOptions
+    }
+  | {
+      readonly kind: 'session-digest'
+      readonly args: SessionDigestWorkerArgs
+    }
   | {
       readonly kind: 'prompt-examples'
       readonly args: SourceOptions & { readonly prefix: string; readonly sync?: boolean }

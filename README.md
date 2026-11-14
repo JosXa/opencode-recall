@@ -236,6 +236,45 @@ Most users never need to edit it. Open it when your OpenCode database lives some
 
 Environment variables still work as overrides for CI, MCP, and temporary experiments: `OPENCODE_DB_PATH`, `OPENCODE_RECALL_DB_PATH`, `OPENCODE_RECALL_OLLAMA_URL`, and `OPENCODE_RECALL_EMBED_MODEL`.
 
+### One-call evidence search with a decision model
+
+Set `judge.model` to a decision model such as `typesafe-ai/jev-latest` to give the recall agent the `history_find` tool and a two-turn prompt:
+
+```jsonc
+{
+  "judge": {
+    "model": "typesafe-ai/jev-latest",
+    // Optional tuning; see schema/config.schema.json for every knob and its default.
+    "maxRunTokens": 800000,
+    "scan": { "excludeDirectories": ["/shepherd/topic-agent/", "/oca/jobs/"] }
+  }
+}
+```
+
+`history_find({ queries, criteria, withinDays?, after?, before?, directory? })` runs all queries through one lexical and semantic search. With a time window, or with no queries, it also has the decision model score compact digests of every main session in the window, so sessions described only by a screenshot or a file name still surface. It judges every candidate session against each criterion, reads the whole transcript of the best sessions in segments (tool calls included) and returns the matching sessions with their best segments and passages, cursors and probabilities. Verdicts, segment scores and matching sessions are kept for the rest of the recall run, so a second call is cheap; `judge.maxRunTokens` caps the decision-model input per run. `history_read` gains a `criteria` option that returns only the matching segments of the containing session.
+
+With `judge` set, the recall agent sees `history_find`, `history_read` and `session_save`. Without it, the agent keeps the four original history tools and prompt. The first line of every judged tool result reports decision-model usage as `[jev calls=<n> input_tokens=<t> ms=<wall>]`.
+
+OpenCode applies global permission rules after plugin agent transforms, so a global `subagent` or `shell` allow would reach the recall agent. Restate the recall sandbox in your config and list every Recall tool:
+
+```jsonc
+{
+  "agents": {
+    "recall": {
+      "permissions": [
+        { "action": "*", "resource": "*", "effect": "deny" },
+        { "action": "execute", "resource": "*", "effect": "allow" },
+        { "action": "history_find", "resource": "*", "effect": "allow" },
+        { "action": "history_search", "resource": "*", "effect": "allow" },
+        { "action": "history_read", "resource": "*", "effect": "allow" },
+        { "action": "session_index", "resource": "*", "effect": "allow" },
+        { "action": "session_save", "resource": "*", "effect": "allow" }
+      ]
+    }
+  }
+}
+```
+
 ### Read V1 and V2 history from either runtime
 
 Set the same named sources in both runtimes' `recall.jsonc` files:

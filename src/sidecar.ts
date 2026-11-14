@@ -11,7 +11,13 @@ import type {
   SearchRow,
 } from './db.js'
 import type { EmbeddingProvider } from './embedding.js'
-import { LexicalIndex } from './lexical-index.js'
+import {
+  type DigestParts,
+  type Filters,
+  LexicalIndex,
+  type SessionHeader,
+} from './lexical-index.js'
+import type { SessionPart } from './passages.js'
 import { Database } from './sqlite.js'
 
 const INDEX_SCHEMA_VERSION = '2'
@@ -360,6 +366,27 @@ export class RecallSidecarIndex {
     return this.#lexical.search(query, options)
   }
 
+  public sessionParts(sessionId: string, maxChars: number): SessionPart[] {
+    return this.#lexical.sessionParts(sessionId, maxChars)
+  }
+
+  public newestActivity(excludeSessionId: string | undefined): number | undefined {
+    return this.#lexical.newestActivity(excludeSessionId)
+  }
+
+  public sessionHeaders(
+    filters: Filters,
+    excludeDirectories: readonly string[],
+    perDirectory: number,
+    limit: number,
+  ): SessionHeader[] {
+    return this.#lexical.sessionHeaders(filters, excludeDirectories, perDirectory, limit)
+  }
+
+  public digestParts(sessionId: string, samples: number, maxChars: number): DigestParts {
+    return this.#lexical.digestParts(sessionId, samples, maxChars)
+  }
+
   public hasLexicalIndex(): boolean {
     return this.#lexical.hasIndexedRows()
   }
@@ -434,6 +461,84 @@ export class RecallSidecarIndex {
         options.role ?? null,
         Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT),
       )
+  }
+
+  public searchWithEmbeddings(
+    queries: readonly string[],
+    options: SearchOptions,
+    model: string,
+    embeddings: readonly Float32Array[],
+  ): SearchRow[][] {
+    const first = embeddings[0]
+    if (first === undefined || embeddings.length !== queries.length) return queries.map(() => [])
+    const columns = embeddings.map(
+      (_, index) => `coalesce(1 - vec_distance_cosine(embedding, ?), 0) as s${index}`,
+    )
+    const best =
+      embeddings.length === 1
+        ? 's0'
+        : `max(${embeddings.map((_, index) => `s${index}`).join(', ')})`
+    const candidates = this.#db
+      .query<SearchRow & { readonly [column: `s${number}`]: number }>(`
+        with scored as materialized (
+          select rowid, time_created, ${columns.join(', ')}
+          from chunk
+          where model = ? and dims = ?
+            and (? is null or time_created >= ?)
+            and (? is null or time_created <= ?)
+            and (? is null or directory = ?)
+            and (? is null or session_id != ?)
+            and (? is null or session_id in (select value from json_each(?)))
+            and (? is null or role = ?)
+        ), candidates as materialized (
+          select * from scored order by ${best} desc, time_created desc, rowid limit ?
+        )
+        select c.session_id as sessionId, c.session_title as sessionTitle,
+          c.directory, c.message_id as messageId, c.part_id as partId,
+          c.role, c.time_created as timeCreated, c.text,
+          coalesce(c.source, 'text') as source, candidates.*
+        from candidates join chunk c on c.rowid = candidates.rowid
+      `)
+      .all(
+        ...embeddings.map(float32ToBlob),
+        model,
+        first.length,
+        options.after ?? null,
+        options.after ?? null,
+        options.before ?? null,
+        options.before ?? null,
+        options.directory ?? null,
+        options.directory ?? null,
+        options.excludeSessionId ?? null,
+        options.excludeSessionId ?? null,
+        options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
+        options.sessionIds === undefined ? null : JSON.stringify(options.sessionIds),
+        options.role ?? null,
+        options.role ?? null,
+        Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT) * embeddings.length,
+      )
+    return queries.map((query, index) => {
+      const terms = tokenizeQuery(query)
+      return candidates
+        .map((candidate) => ({
+          sessionId: candidate.sessionId,
+          sessionTitle: candidate.sessionTitle,
+          directory: candidate.directory,
+          messageId: candidate.messageId,
+          partId: candidate.partId,
+          role: candidate.role,
+          timeCreated: candidate.timeCreated,
+          text: candidate.text,
+          ...(candidate.source === undefined ? {} : { source: candidate.source }),
+          score:
+            (candidate[`s${index}`] ?? 0) +
+            (terms.length === 0
+              ? 0
+              : (matchedTermCount(candidate.text, terms) / terms.length) * MAX_KEYWORD_BOOST),
+        }))
+        .sort((a, b) => b.score - a.score || b.timeCreated - a.timeCreated)
+        .slice(0, Math.max(options.limit, SEMANTIC_CANDIDATE_LIMIT))
+    })
   }
 
   public hasIndexedChunks(): boolean {

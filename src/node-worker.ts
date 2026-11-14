@@ -41,12 +41,19 @@ function isHistoryWorkerRequest(value: unknown): value is HistoryWorkerRequest {
   const args = value.args
   const context = value.context
 
-  if (kind === 'read' || kind === 'read-window') {
+  if (
+    kind === 'read' ||
+    kind === 'read-window' ||
+    kind === 'session-digest' ||
+    kind === 'focus-transcripts' ||
+    kind === 'sync-lexical'
+  ) {
     return isRecord(args)
   }
 
   return (
     (kind === 'search' ||
+      kind === 'scan-sessions' ||
       kind === 'session-index' ||
       kind === 'session-save' ||
       kind === 'prompt-examples') &&

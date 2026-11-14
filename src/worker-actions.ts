@@ -6,6 +6,7 @@ import { ChatmlRenderer } from './chatml-renderer.js'
 import { decodeCursor, qualifyCursor } from './cursor.js'
 import type { SessionIndexRow } from './db.js'
 import { OllamaEmbeddingProvider } from './embedding.js'
+import { readFocusTranscripts } from './focus-transcript.js'
 import { HistorySources } from './history-sources.js'
 import { parseReadMode } from './read-mode.js'
 import { formatSearchResult, formatSearchResults } from './search.js'
@@ -52,6 +53,32 @@ export async function executeWorkerRequest(request: HistoryWorkerRequest): Promi
     return executeSessionSave(request)
   }
 
+  if (request.kind === 'session-digest') {
+    return executeSessionDigest(request)
+  }
+
+  if (request.kind === 'scan-sessions') {
+    return executeSessionScan(request)
+  }
+
+  if (request.kind === 'sync-lexical') {
+    const history = new HistorySources(request.args)
+    try {
+      return JSON.stringify(history.syncLexical())
+    } finally {
+      history.close()
+    }
+  }
+
+  if (request.kind === 'focus-transcripts') {
+    const history = new HistorySources(request.args)
+    try {
+      return JSON.stringify(readFocusTranscripts(history, request.args.cursors, request.args))
+    } finally {
+      history.close()
+    }
+  }
+
   const window = executeHistoryReadWindow(request)
 
   if (request.kind === 'read-window') {
@@ -59,6 +86,96 @@ export async function executeWorkerRequest(request: HistoryWorkerRequest): Promi
   }
 
   return new ChatmlRenderer().render(window)
+}
+
+const DIGEST_PART_CHARS = 20_000
+
+function executeSessionDigest(
+  request: Extract<HistoryWorkerRequest, { readonly kind: 'session-digest' }>,
+): string {
+  const history = new HistorySources(request.args)
+  try {
+    return JSON.stringify(
+      request.args.sessions.flatMap((session) => {
+        const digest = history.sessionDigest(
+          session.cursor,
+          {
+            queries: request.args.queries,
+            hitPartIds: session.hitPartIds,
+            limit: request.args.passagesPerSession,
+            chars: request.args.passageChars,
+          },
+          DIGEST_PART_CHARS,
+        )
+        return digest === undefined ? [] : [digest]
+      }),
+    )
+  } finally {
+    history.close()
+  }
+}
+
+function executeSessionScan(
+  request: Extract<HistoryWorkerRequest, { readonly kind: 'scan-sessions' }>,
+): string {
+  const { args } = request
+  const history = new HistorySources(args)
+  try {
+    const window = resolveWindow(history, args, request.context.sessionID)
+    const excludeSessionId = currentSessionCursor(request.context.sessionID, args)
+    return JSON.stringify({
+      ...history.scanSessions({
+        maxSessions: args.maxSessions,
+        maxInputTokens: args.maxInputTokens,
+        digestChars: args.digestChars,
+        promptSamples: args.promptSamples,
+        sessionsPerDirectory: args.sessionsPerDirectory,
+        excludeDirectories: args.excludeDirectories,
+        ...window,
+        ...(args.directory === undefined || args.directory.length === 0
+          ? {}
+          : { directory: args.directory }),
+        ...(excludeSessionId.length === 0 ? {} : { excludeSessionId }),
+      }),
+      ...window,
+    })
+  } finally {
+    history.close()
+  }
+}
+
+const DAY_MS = 86_400_000
+
+function resolveWindow(
+  history: HistorySources,
+  args: {
+    readonly after?: string | undefined
+    readonly before?: string | undefined
+    readonly withinDays?: number | undefined
+  },
+  sessionID: string,
+): { after?: number; before?: number } {
+  const before = searchBeforeFilter(
+    optionalDateFilterValue('before', args.before),
+    false,
+    sessionID,
+  ).before
+  const after = optionalDateFilterValue('after', args.after)
+  const anchor = Math.min(before ?? Date.now(), history.newestActivity() ?? Date.now())
+  const windowStart =
+    args.withinDays === undefined || args.withinDays <= 0
+      ? undefined
+      : anchor - args.withinDays * DAY_MS
+  const effectiveAfter =
+    after === undefined
+      ? windowStart
+      : windowStart === undefined
+        ? after
+        : Math.max(after, windowStart)
+  return {
+    ...(effectiveAfter === undefined ? {} : { after: effectiveAfter }),
+    ...(before === undefined ? {} : { before }),
+  }
 }
 
 async function executeSessionSave(
@@ -139,17 +256,33 @@ async function executeHistorySearch(
     request.args.excludeSessionId,
   )
   const maxSearchLimit = request.args.maxSearchLimit ?? MAX_SEARCH_LIMIT
+  const db = new HistorySources(request.args)
   const options = {
     limit: clampNumber(request.args.n, DEFAULT_SEARCH_LIMIT, 1, maxSearchLimit),
     excludeSubagents: request.args.excludeSubagents === true,
     ...optionalStringFilter('directory', request.args.directory),
     ...(excludeSessionId === undefined ? {} : { excludeSessionId }),
-    ...optionalDateFilter('after', request.args.after),
-    ...searchBeforeFilter(before, includeCurrentSession, request.context.sessionID),
+    ...(request.args.withinDays === undefined
+      ? {
+          ...optionalDateFilter('after', request.args.after),
+          ...searchBeforeFilter(before, includeCurrentSession, request.context.sessionID),
+        }
+      : resolveWindow(db, request.args, request.context.sessionID)),
   }
-  const db = new HistorySources(request.args)
 
   try {
+    if (request.args.queries !== undefined) {
+      const result = await db.searchMany(
+        request.args.queries,
+        options,
+        { semantic: semanticEnabled, shard: request.args.shard },
+        semanticEnabled ? new OllamaEmbeddingProvider() : undefined,
+      )
+      return JSON.stringify({
+        lists: result.lists.map((rows) => rows.map(formatSearchResult)),
+        ...(result.notice === undefined ? {} : { notice: result.notice }),
+      })
+    }
     if (query.trim().length === 0) {
       const rows = db.recent(options)
       return formatSearchResponse(request, rows)

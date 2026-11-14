@@ -27,7 +27,116 @@ export interface RecallConfig {
     readonly ollamaUrl: string
     readonly model: string
   }
+  readonly judge?: JudgeConfig | undefined
 }
+
+export interface JudgeConfig {
+  readonly model: { readonly providerID: string; readonly id: string }
+  readonly maxRunTokens: number
+  readonly timeoutMs: number
+  readonly find: FindSettings
+  readonly scan: ScanSettings
+  readonly focus: FocusSettings
+}
+
+export interface FindSettings {
+  readonly queryHits: number
+  readonly candidateSessions: number
+  readonly carriedSessions: number
+  readonly passagesPerSession: number
+  readonly passageChars: number
+  readonly maxSessions: number
+  readonly maxPassagesPerSession: number
+  readonly sessionThreshold: number
+  readonly passageThreshold: number
+  readonly outputChars: number
+  readonly concurrency: number
+  readonly searchShards: number
+  readonly weakMatch: number
+  readonly partialMatch: number
+  readonly pickMargin: number
+  readonly pickSessions: number
+}
+
+export interface ScanSettings {
+  readonly maxSessions: number
+  readonly maxInputTokens: number
+  readonly pack: number
+  readonly candidates: number
+  readonly minProbability: number
+  readonly fallbackDays: number
+  readonly digestChars: number
+  readonly promptSamples: number
+  readonly sessionsPerDirectory: number
+  readonly excludeDirectories: readonly string[]
+}
+
+export interface FocusSettings {
+  readonly sessions: number
+  readonly segmentTokens: number
+  readonly windowTokens: number
+  readonly maxScanTokens: number
+  readonly readScanTokens: number
+  readonly minScore: number
+  readonly segmentsPerSession: number
+  readonly segmentChars: number
+  readonly textChars: number
+  readonly toolChars: number
+  readonly topSegments: number
+  readonly topNeighbours: number
+  readonly topSegmentChars: number
+}
+
+export const DEFAULT_FIND_SETTINGS: FindSettings = {
+  queryHits: 40,
+  candidateSessions: 30,
+  carriedSessions: 6,
+  passagesPerSession: 8,
+  passageChars: 600,
+  maxSessions: 8,
+  maxPassagesPerSession: 3,
+  sessionThreshold: 0.5,
+  passageThreshold: 0.5,
+  outputChars: 28_000,
+  concurrency: 24,
+  searchShards: 2,
+  weakMatch: 0.7,
+  partialMatch: 0.8,
+  pickMargin: 0.1,
+  pickSessions: 3,
+}
+
+export const DEFAULT_SCAN_SETTINGS: ScanSettings = {
+  maxSessions: 1_000,
+  maxInputTokens: 300_000,
+  pack: 32,
+  candidates: 12,
+  minProbability: 0.2,
+  fallbackDays: 60,
+  digestChars: 700,
+  promptSamples: 4,
+  sessionsPerDirectory: 40,
+  excludeDirectories: ['/shepherd/topic-agent/', '/oca/jobs/'],
+}
+
+export const DEFAULT_FOCUS_SETTINGS: FocusSettings = {
+  sessions: 4,
+  segmentTokens: 500,
+  windowTokens: 24_000,
+  maxScanTokens: 60_000,
+  readScanTokens: 150_000,
+  minScore: 0.5,
+  segmentsPerSession: 2,
+  segmentChars: 2_500,
+  textChars: 4_000,
+  toolChars: 400,
+  topSegments: 3,
+  topNeighbours: 1,
+  topSegmentChars: 8_000,
+}
+
+export const DEFAULT_MAX_RUN_TOKENS = 1_500_000
+export const DEFAULT_JUDGE_TIMEOUT_MS = 15_000
 
 interface RawConfig {
   readonly database?: {
@@ -39,6 +148,14 @@ interface RawConfig {
   readonly embeddings?: {
     readonly ollamaUrl?: string
     readonly model?: string
+  }
+  readonly judge?: {
+    readonly model?: string
+    readonly maxRunTokens?: number
+    readonly timeoutMs?: number
+    readonly find?: Partial<FindSettings>
+    readonly scan?: Partial<ScanSettings>
+    readonly focus?: Partial<FocusSettings>
   }
 }
 
@@ -134,6 +251,27 @@ function mergeConfig(base: RecallConfig, raw: RawConfig): RecallConfig {
       ollamaUrl: nonEmptyString(raw.embeddings?.ollamaUrl) ?? base.embeddings.ollamaUrl,
       model: nonEmptyString(raw.embeddings?.model) ?? base.embeddings.model,
     },
+    ...judgeConfig(raw.judge),
+  }
+}
+
+export function loadJudgeConfig(): JudgeConfig | undefined {
+  return judgeConfig(readConfigFile().judge).judge
+}
+
+export function judgeConfig(raw: RawConfig['judge']): { readonly judge?: JudgeConfig } {
+  const model = nonEmptyString(raw?.model)
+  const separator = model?.indexOf('/') ?? -1
+  if (model === undefined || separator <= 0) return {}
+  return {
+    judge: {
+      model: { providerID: model.slice(0, separator), id: model.slice(separator + 1) },
+      maxRunTokens: raw?.maxRunTokens ?? DEFAULT_MAX_RUN_TOKENS,
+      timeoutMs: raw?.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS,
+      find: { ...DEFAULT_FIND_SETTINGS, ...raw?.find },
+      scan: { ...DEFAULT_SCAN_SETTINGS, ...raw?.scan },
+      focus: { ...DEFAULT_FOCUS_SETTINGS, ...raw?.focus },
+    },
   }
 }
 
@@ -146,6 +284,7 @@ function applyEnvOverrides(config: RecallConfig): RecallConfig {
   } = process.env
   const sourcePath = expandPath(OPENCODE_DB_PATH)
   return {
+    ...config,
     database: {
       ...config.database,
       path: sourcePath ?? config.database.path,
@@ -287,5 +426,8 @@ const DEFAULT_CONFIG_CONTENT = `{
     // Default: all-minilm
     // "model": "all-minilm"
   }
+
+  // Decision model for the one-call history_find tool. Unset keeps it disabled.
+  // "judge": { "model": "typesafe-ai/jev-latest" }
 }
 `
