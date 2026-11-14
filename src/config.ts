@@ -52,6 +52,7 @@ export interface FindSettings {
   readonly concurrency: number
   readonly searchShards: number
   readonly weakMatch: number
+  readonly partialMatch: number
   readonly pickMargin: number
   readonly pickSessions: number
 }
@@ -99,13 +100,14 @@ export const DEFAULT_FIND_SETTINGS: FindSettings = {
   concurrency: 24,
   searchShards: 2,
   weakMatch: 0.7,
+  partialMatch: 0.8,
   pickMargin: 0.1,
   pickSessions: 3,
 }
 
 export const DEFAULT_SCAN_SETTINGS: ScanSettings = {
-  maxSessions: 500,
-  maxInputTokens: 120_000,
+  maxSessions: 1_000,
+  maxInputTokens: 300_000,
   pack: 32,
   candidates: 12,
   minProbability: 0.2,

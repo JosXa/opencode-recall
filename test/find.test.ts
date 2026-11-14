@@ -163,11 +163,29 @@ describe('history_find pipeline', () => {
   })
 
   test('lists the nearest sessions with per-criterion probabilities when nothing matches', async () => {
-    const deps = stubbedDependencies(() => ({ c1: 0.9, c2: 0.2 }))
+    const deps = stubbedDependencies(() => ({ c1: 0.6, c2: 0.2 }))
     const output = await findEvidence(request({ criteria: ['topic', 'evidence'] }), deps)
 
     expect(output).toContain('No session matched every criterion. Nearest sessions:')
-    expect(output).toContain('match=0.20 (c1=0.90 c2=0.20)')
+    expect(output).toContain('match=0.20 (c1=0.60 c2=0.20) partial 1/2')
+  })
+
+  test('packs sessions that clearly meet some criteria when each covers part of the request', async () => {
+    const deps = stubbedDependencies((decision) =>
+      isAuto(decision) ? { c1: 0.92, c2: 0.1, p2: 0.9 } : { c1: 0.1, c2: 0.95 },
+    )
+    const output = await findEvidence(
+      request({ queries: ['autocomplete'], criteria: ['adds autocomplete', 'documents it'] }),
+      deps,
+    )
+
+    expect(output).toContain(
+      'history_find: 0 of 2 judged sessions match all criteria (p>=0.5), 2 more match some; 1 queries.',
+    )
+    expect(output).toContain('## v2::ses_other match=0.10 (c1=0.10 c2=0.95) partial 1/2')
+    expect(output).toContain('## v2::ses_auto match=0.10 (c1=0.92 c2=0.10) partial 1/2')
+    expect(output).toContain('  - 0.90 v2::msg_prt_a1')
+    expect(output).not.toContain('Nearest sessions')
   })
 
   test('retries a failed judge call once and reports sessions that stay unjudged', async () => {

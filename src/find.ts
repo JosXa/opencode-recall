@@ -166,10 +166,12 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
       (right.match ?? -1) - (left.match ?? -1) || right.candidate.fusion - left.candidate.fusion,
   )
   const matching = ranked.filter((verdict) => isMatch(verdict, deps.judge))
+  const partial = partialMatches(ranked, deps.judge)
   const breadth = wantsBreadth([...queries, ...criteria])
+  const relevant = [...matching, ...partial]
   const focused = await timed('focus', () =>
     focusMatches(
-      matching.length > 0 ? matching : nearMisses(ranked),
+      relevant.length > 0 ? relevant : nearMisses(ranked),
       breadth ? settings.maxSessions : deps.judge.focus.sessions,
       criteria,
       deps,
@@ -190,7 +192,7 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
   const problems = jev.problems()
   return [
     jev.footer(),
-    renderEvidence(ranked, picked, focused, criteria, queries.length, deps.judge, breadth),
+    renderEvidence(ranked, picked, partial, focused, criteria, queries.length, deps.judge, breadth),
     ...(scan === undefined ? [] : [scanLine(scan)]),
     ...notices,
     ...(problems === undefined ? [] : [problems]),
@@ -500,9 +502,37 @@ function isMatch(verdict: Verdict, judge: JudgeConfig): boolean {
   return (verdict.match ?? 0) >= judge.find.sessionThreshold
 }
 
+function satisfied(verdict: Verdict, judge: JudgeConfig): number {
+  return verdict.criteria.filter((value) => (value ?? 0) >= judge.find.sessionThreshold).length
+}
+
+function meanCriterion(verdict: Verdict): number {
+  return (
+    verdict.criteria.reduce<number>((sum, value) => sum + (value ?? 0), 0) /
+    Math.max(1, verdict.criteria.length)
+  )
+}
+
+function partialMatches(ranked: readonly Verdict[], judge: JudgeConfig): Verdict[] {
+  return ranked
+    .filter(
+      (verdict) =>
+        verdict.criteria.length > 1 &&
+        !isMatch(verdict, judge) &&
+        satisfied(verdict, judge) > 0 &&
+        verdict.criteria.some((value) => (value ?? 0) >= judge.find.partialMatch),
+    )
+    .sort(
+      (left, right) =>
+        satisfied(right, judge) - satisfied(left, judge) ||
+        meanCriterion(right) - meanCriterion(left),
+    )
+}
+
 function renderEvidence(
   ranked: readonly Verdict[],
   picked: Picked,
+  partial: readonly Verdict[],
   focused: ReadonlyMap<string, FocusResult>,
   criteria: readonly string[],
   queryCount: number,
@@ -513,14 +543,15 @@ function renderEvidence(
   const matching = picked.verdicts
   const unjudged = ranked.filter((verdict) => verdict.unjudged)
   const lines = [
-    `history_find: ${matching.length} of ${ranked.length} judged sessions match all criteria (p>=${settings.sessionThreshold}); ${queryCount} queries.`,
+    `history_find: ${matching.length} of ${ranked.length} judged sessions match all criteria (p>=${settings.sessionThreshold})${partial.length === 0 ? '' : `, ${partial.length} more match some`}; ${queryCount} queries.`,
     ...criteria.map((criterion, index) => `c${index + 1}: ${criterion}`),
   ]
   let budget = settings.outputChars - lines.join('\n').length
   let shownSessions = 0
   let heldPassages = 0
   let budgetCut = 0
-  const sessions = matching.slice(0, settings.maxSessions)
+  const relevant = [...matching, ...partial]
+  const sessions = relevant.slice(0, settings.maxSessions)
   sessions.forEach((verdict, position) => {
     const allowance = Math.floor(budget / (sessions.length - position))
     const block = fitBlock(
@@ -540,7 +571,7 @@ function renderEvidence(
     shownSessions += 1
     lines.push(block.text)
   })
-  if (matching.length === 0) {
+  if (relevant.length === 0) {
     lines.push('No session matched every criterion. Nearest sessions:')
     ranked
       .filter((item) => !item.unjudged)
@@ -548,7 +579,7 @@ function renderEvidence(
       .forEach((verdict, position) => {
         const focus = focused.get(verdict.candidate.cursor)
         if (focus === undefined) {
-          lines.push(sessionHeader(verdict))
+          lines.push(sessionHeader(verdict, judge))
           return
         }
         const block = fitBlock(
@@ -563,9 +594,9 @@ function renderEvidence(
         lines.push(block.text)
       })
   }
-  const belowThreshold = ranked.length - matching.length - unjudged.length
+  const belowThreshold = ranked.length - relevant.length - unjudged.length
   lines.push(
-    `held back: ${matching.length - shownSessions} matching sessions (${budgetCut} over the ${settings.outputChars}-char budget), ${belowThreshold} sessions below threshold, ${heldPassages} passages or segments.`,
+    `held back: ${relevant.length - shownSessions} matching sessions (${budgetCut} over the ${settings.outputChars}-char budget), ${belowThreshold} sessions below threshold, ${heldPassages} passages or segments.`,
   )
   if (unjudged.length > 0) lines.push(`unjudged: ${unjudged.length} sessions`)
   return lines.join('\n')
@@ -616,7 +647,7 @@ function sessionBlock(
   pick: number | undefined,
 ): { text: string; held: number } {
   const header = [
-    sessionHeader(verdict, pick),
+    sessionHeader(verdict, judge, pick),
     `  first prompt: ${truncate(verdict.digest.firstPrompt, FIRST_PROMPT_LINE_CHARS)}`,
   ]
   const best =
@@ -657,12 +688,16 @@ function sessionBlock(
   }
 }
 
-function sessionHeader(verdict: Verdict, pick?: number): string {
+function sessionHeader(verdict: Verdict, judge: JudgeConfig, pick?: number): string {
   const criteria = verdict.criteria
     .map((value, index) => `c${index + 1}=${formatProbability(value)}`)
     .join(' ')
+  const coverage =
+    isMatch(verdict, judge) || verdict.criteria.length < 2
+      ? ''
+      : ` partial ${satisfied(verdict, judge)}/${verdict.criteria.length}`
   return [
-    `## ${verdict.candidate.cursor} match=${formatProbability(verdict.match)} (${criteria})${pick === undefined ? '' : ` best=${formatProbability(pick)}`}`,
+    `## ${verdict.candidate.cursor} match=${formatProbability(verdict.match)} (${criteria})${coverage}${pick === undefined ? '' : ` best=${formatProbability(pick)}`}`,
     `${verdict.digest.started.slice(0, 10)}..${verdict.digest.updated.slice(0, 10)}`,
     `${verdict.digest.messages} msgs`,
     `"${verdict.candidate.title}"`,
