@@ -26,6 +26,7 @@ export interface FocusedReadDependencies {
   readonly decide: Decide
   readonly transcripts: (cursors: readonly string[]) => Promise<readonly FocusTranscript[]>
   readonly read: (cursor: string) => Promise<string>
+  readonly onJudgeDown: () => void
   readonly now?: () => number
 }
 
@@ -51,6 +52,7 @@ export async function focusedRead(
     jev.failures > 0 &&
     results.every((result) => result.scored.length === 0)
   ) {
+    deps.onJudgeDown()
     return [
       jev.footer(),
       jev.unavailableNotice(`showing a plain window around ${cursor} instead of judged segments.`),

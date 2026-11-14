@@ -143,7 +143,7 @@ describe('plugin recall subagent', () => {
       expect(plain.agents.get(RECALL_AGENT_NAME)?.system).not.toContain('history_find')
 
       writeFileSync(getConfigFilePath(), JSON.stringify({ judge: { model: 'typesafe-ai/jev-latest' } }))
-      const judged = pluginHarness({ preseedCommands: false })
+      const judged = pluginHarness({ preseedCommands: false, decisionModels: [JEV] })
       await RecallPlugin.setup(judged.context)
       expect(judged.tools.has('history_find')).toBe(true)
       expect(judged.agents.get(RECALL_AGENT_NAME)?.system).toContain('history_find')
@@ -154,6 +154,33 @@ describe('plugin recall subagent', () => {
       expect([...judged.commands.keys()].sort()).toEqual(['history_read', 'session_save'])
       expect(judged.agents.get(RECALL_AGENT_NAME)?.permissions).not.toContainEqual(
         expect.objectContaining({ action: 'history_search' }),
+      )
+    })
+  })
+
+  test('keeps the standard recall surface while the configured judge model is not registered', async () => {
+    await withRecallEnvAsync(async () => {
+      writeFileSync(getConfigFilePath(), JSON.stringify({ judge: { model: 'typesafe-ai/jev-latest' } }))
+      const decisionModels: TestModel[] = []
+      const harness = pluginHarness({ preseedCommands: false, decisionModels })
+      await RecallPlugin.setup(harness.context)
+
+      expect([...harness.tools.keys()].sort()).toEqual([...STANDARD_TOOLS])
+      expect([...harness.commands.keys()].sort()).toEqual([...STANDARD_TOOLS])
+      expect(harness.agents.get(RECALL_AGENT_NAME)?.system).not.toContain('history_find')
+
+      decisionModels.push(JEV)
+      await harness.beforePrompt?.()
+      expect([...harness.tools.keys()].sort()).toEqual(['history_find', 'history_read', 'session_save'])
+      expect(harness.agents.get(RECALL_AGENT_NAME)?.system).toContain('history_find')
+
+      decisionModels.pop()
+      await harness.beforePrompt?.()
+      expect([...harness.tools.keys()].sort()).toEqual([...STANDARD_TOOLS])
+      expect([...harness.commands.keys()].sort()).toEqual([...STANDARD_TOOLS])
+      expect(harness.agents.get(RECALL_AGENT_NAME)?.system).not.toContain('history_find')
+      expect(harness.agents.get(RECALL_AGENT_NAME)?.permissions).toContainEqual(
+        expect.objectContaining({ action: 'history_search', effect: 'allow' }),
       )
     })
   })
@@ -1711,6 +1738,14 @@ interface TestCommand {
   }): Promise<void>
 }
 
+const JEV: TestModel = {
+  providerID: 'typesafe-ai',
+  id: 'jev-latest',
+  modelID: 'jev-latest',
+  enabled: true,
+}
+const STANDARD_TOOLS = ['history_read', 'history_search', 'session_index', 'session_save'] as const
+
 function pluginHarness(
   input:
     | string
@@ -1719,6 +1754,7 @@ function pluginHarness(
         preseedCommands?: boolean
         preseedRecallAgent?: boolean
         availableModels?: TestModel[]
+        decisionModels?: TestModel[]
       } = {},
 ) {
   const options = typeof input === 'string' ? { directory: input } : input
@@ -1726,6 +1762,7 @@ function pluginHarness(
   const availableModels = options.availableModels ?? [
     { providerID: 'example', id: 'recall-mini', modelID: 'recall-mini', enabled: true },
   ]
+  const decisionModels = options.decisionModels ?? []
   const agents = new Map<string, TestAgent>([
     [
       'build',
@@ -1763,15 +1800,21 @@ function pluginHarness(
     },
     command: {
       async transform(callback: (draft: unknown) => void) {
+        const added: string[] = []
         callback({
           get(name: string) {
             return commands.get(name)
           },
           add(command: TestCommand) {
+            added.push(command.name)
             commands.set(command.name, command)
           },
         })
-        return { dispose() {} }
+        return {
+          dispose() {
+            for (const name of added) commands.delete(name)
+          },
+        }
       },
     },
     agent: {
@@ -1792,8 +1835,8 @@ function pluginHarness(
       },
     },
     model: {
-      async list() {
-        return { data: availableModels }
+      async list(input?: { types?: string[] }) {
+        return { data: input?.types?.includes('decision') ? decisionModels : availableModels }
       },
     },
     tool: {
@@ -1805,8 +1848,18 @@ function pluginHarness(
         return { dispose() {} }
       },
       async transform(callback: (draft: unknown) => void) {
-        callback({ add(tool: TestTool) { tools.set(tool.name, tool) } })
-        return { dispose() {} }
+        const added: string[] = []
+        callback({
+          add(tool: TestTool) {
+            added.push(tool.name)
+            tools.set(tool.name, tool)
+          },
+        })
+        return {
+          dispose() {
+            for (const name of added) tools.delete(name)
+          },
+        }
       },
     },
     session: {
