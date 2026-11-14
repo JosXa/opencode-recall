@@ -49,15 +49,23 @@ export class Jev {
   readonly #decide: Decide
   readonly #budget: JevBudget
   readonly #now: () => number
+  readonly #timeoutMs: number
   #inFlight = 0
   #busySince = 0
   #busyMs = 0
 
-  public constructor(model: JudgeModel, decide: Decide, budget: JevBudget, now = Date.now) {
+  public constructor(
+    model: JudgeModel,
+    decide: Decide,
+    budget: JevBudget,
+    now: () => number,
+    timeoutMs: number,
+  ) {
     this.#model = model
     this.#decide = decide
     this.#budget = budget
     this.#now = now
+    this.#timeoutMs = timeoutMs
   }
 
   public async ask(
@@ -80,8 +88,8 @@ export class Jev {
       questions: [...questions],
     }
     this.#begin()
-    const result = await this.#decide(request)
-      .catch(() => this.#decide(request))
+    const result = await this.#attempt(request)
+      .catch(() => this.#attempt(request))
       .catch((error: unknown) => {
         this.failures += 1
         const message = (error instanceof Error ? error.message : String(error)).replace(
@@ -97,19 +105,38 @@ export class Jev {
       this.#budget.spent -= estimate
       return undefined
     }
-    const tokens = result.tokens?.input ?? estimate
+    const tokens = result.tokens ?? estimate
     this.#budget.spent += tokens - estimate
     this.calls += 1
     this.inputTokens += tokens
-    return new Map(
-      result.answers.flatMap((answer) =>
-        answer.probability === undefined ? [] : [[answer.name, answer.probability] as const],
-      ),
-    )
+    return result.probabilities
+  }
+
+  async #attempt(request: DecisionRequest): Promise<JudgedAnswers> {
+    const timer = new AbortController()
+    const timeout = new Promise<never>((_, reject) => {
+      const handle = setTimeout(
+        () => reject(new Error(`decision call timed out after ${this.#timeoutMs} ms`)),
+        this.#timeoutMs,
+      )
+      timer.signal.addEventListener('abort', () => clearTimeout(handle))
+    })
+    const call = Promise.resolve()
+      .then(() => this.#decide(request))
+      .then((result) => judgedAnswers(request, result))
+    return Promise.race([call, timeout]).finally(() => timer.abort())
   }
 
   public get unavailable(): boolean {
     return this.calls === 0 && this.failures >= UNAVAILABLE_AFTER_FAILURES
+  }
+
+  public get budgetSpent(): boolean {
+    return this.budgetSkips > 0 && this.calls === 0 && this.failures === 0
+  }
+
+  public budgetNotice(fallback: string): string {
+    return `judge budget spent: the run reached its ${this.#budget.cap}-token judge budget; ${fallback}`
   }
 
   public unavailableNotice(fallback: string): string {
@@ -143,6 +170,31 @@ export class Jev {
     this.#inFlight -= 1
     if (this.#inFlight === 0) this.#busyMs += this.#now() - this.#busySince
   }
+}
+
+interface JudgedAnswers {
+  readonly probabilities: ReadonlyMap<string, number>
+  readonly tokens: number | undefined
+}
+
+function judgedAnswers(request: DecisionRequest, result: unknown): JudgedAnswers {
+  const response = result as Partial<DecisionResult> | undefined
+  if (!Array.isArray(response?.answers)) throw new Error('decision response has no answers')
+  const probabilities = new Map(
+    response.answers.flatMap((answer) =>
+      typeof answer?.probability === 'number' && answer.probability >= 0 && answer.probability <= 1
+        ? [[answer.name, answer.probability] as const]
+        : [],
+    ),
+  )
+  const missing = request.questions.filter((question) => !probabilities.has(question.name))
+  if (missing.length > 0) {
+    throw new Error(
+      `decision response lacks valid answers for ${missing.length} of ${request.questions.length} questions`,
+    )
+  }
+  const tokens = response.tokens?.input
+  return { probabilities, tokens: typeof tokens === 'number' ? tokens : undefined }
 }
 
 function estimateTokens(texts: readonly string[], questions: readonly DecisionQuestion[]): number {

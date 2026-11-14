@@ -97,6 +97,13 @@
           "default": 1500000,
           "description": "Hard cap on decision-model input tokens per recall run; calls beyond it are skipped."
         },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000,
+          "default": 15000,
+          "description": "Time limit for one decision call. A call that times out counts as a failure, and recall falls back to the standard history tools when the judge keeps failing."
+        },
         "find": {
           "type": "object",
           "description": "history_find pipeline knobs.",
