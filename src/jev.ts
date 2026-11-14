@@ -36,6 +36,8 @@ export interface JevBudget {
 
 export const CHARS_PER_JEV_TOKEN = 2.9
 const QUESTION_TOKENS = 25
+const UNAVAILABLE_AFTER_FAILURES = 3
+const ERROR_CHARS = 160
 
 export class Jev {
   public calls = 0
@@ -62,6 +64,10 @@ export class Jev {
     texts: readonly string[],
     questions: readonly DecisionQuestion[],
   ): Promise<ReadonlyMap<string, number> | undefined> {
+    if (this.unavailable) {
+      this.failures += 1
+      return undefined
+    }
     const estimate = estimateTokens(texts, questions)
     if (this.#budget.spent + estimate > this.#budget.cap) {
       this.budgetSkips += 1
@@ -78,7 +84,12 @@ export class Jev {
       .catch(() => this.#decide(request))
       .catch((error: unknown) => {
         this.failures += 1
-        this.lastError = error instanceof Error ? error.message : String(error)
+        const message = (error instanceof Error ? error.message : String(error)).replace(
+          /\s+/g,
+          ' ',
+        )
+        this.lastError =
+          message.length > ERROR_CHARS ? `${message.slice(0, ERROR_CHARS - 1)}…` : message
         return undefined
       })
       .finally(() => this.#end())
@@ -95,6 +106,14 @@ export class Jev {
         answer.probability === undefined ? [] : [[answer.name, answer.probability] as const],
       ),
     )
+  }
+
+  public get unavailable(): boolean {
+    return this.calls === 0 && this.failures >= UNAVAILABLE_AFTER_FAILURES
+  }
+
+  public unavailableNotice(fallback: string): string {
+    return `judge unavailable: ${this.failures} of ${this.failures + this.calls} decision calls failed (${this.lastError ?? 'unknown error'}); ${fallback}`
   }
 
   public footer(): string {

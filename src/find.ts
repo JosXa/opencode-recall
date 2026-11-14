@@ -148,6 +148,22 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
     judgeCandidates(candidates, terms, criteria, deps, jev),
   )
   let scan = firstScan
+  const timing = () =>
+    `timing ms: ${Object.entries({ ...timings, total: now() - started })
+      .map(([stage, ms]) => `${stage}=${Math.round(ms)}`)
+      .join(' ')}`
+  if (judgeDown(verdicts, jev)) {
+    return [
+      jev.footer(),
+      jev.unavailableNotice(
+        'the sessions below are unjudged search candidates in search rank order, with lexical passages only.',
+      ),
+      renderUnjudged(verdicts, criteria, queries.length, deps.judge),
+      ...scanLines(scan),
+      ...notices,
+      timing(),
+    ].join('\n')
+  }
   const strongest = Math.max(0, ...verdicts.map((verdict) => verdict.match ?? 0))
   if (!scanWanted && strongest < settings.weakMatch) {
     scan = await timed('scan', () =>
@@ -193,13 +209,74 @@ export async function findEvidence(request: FindRequest, deps: FindDependencies)
   return [
     jev.footer(),
     renderEvidence(ranked, picked, partial, focused, criteria, queries.length, deps.judge, breadth),
-    ...(scan === undefined ? [] : [scanLine(scan)]),
+    ...scanLines(scan),
     ...notices,
     ...(problems === undefined ? [] : [problems]),
-    `timing ms: ${Object.entries({ ...timings, total: now() - started })
-      .map(([stage, ms]) => `${stage}=${Math.round(ms)}`)
-      .join(' ')}`,
+    timing(),
   ].join('\n')
+}
+
+function judgeDown(verdicts: readonly Verdict[], jev: Jev): boolean {
+  if (verdicts.length === 0) return jev.unavailable
+  const unjudged = verdicts.filter((verdict) => verdict.unjudged).length
+  return jev.failures > 0 && unjudged * 2 > verdicts.length
+}
+
+function renderUnjudged(
+  verdicts: readonly Verdict[],
+  criteria: readonly string[],
+  queryCount: number,
+  judge: JudgeConfig,
+): string {
+  const settings = judge.find
+  const ordered = [...verdicts].sort(
+    (left, right) => right.candidate.fusion - left.candidate.fusion,
+  )
+  const sessions = ordered.slice(0, settings.maxSessions)
+  const lines = [
+    `history_find: ${sessions.length} of ${ordered.length} candidate sessions shown unjudged; ${queryCount} queries.`,
+    ...criteria.map((criterion, index) => `c${index + 1}: ${criterion}`),
+  ]
+  let budget = settings.outputChars - lines.join('\n').length
+  let heldPassages = 0
+  sessions.forEach((verdict, position) => {
+    const block = unjudgedBlock(verdict, Math.floor(budget / (sessions.length - position)))
+    heldPassages += block.held
+    budget -= block.text.length + 1
+    lines.push(block.text)
+  })
+  lines.push(
+    `held back: ${ordered.length - sessions.length} sessions, ${heldPassages} passages over the ${settings.outputChars}-char budget.`,
+  )
+  return lines.join('\n')
+}
+
+function unjudgedBlock(verdict: Verdict, allowance: number): { text: string; held: number } {
+  const lines = [
+    `## ${verdict.candidate.cursor} unjudged · ${sessionFacts(verdict)}`,
+    `  first prompt: ${truncate(verdict.digest.firstPrompt, FIRST_PROMPT_LINE_CHARS)}`,
+  ]
+  let used = lines.join('\n').length
+  const rendered = verdict.digest.passages
+    .map((passage) => ({
+      passage,
+      text: `  - ${passage.cursor} ${passage.role} ${passage.time.slice(0, 16)}: ${passage.text}`,
+    }))
+    .sort((left, right) => Number(right.passage.hit) - Number(left.passage.hit))
+  const shown = rendered.filter((item) => {
+    if (used + item.text.length + 1 > allowance) return false
+    used += item.text.length + 1
+    return true
+  })
+  return {
+    text: [
+      ...lines,
+      ...shown
+        .sort((left, right) => left.passage.time.localeCompare(right.passage.time))
+        .map((item) => item.text),
+    ].join('\n'),
+    held: rendered.length - shown.length,
+  }
 }
 
 async function scanWindow(
@@ -217,9 +294,14 @@ async function scanWindow(
   return {
     result,
     judged: ranking.judged,
-    candidates: ranking.ranked
-      .filter((session) => session.probability >= scan.minProbability)
-      .slice(0, scan.candidates),
+    candidates:
+      ranking.judged === 0
+        ? result.sessions
+            .slice(0, scan.candidates)
+            .map((session) => ({ ...session, probability: 0 }))
+        : ranking.ranked
+            .filter((session) => session.probability >= scan.minProbability)
+            .slice(0, scan.candidates),
   }
 }
 
@@ -696,14 +778,21 @@ function sessionHeader(verdict: Verdict, judge: JudgeConfig, pick?: number): str
     isMatch(verdict, judge) || verdict.criteria.length < 2
       ? ''
       : ` partial ${satisfied(verdict, judge)}/${verdict.criteria.length}`
+  return `## ${verdict.candidate.cursor} match=${formatProbability(verdict.match)} (${criteria})${coverage}${pick === undefined ? '' : ` best=${formatProbability(pick)}`} · ${sessionFacts(verdict)}`
+}
+
+function sessionFacts(verdict: Verdict): string {
   return [
-    `## ${verdict.candidate.cursor} match=${formatProbability(verdict.match)} (${criteria})${coverage}${pick === undefined ? '' : ` best=${formatProbability(pick)}`}`,
     `${verdict.digest.started.slice(0, 10)}..${verdict.digest.updated.slice(0, 10)}`,
     `${verdict.digest.messages} msgs`,
     `"${verdict.candidate.title}"`,
     verdict.candidate.directory,
     ...(verdict.candidate.origin === 'search' ? [] : [`via ${verdict.candidate.origin}`]),
   ].join(' · ')
+}
+
+function scanLines(scan: ScanOutcome | undefined): string[] {
+  return scan === undefined ? [] : [scanLine(scan)]
 }
 
 function scanLine(scan: ScanOutcome): string {

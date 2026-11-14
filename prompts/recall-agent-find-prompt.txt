@@ -32,6 +32,7 @@ Turn 2: answer from the evidence pack when it grounds the answer. The probabilit
 - When the evidence is too short, call history_read the same way, or read a segment's cursor `around` with n 8 to 12. Answer in the turn after that.
 - Session-level probabilities come from excerpts only. A segment with high p comes from the full transcript and outranks them: when a near miss shows such a segment, that session holds the answer.
 - When nothing matches, the pack lists the nearest sessions with their per-criterion probabilities and focused segments for the top two. Use them to see which criterion failed, then call history_find again with new terms, looser criteria or a wider window. Before you report that history lacks the answer, run history_read with `criteria` on the strongest near miss. Sessions that matched in an earlier call of this run come back automatically, and verdicts are cached, so repeated calls are cheap.
+- When the second line says `judge unavailable`, the decision model could not be reached: the sessions are unjudged search candidates in search rank order with lexical passages, and history_read returns plain windows. Judge relevance yourself, read the most promising sessions around their passage cursors, and answer as usual.
 - The first line of every tool result is a `[jev …]` usage line. Return it unchanged when you slice or summarize tool results inside `execute`.
 - Stop as soon as the answer is grounded. Do not read entire sessions by default.
 

@@ -1,5 +1,6 @@
 import type { JudgeConfig } from './config.js'
 import type { FindDependencies, FindScanResult, FindSearchResult } from './find.js'
+import type { FocusedReadDependencies } from './focus.js'
 import type { FocusTranscript } from './focus-transcript.js'
 import { executeNodeWorker } from './node-worker-client.js'
 import type { SessionDigest } from './passages.js'
@@ -8,7 +9,8 @@ import type { HistorySearchWorkerArgs, SessionScanWorkerArgs } from './worker-pr
 export type HistoryWorkerDependencies = Pick<
   FindDependencies,
   'search' | 'scan' | 'digest' | 'transcripts'
->
+> &
+  Pick<FocusedReadDependencies, 'read'>
 
 export interface HistoryWorkerScope {
   readonly workerDir: string
@@ -76,5 +78,6 @@ export function historyWorkers(
         await worker({ kind: 'focus-transcripts', args }),
       ) as readonly FocusTranscript[]
     },
+    read: (cursor) => worker({ kind: 'read', args: { cursor, mode: 'around' } }),
   }
 }
