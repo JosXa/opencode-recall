@@ -177,7 +177,7 @@ Lexical search still works without Ollama, but you lose paraphrase recall, which
 
 ## Add a decision model (optional)
 
-Recall works without one. With one, the recall agent hands the sifting to a decision model: a fast classifier such as [TypeSafe Jev](https://typesafe.ai) or Microsoft Decision-1 that answers yes/no questions about text in a fraction of a second and writes no prose. Recall then gets a `history_find` tool that searches once, has the decision model judge 30 candidate sessions against the agent's criteria in parallel, reads the best sessions in full, and returns only the passages that answer the question.
+Recall works without one. With one, the recall agent hands the sifting to a decision model: a fast classifier such as [TypeSafe Jev](https://typesafe.ai) or Microsoft Decision-1 that answers yes/no questions about text in a fraction of a second and writes no prose. Recall then gets a `history_find` tool that searches once, has the decision model judge 30 candidate sessions against the agent's criteria in parallel, has it score the transcripts of the best sessions segment by segment, and returns only the passages that answer the question, each with a cursor the agent can pass to `history_read` for more context.
 
 On an eval of 40 real-world recall requests, compared with the standard tools:
 
