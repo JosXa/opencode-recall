@@ -175,6 +175,36 @@ Everything else is handled for you. The first `history_search` call will start `
 
 Lexical search still works without Ollama, but you lose paraphrase recall, which is half the value.
 
+## Add a decision model (optional)
+
+Recall works without one. With one, the recall agent hands the sifting to a decision model: a fast classifier such as [TypeSafe Jev](https://typesafe.ai) or Microsoft Decision-1 that answers yes/no questions about text in a fraction of a second and writes no prose. Recall then gets a `history_find` tool that searches once, has the decision model judge 30 candidate sessions against the agent's criteria in parallel, reads the best sessions in full, and returns only the passages that answer the question.
+
+On an eval of 40 real-world recall requests, compared with the standard tools:
+
+| | Standard tools | With Jev |
+|---|---|---|
+| Cites the right session | 64% | 79% |
+| Key facts found | 56% | 63% |
+| Answers with every fact | 18% | 34% |
+| Agent turns | 4.1 | 3.4 |
+| Tool output the agent reads | 80k chars | 39k chars |
+| Cost per recall | $0.005 | $0.024 |
+
+Most of the extra cost is decision-model input at $0.042 per million tokens.
+
+Setup takes two steps:
+
+1. Register a decision model in OpenCode with `"type": "decision"`. OpenCode ships adapters for TypeSafe and OpenAI-compatible decision endpoints; see [the provider example below](#one-call-evidence-search-with-a-decision-model). Check that OpenCode lists it with `opencode api get "/api/model?types=decision"`.
+2. Name it in `recall.jsonc`. An ordered list lets one shared config serve machines with different providers; Recall uses the first one OpenCode lists:
+
+   ```jsonc
+   {
+     "judge": { "model": ["litellm/microsoft-decision-1", "typesafe-ai/jev-latest"] }
+   }
+   ```
+
+If the decision model is missing, runs out of credits or fails mid-run, Recall falls back to its standard tools, so a broken judge never breaks recall.
+
 ## How to actually use it
 
 Recall is explicit. Ask the dedicated subagent when you want old session context:
