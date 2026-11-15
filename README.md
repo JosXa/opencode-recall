@@ -177,7 +177,15 @@ Lexical search still works without Ollama, but you lose paraphrase recall, which
 
 ## Add a decision model (optional)
 
-Recall works without one. With one, the recall agent hands the sifting to a decision model: a fast classifier such as [TypeSafe Jev](https://typesafe.ai) or Microsoft Decision-1 that answers yes/no questions about text in a fraction of a second and writes no prose. Recall then gets a `history_find` tool that searches once, has the decision model judge 30 candidate sessions against the agent's criteria in parallel, has it score the transcripts of the best sessions segment by segment, and returns only the passages that answer the question, each with a cursor the agent can pass to `history_read` for more context.
+Recall works without one. A decision model is a fast classifier such as [TypeSafe Jev](https://typesafe.ai) or Microsoft Decision-1: it answers yes/no questions about a piece of text with a probability, in a fraction of a second, and writes no prose. Adding one splits the work of a recall run three ways:
+
+| Who | Does |
+|---|---|
+| Recall agent (your chat model) | Turns the request into search queries and yes/no criteria such as "the session decides which database to use", reads the returned passages, follows their cursors with `history_read` when it needs more context, and writes the answer. |
+| `history_find` (plugin code) | Runs the queries through lexical and semantic search, collects about 30 candidate sessions, cuts each into excerpts and segments, sends them to the decision model in parallel, and packs the best passages, with cursors, into one tool result. |
+| Decision model | Answers the agent's criteria for every candidate session and every transcript segment of the best sessions. It never sees the original request and never writes text. |
+
+The decision model does the sifting, which used to take the agent several search and read turns. The agent keeps the judgment that needs language: what to look for and what the evidence means.
 
 On an eval of 40 real-world recall requests, compared with the standard tools:
 
