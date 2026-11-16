@@ -39,7 +39,7 @@
   <rect class="box" x="24" y="50" width="712" height="48" rx="10"/>
   <g class="pop"><rect class="teal-pill" x="36" y="62" width="76" height="25" rx="6"/><text class="teal" x="44" y="80">@recall</text></g>
   <text class="text" x="122" y="80">how did we fix the flaky auth test last time?</text>
-  <text class="label muted" x="32" y="136">RECALL DIGS THROUGH YOUR HISTORY</text>
+  <text class="label muted" x="32" y="136">RECALL SEARCHES YOUR HISTORY</text>
   <g class="step"><rect class="chip" x="24" y="150" width="318" height="40" rx="20"/><text class="teal" x="44" y="175">history_search</text><text class="muted" x="184" y="175">"flaky auth"</text></g>
   <path class="wire flow" d="M350 170 H404"/>
   <g class="step s2"><rect class="chip" x="412" y="150" width="324" height="40" rx="20"/><text class="teal" x="432" y="175">history_read</text><text class="muted" x="554" y="175">around msg_…</text></g>

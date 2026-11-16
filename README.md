@@ -4,7 +4,7 @@
 
 # opencode-recall
 
-**Give your [OpenCode](https://opencode.ai) agent a memory of every conversation you've had with it.**
+**Search and read your past [OpenCode](https://opencode.ai) sessions from any new session.**
 
 <a href="https://www.npmjs.com/package/@josxa/opencode-recall"><img src="https://img.shields.io/npm/v/%40josxa%2Fopencode-recall?style=flat-square&color=4876D6&labelColor=011627&label=npm" alt="npm version"></a>
 <a href="https://github.com/JosXa/opencode-recall/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/JosXa/opencode-recall/ci.yml?style=flat-square&labelColor=011627&label=CI" alt="CI status"></a>
@@ -12,7 +12,7 @@
 <img src="https://img.shields.io/badge/semantic%20search-Ollama-4876D6?style=flat-square&labelColor=011627" alt="Semantic search with Ollama">
 <a href="https://github.com/JosXa/opencode-recall/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-011627?style=flat-square" alt="MIT license"></a>
 
-[**Install**](#-install) · [Usage](#-usage) · [Configuration](#-configuration) · [Tool reference](#-tool-reference) · [How it works](#-how-it-works)
+[**Install**](#-install)&nbsp;&nbsp;&nbsp;[Usage](#-usage)&nbsp;&nbsp;&nbsp;[Configuration](#-configuration)&nbsp;&nbsp;&nbsp;[Tool reference](#-tool-reference)&nbsp;&nbsp;&nbsp;[How it works](#-how-it-works)
 
 <br>
 
@@ -22,28 +22,28 @@
 
 <br>
 
-You've solved this before. Six weeks ago, in another project, you tracked down this exact error. Last month you worked out the release steps in a session you can't find anymore. OpenCode kept all of it, but your agent can't look back. With Recall it can.
+OpenCode stores every session in a local database, and a new session has no tool to search it. Six weeks ago you fixed this exact error in another project, and last month you worked out the release steps in a session you can't find anymore. Recall adds the tools to find those sessions and read their messages.
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-brain.svg" width="24" align="absmiddle" alt=""> Why Recall?
 
-🔎 **Find the right session in seconds.** Hybrid lexical and semantic search across every project you've used OpenCode in.
+🔎 **Search every project.** Recall combines word matching with semantic search over the sessions of every project you opened in OpenCode.
 
-📜 **Read the conversation, not a summary.** The agent pages a bounded window of messages around the match. Tool calls, patches and attachments render as structured ChatML instead of a wall of JSON.
+📜 **Read the original messages.** `history_read` returns a bounded window of messages around a match. Tool calls, patches and attachments appear as structured ChatML.
 
-🎯 **Explicit by design.** Recall never injects memories on its own. You, or the agent when you ask, decide when to search, so your context stays lean and you always know why something is in the prompt.
+🎯 **Runs on request.** Recall adds old messages to the prompt only when you mention `@recall` or ask about an earlier session, so you can trace every excerpt to a request.
 
-🔒 **Local and read-only.** Recall never writes to `opencode.db`. The embedding index lives in a sidecar SQLite file that you can delete at any time.
+🔒 **Local and read-only.** Recall opens `opencode.db` read-only. The embedding index is a separate SQLite file that you can delete at any time.
 
-### Not a memory system
+### Compared with memory plugins
 
-Agent memory tools extract facts from your sessions and feed them back as standing knowledge. Over time, a guess the agent made once turns into a rule, and an old fact keeps steering new work long after it stopped being true. Recall stores nothing of the sort. It only searches and reads the transcripts OpenCode already keeps.
+Memory plugins extract statements from your sessions and add them to the prompt of every new session. A statement extracted from a one-off guess is added as often as a confirmed fact, and it stays in every prompt after the code changes. Recall stores a search index of the transcripts that OpenCode already writes, and adds transcript excerpts only for a request.
 
-| | Agent memory | Recall |
+| | Memory plugins | Recall |
 |---|---|---|
-| What it keeps | Extracted facts and rules | Nothing new; your transcripts stay as they are |
-| When it enters the prompt | Automatically, every session | Only when you or the agent ask |
-| What the agent sees | A summary, without context | The original messages, with session, directory and date |
-| Old or wrong conclusions | Persist until someone deletes them | Read as what they were: one conversation at one point in time |
+| Stored data | Statements extracted from sessions | A search index of the existing transcripts |
+| Added to the prompt | At the start of every session | When you mention `@recall` or ask about an earlier session |
+| Added text | Short statements without their source | Original messages with session ID, directory and date |
+| Outdated statements | Stay in every prompt until you delete them | Show their date, so you can judge whether they still apply |
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-play-circle.svg" width="24" align="absmiddle" alt=""> What it looks like
 
@@ -51,11 +51,11 @@ Agent memory tools extract facts from your sessions and feed them back as standi
 <tr>
 <td width="50%" valign="top">
 <a href="https://github.com/JosXa/opencode-recall/blob/main/assets/screenshot-01.png"><img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/assets/screenshot-01.png" alt="Recall is asked how trusted publishing was set up. The agent runs history_search, then history_read, and returns the workflow config, publish command and release flow."></a>
-<p><b>"Remind me how we did this."</b><br><sub>One search, one read, and the answer comes back with the actual config and commands.</sub></p>
+<p><b>"Remind me how we did this."</b><br><sub>One search and one read return the actual config and commands.</sub></p>
 </td>
 <td width="50%" valign="top">
 <a href="https://github.com/JosXa/opencode-recall/blob/main/assets/screenshot-02.png"><img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/assets/screenshot-02.png" alt="Recall is asked about match marker file names. The agent runs a broad search, then a narrower one with a directory filter, and returns a precise file list."></a>
-<p><b>When the first search comes up thin, it tries again.</b><br><sub>The agent narrows the query and filters by project until it finds the exact files.</sub></p>
+<p><b>"Which files were involved?"</b><br><sub>When the first search returns too little, the agent narrows the query and filters by project.</sub></p>
 </td>
 </tr>
 </table>
@@ -90,7 +90,7 @@ Then register the plugin in `opencode.json` or `~/.config/opencode/opencode.json
 
 ### Search by meaning with Ollama
 
-To match on meaning, Recall uses [Ollama](https://ollama.com) on your machine. [Install it](https://ollama.com/download) and you're done:
+Recall uses a local [Ollama](https://ollama.com) installation to match questions by meaning. After you [install Ollama](https://ollama.com/download), check that it is on your `PATH`:
 
 ```sh
 ollama --version   # prints a version when Ollama is installed
@@ -99,7 +99,7 @@ ollama --version   # prints a version when Ollama is installed
 On the first search, Recall starts Ollama if needed, downloads a small embedding model[^model] and builds its index.
 
 > [!NOTE]
-> Without Ollama, Recall still works but matches only exact words, so rephrased questions miss more often.
+> Without Ollama, Recall matches exact words only, so a rephrased question finds fewer sessions.
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-message-square-text.svg" width="24" align="absmiddle" alt=""> Usage
 
@@ -111,7 +111,7 @@ Mention `@recall` whenever old context would help:
 @recall what did we decide about the rate limiter design?
 ```
 
-Plain requests work too, because your agent hands them to Recall:
+Requests without `@recall` work as well when they ask about earlier sessions, because the main agent delegates them to the `recall` subagent:
 
 > *"Did we ever debug the Postgres connection pool exhaustion? Find that conversation."*<br>
 > *"Search my history for anything about Figma MCP and Azure."*<br>
@@ -119,7 +119,7 @@ Plain requests work too, because your agent hands them to Recall:
 
 ### How the `recall` subagent works
 
-Recall digs in a dedicated subagent, so the search work stays out of your main conversation:
+The searches run in a separate `recall` subagent, so their tool output stays out of your main conversation:
 
 ```mermaid
 ---
@@ -135,7 +135,7 @@ sequenceDiagram
     participant History as History
     You->>Agent: "how did we fix the flaky auth test?"
     Agent->>Recall: question, fresh context
-    loop until the answer is solid
+    loop until the question is answered
         Recall->>History: history_search
         Recall->>History: history_read
     end
@@ -143,17 +143,17 @@ sequenceDiagram
     Agent-->>You: answer
 ```
 
-1. **Fresh context.** The subagent receives only your question, so nothing in the current chat biases the search.
-2. **Search and read.** It runs `history_search`, loads the messages around a promising hit with `history_read`, and rephrases, narrows or pages when the first results are thin.
-3. **Concise answer.** The parent agent receives the findings plus the source sessions (ID, title and directory). Raw transcript pages stay inside the subagent.
-4. **Follow-ups go back to Recall.** The parent calls `@recall` again instead of answering from its memory of the first summary.
+1. **Fresh context.** The subagent starts with your question as its only context.
+2. **Search and read.** It runs `history_search`, loads the messages around a promising hit with `history_read`, and changes the query, filters by directory or reads further when the results do not answer the question.
+3. **Short answer.** The main agent receives the findings and the source sessions (ID, title and directory). The raw transcript pages stay in the subagent's context.
+4. **Follow-ups.** For a follow-up question, the main agent calls `@recall` again, which searches the transcripts again.
 
 > [!IMPORTANT]
-> The subagent sees only your OpenCode history. It does not read current files, run commands or check whether old facts are still true. Verify anything that may have changed since then.
+> The `recall` subagent has permission for the four history tools only. Check facts from old sessions against the current code before you rely on them.
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-settings-2.svg" width="24" align="absmiddle" alt=""> Configuration
 
-Most people never edit the config. Recall creates `recall.jsonc` in the OpenCode config directory (usually `~/.config/opencode/recall.jsonc`) on first use. Open it when your OpenCode database lives somewhere unusual, when you want the index elsewhere, or to try another embedding model. For editor completion, set `"$schema"` to the [config schema](https://raw.githubusercontent.com/JosXa/opencode-recall/main/schema/config.schema.json).
+Recall creates `recall.jsonc` in the OpenCode config directory (usually `~/.config/opencode/recall.jsonc`) on first use. Edit it to read an OpenCode database from another path, to store the index elsewhere, or to try another embedding model. For editor completion, set `"$schema"` to the [config schema](https://raw.githubusercontent.com/JosXa/opencode-recall/main/schema/config.schema.json).
 
 ```jsonc
 {
@@ -192,7 +192,7 @@ Recall uses OpenCode's own `agent.recall` configuration. The plugin supplies the
 }
 ```
 
-Recall keeps this model when the parent agent uses another one. Without `agent.recall`, OpenCode's normal default model applies.
+The `recall` subagent uses this model when the main agent runs another one. Without `agent.recall`, OpenCode's default model applies.
 
 ### Read V1 and V2 history from either runtime
 
@@ -227,7 +227,7 @@ Results then carry a `sourceId`, and cursors are qualified, such as `v1::msg_exa
 - **One sidecar per source**, shared by all Recall hosts. Event cursors, embeddings, sync locks and stale-row cleanup stay local to that source. Missing sources are skipped without opening or pruning their sidecars. A cursor that names an unavailable source reports an error.
 - **Source IDs** must be unique and contain only letters, digits, `_` or `-`. Keep them stable across configs so saved cursors stay usable.
 - **Paths:** each canonical source path and each sidecar must be unique, and a sidecar cannot alias a source. Symlinks are resolved. A sidecar records its source identity atomically, so conflicting configurations fail instead of indexing the wrong database. Existing unbound indexes are rebuilt when first bound. Use fresh sidecars per source when you migrate a previously shared index.
-- **Cursors:** copy qualified values exactly into read and save calls, including navigation cursors, without offsets. Raw `msg_…` and `ses_…` IDs work when only one available source contains them; ambiguous IDs produce an error that lists the qualified choices.
+- **Cursors:** copy qualified values exactly into read and save calls, including navigation cursors, without offsets. Raw `msg_…` and `ses_…` IDs work when only one available source contains them. An ambiguous ID produces an error that lists the qualified choices.
 - **Merging:** copies in different sources stay distinct. Ranking, result limits, recent entries and session lists merge across sources. A qualified `excludeSessionId` filters one source; a raw one applies to all.
 - **SDK:** pass the same list to `new OpenCodeRecall({ sources: [...] })` or `searchHistory(query, { sources: [...] })`.
 - **Single source:** `database.path`/`database.indexPath` and the SDK's `historyDbPath`/`sidecarDbPath` still work, with unqualified cursors. Default sidecars are named `opencode-recall-<source-path-hash>.db`, so V1 and V2 cannot share an index by accident. The former `legacyPath` option maps to a separate `legacy` source.
@@ -236,7 +236,7 @@ Results then carry a `sourceId`, and cursors are qualified, such as `v1::msg_exa
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-code-xml.svg" width="24" align="absmiddle" alt=""> Tool reference
 
-The `recall` subagent calls four history tools. The main agent does not call them directly.
+Only the `recall` subagent has access to these four history tools.
 
 | Tool | Purpose |
 |---|---|
@@ -317,7 +317,7 @@ Capped content carries `truncated` and `original_chars` markers. `<nav/>` gives 
 ]
 ```
 
-Useful without a search term, to spot substantial sessions at a glance.
+Without a title filter, it lists the most recent sessions with their sizes, which helps to find long sessions.
 
 </details>
 
@@ -355,10 +355,10 @@ flowchart LR
 ```
 
 - **Source of truth.** `opencode.db` is opened read-only.
-- **Sidecar index.** A separate SQLite file stores text chunks, content hashes and `Float32` embeddings. Session titles are indexed as their own rows, so proper-noun queries match titles before noisy snippets.
+- **Sidecar index.** Recall writes text chunks, content hashes and `Float32` embeddings to a separate SQLite file. Session titles are indexed as their own rows, so proper-noun queries match titles before noisy snippets.
 - **Sync.** Each search reads OpenCode's event log and reconciles only changed sessions, including deletions. There is no watcher or background process.
 - **Vector scoring.** The native `sqlite-vec` extension scores embeddings inside SQLite, so only the best candidates reach JavaScript. Vectors from another model or dimension are excluded.
-- **Ranking.** Lexical and semantic candidates merge, get scored by title, text and directory term overlap plus phrase boosts, and are limited to two hits per session. A small semantic lane admits paraphrases with high embedding similarity that miss the lexical filter.
+- **Ranking.** Recall merges lexical and semantic candidates, scores them by the terms they share with the title, text and directory plus phrase matches, and keeps at most two hits per session. A second, smaller semantic pass adds paraphrases with high embedding similarity that the lexical filter missed.
 - **Reads.** Windows come from `row_number()` over `(session_id, time_created, id)`. Parts are normalized to `text`, `tool`, `patch` and `file` and capped at 2,000 characters of tool input and 6,000 of output.
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-terminal.svg" width="24" align="absmiddle" alt=""> Development
