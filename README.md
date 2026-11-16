@@ -153,11 +153,10 @@ sequenceDiagram
 
 ## <img src="https://raw.githubusercontent.com/JosXa/opencode-recall/main/.github/readme/icon-settings-2.svg" width="24" align="absmiddle" alt=""> Configuration
 
-Most people never edit the config. Recall creates `recall.jsonc` in the OpenCode config directory (usually `~/.config/opencode/recall.jsonc`) on first use. Open it when your OpenCode database lives somewhere unusual, when you want the index elsewhere, or to try another embedding model.
+Most people never edit the config. Recall creates `recall.jsonc` in the OpenCode config directory (usually `~/.config/opencode/recall.jsonc`) on first use. Open it when your OpenCode database lives somewhere unusual, when you want the index elsewhere, or to try another embedding model. For editor completion, set `"$schema"` to the [config schema](https://raw.githubusercontent.com/JosXa/opencode-recall/main/schema/config.schema.json).
 
 ```jsonc
 {
-  "$schema": "https://raw.githubusercontent.com/JosXa/opencode-recall/main/schema/config.schema.json",
   "database": {
     // opened read-only
     "path": "~/.local/share/opencode/opencode.db",
