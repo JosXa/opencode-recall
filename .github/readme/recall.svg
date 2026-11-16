@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="330" viewBox="0 0 760 330" role="img" aria-label="You ask '@recall how did we fix the flaky auth test last time?'. Recall runs history_search and history_read, then answers with the fix and the source session.">
+  <style>
+    .card { fill: #ffffff; stroke: #d0d7de; }
+    .box { fill: #f6f8fa; stroke: #d0d7de; }
+    .text { fill: #1f2328; }
+    .muted { fill: #59636e; }
+    .teal { fill: #3A63B8; }
+    .teal-pill { fill: #DCE7FF; }
+    .teal-bar { fill: #4876D6; }
+    .chip { fill: #ffffff; stroke: #4876D6; stroke-width: 1.5; }
+    .wire { stroke: #4876D6; stroke-width: 2; stroke-dasharray: 5 5; fill: none; }
+    @media (prefers-color-scheme: dark) {
+      .card { fill: #0d1117; stroke: #30363d; }
+      .box { fill: #161b22; stroke: #30363d; }
+      .text { fill: #e6edf3; }
+      .muted { fill: #9198a1; }
+      .teal { fill: #A9C4FF; }
+      .teal-pill { fill: #0B1F3F; }
+      .chip { fill: #0d1117; stroke: #82AAFF; }
+      .wire { stroke: #82AAFF; }
+    }
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+    .small { font-size: 13px; }
+    .label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; }
+    .pop { animation: pop 8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+    .step { animation: step 8s ease-in-out infinite both; opacity: 0.25; }
+    .s2 { animation-delay: 1.2s; }
+    .flow { animation: flow 0.8s linear infinite; }
+    .reveal { animation: reveal 8s ease-out infinite both; }
+    .r2 { animation-delay: 0.3s; }
+    .r3 { animation-delay: 0.6s; }
+    @keyframes pop { 0%, 6% { transform: scale(1); } 10% { transform: scale(1.1); } 14%, 100% { transform: scale(1); } }
+    @keyframes step { 0%, 12% { opacity: 0.25; } 18%, 90% { opacity: 1; } 97%, 100% { opacity: 0.25; } }
+    @keyframes flow { to { stroke-dashoffset: -10; } }
+    @keyframes reveal { 0%, 42% { opacity: 0; transform: translateY(6px); } 50%, 90% { opacity: 1; transform: translateY(0); } 97%, 100% { opacity: 0; } }
+  </style>
+  <rect class="card" x="0.5" y="0.5" width="759" height="329" rx="14"/>
+  <text class="label muted" x="32" y="38">YOU ASK</text>
+  <rect class="box" x="24" y="50" width="712" height="48" rx="10"/>
+  <g class="pop"><rect class="teal-pill" x="36" y="62" width="76" height="25" rx="6"/><text class="teal" x="44" y="80">@recall</text></g>
+  <text class="text" x="122" y="80">how did we fix the flaky auth test last time?</text>
+  <text class="label muted" x="32" y="136">RECALL DIGS THROUGH YOUR HISTORY</text>
+  <g class="step"><rect class="chip" x="24" y="150" width="318" height="40" rx="20"/><text class="teal" x="44" y="175">history_search</text><text class="muted" x="184" y="175">"flaky auth"</text></g>
+  <path class="wire flow" d="M350 170 H404"/>
+  <g class="step s2"><rect class="chip" x="412" y="150" width="324" height="40" rx="20"/><text class="teal" x="432" y="175">history_read</text><text class="muted" x="554" y="175">around msg_…</text></g>
+  <text class="label muted" x="32" y="230">ANSWER, WITH ITS SOURCE</text>
+  <rect class="box" x="24" y="242" width="712" height="68" rx="10"/>
+  <g class="reveal"><rect class="teal-bar" x="36" y="254" width="3" height="20" rx="1.5"/><text class="text" x="44" y="269">Freeze the clock with vi.useFakeTimers() in auth.spec.ts.</text></g>
+  <g class="reveal r2"><text class="muted small" x="44" y="294">↳ "Fix flaky auth test"</text></g>
+  <g class="reveal r3"><text class="muted small" x="250" y="294">~/projects/api</text><text class="muted small" x="400" y="294">6 weeks ago</text></g>
+</svg>
