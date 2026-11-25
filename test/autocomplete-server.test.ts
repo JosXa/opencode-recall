@@ -9,13 +9,14 @@ const examples = [{ prompt: '#review then commit' }]
 vi.mock('../src/node-worker-client.js', () => ({ executeNodeWorker: vi.fn() }))
 afterEach(() => vi.mocked(executeNodeWorker).mockReset())
 
-type Handler = (input: SuggestInput, call: { signal: AbortSignal }) => Promise<SuggestOutput>
+type Call = ReturnType<typeof call>
+type Handler = (input: SuggestInput, call: Call) => Promise<SuggestOutput>
 type Editor = Parameters<Parameters<Plugin.Context['model']['transform']>[0]>[0]
 type Draft = NonNullable<ReturnType<Editor['get']>>
 type HttpEvent = Extract<Parameters<Parameters<Plugin.Context['session']['hook']>[1]>[0], { request: Request }>
 async function harness(providerPackage = '@opencode/ai/providers/openai') {
   vi.mocked(executeNodeWorker).mockResolvedValue(JSON.stringify(examples))
-  let handlers: { suggest: Handler; refine: (input: RefineInput, call: { signal: AbortSignal }) => Promise<SuggestOutput>; prepare: () => Promise<unknown> } | undefined
+  let handlers: { suggest: Handler; refine: (input: RefineInput, call: Call) => Promise<SuggestOutput>; prepare: () => Promise<unknown> } | undefined
   const model = Model.Info.default(Provider.ID.make('openai'), Model.ID.make('gpt-6-luna-fast')) as Draft
   model.body = { service_tier: 'priority' }
   model.variants = [{ id: Model.VariantID.make('low'), settings: { reasoningEffort: 'low' } }]
@@ -61,7 +62,9 @@ async function harness(providerPackage = '@opencode/ai/providers/openai') {
     replay: () => transform(editor), formattingDispose, hookDispose }
 }
 const input: SuggestInput = { sessionID: 'ses_current', situation: 'Tests pass', text: 'run ', mode: 'typing' }
-const call = () => ({ signal: new AbortController().signal })
+const call = (signal = new AbortController().signal) => ({
+  signal, error: (type: string, message: string, data: unknown) => ({ type, message, data }),
+})
 
 test('the first Luna completion finishes while history is still pending', async () => {
   const h = await harness()
@@ -129,17 +132,30 @@ test('schema variant preserves model defaults and existing variants across regis
 
 test('other provider protocols retain their configured model selection', async () => {
   const h = await harness('@opencode/ai/providers/anthropic')
-  await h.suggest(input, { signal: new AbortController().signal })
+  await h.suggest(input, call())
   expect(h.model.variants).toHaveLength(1)
   expect(h.generate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ model: { providerID: 'openai', id: 'gpt-6-luna-fast' } }))
   await h.stop()
 })
 
-test('malformed output rejects the RPC instead of returning an empty continuation', async () => {
+test('generation failures reach the client as typed errors with the provider message', async () => {
   const h = await harness()
-  h.generate.mockResolvedValueOnce({ text: ' do you mean the part where the RPC returned an empty suggestion?"}' })
-  await expect(h.suggest(input, { signal: new AbortController().signal })).rejects.toThrow('invalid JSON')
-  await h.stop()
+  try {
+    h.generate.mockResolvedValueOnce({ text: ' do you mean the part where the RPC returned an empty suggestion?"}' })
+    expect(await h.suggest(input, call())).toEqual({ type: 'generation', message: 'Autocomplete model returned invalid JSON.', data: null })
+    h.generate.mockRejectedValueOnce(new Error('Generation credentials are unavailable'))
+    expect(await h.refine(input, call())).toEqual({ type: 'generation', message: 'Generation credentials are unavailable', data: null })
+    h.next.mockRejectedValueOnce(new Error('subscription_sharing_usage_limit_exceeded'))
+    expect(await h.suggest({ ...input, text: '', mode: 'next' }, call())).toEqual({ type: 'generation', message: 'subscription_sharing_usage_limit_exceeded', data: null })
+  } finally { await h.stop() }
+})
+
+test('fenced JSON output still yields a continuation', async () => {
+  const h = await harness()
+  try {
+    h.generate.mockResolvedValueOnce({ text: '```json\n{"continuation":"the tests"}\n```' })
+    expect(await h.suggest(input, call())).toEqual({ text: 'run the tests' })
+  } finally { await h.stop() }
 })
 
 test('an aborted refinement does not start paid generation after retrieval', async () => {
@@ -147,8 +163,8 @@ test('an aborted refinement does not start paid generation after retrieval', asy
   const controller = new AbortController()
   controller.abort()
   try {
-    await expect(h.refine(input, { signal: controller.signal })).rejects.toThrow()
-    await expect(h.suggest(input, { signal: controller.signal })).rejects.toThrow()
+    await expect(h.refine(input, call(controller.signal))).rejects.toThrow()
+    await expect(h.suggest(input, call(controller.signal))).rejects.toThrow()
     expect(h.generate).not.toHaveBeenCalled()
   } finally { await h.stop() }
 })
@@ -176,7 +192,7 @@ test('superseded drafts cancel retrieval; disposal bounds and cancels remaining 
     return new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
   })
   const controller = new AbortController()
-  const superseded = h.refine(input, { signal: controller.signal })
+  const superseded = h.refine(input, call(controller.signal))
   controller.abort()
   await expect(superseded).rejects.toThrow()
   const results = Promise.allSettled(Array.from({ length: 9 }, (_, index) => h.refine({ ...input, sessionID: `ses_${index}` }, call())))

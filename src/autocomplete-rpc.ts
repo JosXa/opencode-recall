@@ -58,6 +58,7 @@ const output = {
   },
   required: ['text'],
 } as const
+const errors = { generation: { type: 'null' } } as const
 
 export const Autocomplete = Rpc.define({
   id: 'josxa.recall.autocomplete',
@@ -72,13 +73,14 @@ export const Autocomplete = Rpc.define({
         required: ['enabled'],
       },
     },
-    suggest: { input, output },
+    suggest: { input, output, errors },
     refine: {
       input: {
         ...input,
         properties: { ...input.properties, cachedSuggestion: { type: 'boolean' } },
       },
       output,
+      errors,
     },
   },
 })

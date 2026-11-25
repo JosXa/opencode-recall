@@ -15,6 +15,7 @@ import { type PromptExample, promptPrefix } from './prompt-example.js'
 
 const words = /\s+/u
 const lineBreak = /[\r\n]/u
+const codeFence = /^```(?:json)?\s*([\s\S]*?)\s*```$/u
 const tokens = /\S+/gu
 const clauses = /[,;:](?=\s)/gu
 const sentences = new Intl.Segmenter(undefined, { granularity: 'sentence' })
@@ -91,7 +92,7 @@ export function suggestionPrompt(input: SuggestInput, examples: readonly PromptE
 export function normalizeSuggestions(raw: string, input: SuggestInput): SuggestOutput {
   const parsed = (() => {
     try {
-      return JSON.parse(raw) as unknown
+      return JSON.parse(raw.trim().replace(codeFence, '$1')) as unknown
     } catch (error) {
       // A malformed response is a generation failure, never a cacheable empty suggestion.
       throw new Error('Autocomplete model returned invalid JSON.', { cause: error })
@@ -268,66 +269,78 @@ export async function registerAutocomplete(
         .map((pending) => pending.prompt),
     )
   })
+  const failure = (error: unknown, signal: AbortSignal) => {
+    if (signal.aborted) throw error
+    return error instanceof Error ? error.message : String(error)
+  }
+  const suggest = async (input: SuggestInput, signal: AbortSignal): Promise<SuggestOutput> => {
+    if (input.mode === 'next') {
+      if (!input.sessionID) return { text: '' }
+      const pending = { sessionID: input.sessionID, prompt: suggestionPrompt(input, []) }
+      nextPrompts.add(pending)
+      const result = await context.session
+        .generate(pending, { signal })
+        .finally(() => nextPrompts.delete(pending))
+      return { ...normalizeSuggestions(result.text, input), ...(notice ? { notice } : {}) }
+    }
+    // The first completion never waits for retrieval; reuse style only when ready.
+    const cached = examples.get(input.sessionID)
+    const matches =
+      cached && promptPrefix(input.text).startsWith(cached.prefix) ? cached.matches : []
+    signal.throwIfAborted()
+    const result = await context.generate.text(
+      {
+        model: selected,
+        prompt: suggestionPrompt(input, matches),
+      },
+      { signal },
+    )
+    return {
+      ...normalizeSuggestions(result.text, input),
+      ...(matches.length > 0 ? { refined: true } : {}),
+      ...(notice ? { notice } : {}),
+    }
+  }
+  const refine = async (input: RefineInput, signal: AbortSignal): Promise<SuggestOutput> => {
+    if (input.mode !== 'typing' || !promptPrefix(input.text)) return { text: '' }
+    // A cache hit already informed the fast call, so don't generate twice.
+    if (
+      !input.cachedSuggestion &&
+      examples.get(input.sessionID)?.prefix === promptPrefix(input.text)
+    )
+      return { text: '' }
+    const matches = await getExamples(input, signal)
+    signal.throwIfAborted()
+    if (matches.length === 0) return { text: '', ...(notice ? { notice } : {}) }
+    const result = await context.generate.text(
+      {
+        model: selected,
+        prompt: suggestionPrompt(input, matches),
+      },
+      { signal },
+    )
+    return {
+      ...normalizeSuggestions(result.text, input),
+      refined: true,
+      ...(notice ? { notice } : {}),
+    }
+  }
   const registration = await context.rpc.register(Autocomplete, {
     prepare: async () => {
       void prepare()
       return { enabled: true }
     },
-    suggest: async (value, call): Promise<SuggestOutput> => {
-      const input = value as SuggestInput
+    suggest: (value, call) => {
       const signal = AbortSignal.any([lifetime.signal, call.signal])
-      if (input.mode === 'next') {
-        if (!input.sessionID) return { text: '' }
-        const pending = { sessionID: input.sessionID, prompt: suggestionPrompt(input, []) }
-        nextPrompts.add(pending)
-        const result = await context.session
-          .generate(pending, { signal })
-          .finally(() => nextPrompts.delete(pending))
-        return { ...normalizeSuggestions(result.text, input), ...(notice ? { notice } : {}) }
-      }
-      // The first completion never waits for retrieval; reuse style only when ready.
-      const cached = examples.get(input.sessionID)
-      const matches =
-        cached && promptPrefix(input.text).startsWith(cached.prefix) ? cached.matches : []
-      signal.throwIfAborted()
-      const result = await context.generate.text(
-        {
-          model: selected,
-          prompt: suggestionPrompt(input, matches),
-        },
-        { signal },
+      return suggest(value as SuggestInput, signal).catch((error: unknown) =>
+        call.error('generation', failure(error, signal), null),
       )
-      return {
-        ...normalizeSuggestions(result.text, input),
-        ...(matches.length > 0 ? { refined: true } : {}),
-        ...(notice ? { notice } : {}),
-      }
     },
-    refine: async (value, call): Promise<SuggestOutput> => {
-      const input = value as RefineInput
-      if (input.mode !== 'typing' || !promptPrefix(input.text)) return { text: '' }
-      // A cache hit already informed the fast call, so don't generate twice.
-      if (
-        !input.cachedSuggestion &&
-        examples.get(input.sessionID)?.prefix === promptPrefix(input.text)
-      )
-        return { text: '' }
+    refine: (value, call) => {
       const signal = AbortSignal.any([lifetime.signal, call.signal])
-      const matches = await getExamples(input, signal)
-      signal.throwIfAborted()
-      if (matches.length === 0) return { text: '', ...(notice ? { notice } : {}) }
-      const result = await context.generate.text(
-        {
-          model: selected,
-          prompt: suggestionPrompt(input, matches),
-        },
-        { signal },
+      return refine(value as RefineInput, signal).catch((error: unknown) =>
+        call.error('generation', failure(error, signal), null),
       )
-      return {
-        ...normalizeSuggestions(result.text, input),
-        refined: true,
-        ...(notice ? { notice } : {}),
-      }
     },
   })
   return async () => {
